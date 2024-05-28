@@ -14,6 +14,7 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -23,12 +24,12 @@ use mio::Waker;
 use parking_lot::{Mutex, RwLock};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-use crate::hv::{IoeventFd, IoeventFdRegistry, MsiSender};
+use crate::hv::{IoeventFd, IoeventFdRegistry, IrqFd, MsiSender};
 use crate::mem::emulated::Mmio;
 use crate::mem::{MemRange, MemRegion, MemRegionCallback, MemRegionEntry};
 use crate::pci::cap::{
-    MsixCap, MsixCapMmio, MsixCapOffset, MsixMsgCtrl, MsixTableEntry, MsixTableMmio, PciCap,
-    PciCapHdr, PciCapId, PciCapList,
+    MsixCap, MsixCapMmio, MsixCapOffset, MsixMsgCtrl, MsixTableEntry, MsixTableMmio,
+    MsixTableMmioEntry, PciCap, PciCapHdr, PciCapId, PciCapList,
 };
 use crate::pci::config::{
     CommonHeader, DeviceHeader, EmulatedConfig, HeaderType, PciConfig, BAR_MEM64, BAR_PREFETCHABLE,
@@ -39,11 +40,11 @@ use crate::utils::{
 };
 use crate::virtio::dev::{Register, WakeEvent};
 use crate::virtio::queue::Queue;
-use crate::virtio::{DevStatus, IrqSender};
+use crate::virtio::{DevStatus, Error, IrqSender, Result};
 use crate::{impl_mmio_for_zerocopy, mem};
 
 use super::dev::{Virtio, VirtioDevice};
-use super::{DeviceId, Result};
+use super::DeviceId;
 
 const VIRTIO_MSI_NO_VECTOR: u16 = 0xffff;
 
@@ -54,9 +55,13 @@ struct VirtioPciMsixVector {
 }
 
 #[derive(Debug)]
-pub struct PciIrqSender<S> {
+pub struct PciIrqSender<S>
+where
+    S: MsiSender,
+{
+    // TODO add capability here to and handle whole table mask
     msix_vector: VirtioPciMsixVector,
-    msix_entries: Arc<Vec<RwLock<MsixTableEntry>>>,
+    msix_entries: Arc<Vec<RwLock<MsixTableMmioEntry<S::IrqFd>>>>,
     msi_sender: S,
 }
 
@@ -71,12 +76,12 @@ where
             return;
         };
         let entry = entry.read();
-        if entry.control.masked() {
+        if entry.get_masked() {
             log::info!("{} is masked", vector);
             return;
         }
-        let data = entry.data;
-        let addr = ((entry.addr_hi as u64) << 32) | (entry.addr_lo as u64);
+        let data = entry.get_data();
+        let addr = ((entry.get_addr_hi() as u64) << 32) | (entry.get_addr_lo() as u64);
         if let Err(e) = self.msi_sender.send(addr, data) {
             log::error!("send msi data = {data:#x} to {addr:#x}: {e}")
         } else {
@@ -104,6 +109,35 @@ where
         let vector = vector.load(Ordering::Acquire);
         if vector != VIRTIO_MSI_NO_VECTOR {
             self.send(vector);
+        }
+    }
+
+    fn config_irqfd(&self) -> Result<RawFd> {
+        unimplemented!()
+    }
+
+    fn queue_irqfd(&self, idx: u16) -> Result<RawFd> {
+        let Some(vector) = self.msix_vector.queues.get(idx as usize) else {
+            return Err(Error::InvalidQueueIndex(idx));
+        };
+        let entries = &**self.msix_entries;
+        let vector = vector.load(Ordering::Acquire);
+        let Some(entry) = entries.get(vector as usize) else {
+            return Err(Error::InvalidMsixVector(vector, idx));
+        };
+        let mut entry = entry.write();
+        match &*entry {
+            MsixTableMmioEntry::Entry(e) => {
+                let irqfd = self.msi_sender.create_irqfd()?;
+                irqfd.set_addr_hi(e.addr_hi)?;
+                irqfd.set_addr_lo(e.addr_lo)?;
+                irqfd.set_data(e.data)?;
+                irqfd.set_masked(e.control.masked())?;
+                let raw_fd = irqfd.as_fd().as_raw_fd();
+                *entry = MsixTableMmioEntry::IrqFd(irqfd);
+                Ok(raw_fd)
+            }
+            MsixTableMmioEntry::IrqFd(f) => Ok(f.as_fd().as_raw_fd()),
         }
     }
 }
@@ -669,9 +703,9 @@ where
             length: device_config.size() as u32,
             ..Default::default()
         };
-        let msix_entries: Arc<Vec<RwLock<MsixTableEntry>>> = Arc::new(
+        let msix_entries: Arc<Vec<RwLock<MsixTableMmioEntry<_>>>> = Arc::new(
             (0..table_entries)
-                .map(|_| RwLock::new(MsixTableEntry::default()))
+                .map(|_| RwLock::new(MsixTableMmioEntry::Entry(MsixTableEntry::default())))
                 .collect(),
         );
         let mut bar0 = MemRegion {

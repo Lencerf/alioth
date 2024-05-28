@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Debug;
+
 use bitflags::bitflags;
 
 pub const KVMIO: u8 = 0xAE;
@@ -238,6 +240,8 @@ pub struct KvmIrqfd {
 pub const KVM_IRQ_ROUTING_IRQCHIP: u32 = 1;
 pub const KVM_IRQ_ROUTING_MSI: u32 = 2;
 
+pub const KVM_IRQCHIP_PIC_MASTER: u32 = 0;
+pub const KVM_IRQCHIP_PIC_SLAVE: u32 = 1;
 pub const KVM_IRQCHIP_IOAPIC: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -287,12 +291,42 @@ pub struct KvmIrqRoutingEntry {
     pub routing: KvmIrqRoutingType,
 }
 
+impl Debug for KvmIrqRoutingEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "gsi={:#x},", self.gsi)?;
+        match self.type_ {
+            0 => Ok(()),
+            KVM_IRQ_ROUTING_IRQCHIP => write!(f, "{:#x?}", unsafe { self.routing.irqchip }),
+            KVM_IRQ_ROUTING_MSI => write!(f, "{:#x?}", unsafe { self.routing.msi }),
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct KvmIrqRouting<const N: usize> {
     pub nr: u32,
     pub flags: u32,
     pub entries: [KvmIrqRoutingEntry; N],
+}
+
+impl<const N: usize> Debug for KvmIrqRouting<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for entry in self.entries {
+            match entry.type_ {
+                0 => Ok(()),
+                KVM_IRQ_ROUTING_IRQCHIP => write!(f, "{:x}={:#x?}", entry.gsi, unsafe {
+                    entry.routing.irqchip
+                }),
+                KVM_IRQ_ROUTING_MSI => {
+                    write!(f, "{:x}={:#x?}", entry.gsi, unsafe { entry.routing.msi })
+                }
+                _ => unreachable!(),
+            }?;
+        }
+        Ok(())
+    }
 }
 
 #[repr(C)]

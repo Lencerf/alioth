@@ -23,6 +23,7 @@ dependencies = [
  "log",
  "mio",
  "parking_lot",
+ "passfd",
  "rand",
  "serde",
  "thiserror",
@@ -403,6 +404,15 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-targets 0.52.5",
+]
+
+[[package]]
+name = "passfd"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b332c50e4d07c0011fff51ea305374408319908908bc1dbed7a0ffaaf63a8151"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

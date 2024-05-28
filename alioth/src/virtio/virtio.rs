@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::fmt::Debug;
+use std::os::fd::{BorrowedFd, RawFd};
 
 use bitflags::bitflags;
 use thiserror::Error;
@@ -24,6 +25,8 @@ pub mod dev;
 pub mod pci;
 #[path = "queue/queue.rs"]
 pub mod queue;
+#[path = "vhost_user/vhost_user.rs"]
+pub mod vhost_user;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -41,6 +44,24 @@ pub enum Error {
 
     #[error("Invalid descriptor id {0}")]
     InvalidDescriptor(u16),
+
+    #[error("Invalid vhost user response message, want {0}, got {1}")]
+    InvalidVhostRespMsg(u32, u32),
+
+    #[error("Invalid vhost user response payload size, want {0}, got {1}")]
+    InvalidVhostRespPayloadSize(usize, u32),
+
+    #[error("Cannot get vhost user device config")]
+    CannotGetVhostDevConfig,
+
+    #[error("invalid queue index {0}")]
+    InvalidQueueIndex(u16),
+
+    #[error("invalid msix vector {0} for queue {1}")]
+    InvalidMsixVector(u16, u16),
+
+    #[error("vhost backend error code: {0}")]
+    VhostBackendErrCode(u64),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -50,10 +71,11 @@ bitflags! {
     pub struct VirtioFeature: u64 {
         const INDIRECT_DESC = 1 << 28;
         const EVENT_IDX = 1 << 29;
+        const VHOST_PROTOCOL_FEATURES = 1 << 30;
         const VERSION_1 = 1 << 32;
         const ACCESS_PLATFORM = 1 << 33;
         const RING_PACKED = 1 << 34;
-        const SUPPORTED = Self::VERSION_1.bits() | Self::ACCESS_PLATFORM.bits();
+        const SUPPORTED = Self::VERSION_1.bits();
     }
 }
 
@@ -84,4 +106,6 @@ bitflags! {
 pub trait IrqSender: Send + Sync + Debug + 'static {
     fn queue_irq(&self, idx: u16);
     fn config_irq(&self);
+    fn queue_irqfd(&self, idx: u16) -> Result<RawFd>;
+    fn config_irqfd(&self) -> Result<RawFd>;
 }

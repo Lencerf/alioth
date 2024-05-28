@@ -14,12 +14,14 @@
 
 use std::fmt::Debug;
 use std::mem::size_of;
+use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use bitfield::bitfield;
 use parking_lot::RwLock;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
+use crate::hv::IrqFd;
 use crate::mem::addressable::SlotBackend;
 use crate::mem::emulated::{Mmio, MmioBus};
 use crate::pci::config::DeviceHeader;
@@ -206,6 +208,7 @@ impl TryFrom<Vec<Box<dyn PciCap>>> for PciCapList {
 
 #[derive(Debug)]
 pub struct MsixCapMmio {
+    // add entries here and handle the mask
     pub cap: RwLock<MsixCap>,
 }
 
@@ -236,12 +239,96 @@ impl PciCap for MsixCapMmio {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct MsixTableMmio {
-    pub entries: Arc<Vec<RwLock<MsixTableEntry>>>,
+#[derive(Debug)]
+pub enum MsixTableMmioEntry<F> {
+    Entry(MsixTableEntry),
+    IrqFd(F),
 }
 
-impl Mmio for MsixTableMmio {
+impl<F> MsixTableMmioEntry<F>
+where
+    F: IrqFd,
+{
+    fn set_addr_lo(&mut self, val: u32) -> mem::Result<()> {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.addr_lo = val,
+            MsixTableMmioEntry::IrqFd(f) => f.set_addr_lo(val)?,
+        }
+        Ok(())
+    }
+    fn set_addr_hi(&mut self, val: u32) -> mem::Result<()> {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.addr_hi = val,
+            MsixTableMmioEntry::IrqFd(f) => f.set_addr_hi(val)?,
+        }
+        Ok(())
+    }
+    fn set_data(&mut self, val: u32) -> mem::Result<()> {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.data = val,
+            MsixTableMmioEntry::IrqFd(f) => f.set_data(val)?,
+        }
+        Ok(())
+    }
+    fn set_masked(&mut self, val: bool) -> mem::Result<()> {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.control.set_masked(val),
+            MsixTableMmioEntry::IrqFd(f) => f.set_masked(val)?,
+        }
+        Ok(())
+    }
+    pub fn get_addr_lo(&self) -> u32 {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.addr_lo,
+            MsixTableMmioEntry::IrqFd(f) => f.get_addr_lo(),
+        }
+    }
+    pub fn get_addr_hi(&self) -> u32 {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.addr_hi,
+            MsixTableMmioEntry::IrqFd(f) => f.get_addr_hi(),
+        }
+    }
+    pub fn get_data(&self) -> u32 {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.data,
+            MsixTableMmioEntry::IrqFd(f) => f.get_data(),
+        }
+    }
+    pub fn get_masked(&self) -> bool {
+        match self {
+            MsixTableMmioEntry::Entry(e) => e.control.masked(),
+            MsixTableMmioEntry::IrqFd(f) => f.get_masked(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MsixTableMmio<F> {
+    pub entries: Arc<Vec<RwLock<MsixTableMmioEntry<F>>>>,
+}
+
+#[derive(Debug)]
+pub struct KvmIrqFd {
+    event_fd: OwnedFd,
+    vm_fd: Arc<OwnedFd>,
+    gsi: u32,
+    table: Arc<OwnedFd>,
+}
+
+#[test]
+fn test_size() {
+    println!(
+        "{} {}",
+        size_of::<MsixTableEntry>(),
+        size_of::<MsixTableMmioEntry<KvmIrqFd>>()
+    );
+}
+
+impl<F> Mmio for MsixTableMmio<F>
+where
+    F: IrqFd,
+{
     fn size(&self) -> usize {
         size_of::<MsixTableEntry>() * self.entries.len()
     }
@@ -261,10 +348,10 @@ impl Mmio for MsixTableMmio {
         };
         let entry = entry.read();
         let ret = match offset % size_of::<MsixTableEntry>() {
-            0 => entry.addr_lo,
-            4 => entry.addr_hi,
-            8 => entry.data,
-            12 => entry.control.0,
+            0 => entry.get_addr_lo(),
+            4 => entry.get_addr_hi(),
+            8 => entry.get_data(),
+            12 => entry.get_masked() as _,
             _ => unreachable!(),
         };
         Ok(ret as u64)
@@ -286,10 +373,10 @@ impl Mmio for MsixTableMmio {
         };
         let mut entry = entry.write();
         match offset % size_of::<MsixTableEntry>() {
-            0 => entry.addr_lo = val,
-            4 => entry.addr_hi = val,
-            8 => entry.data = val,
-            12 => entry.control = MsixVectorCtrl(val),
+            0 => entry.set_addr_lo(val)?,
+            4 => entry.set_addr_hi(val)?,
+            8 => entry.set_data(val)?,
+            12 => entry.set_masked(MsixVectorCtrl(val).masked())?,
             _ => unreachable!(),
         };
         Ok(())
