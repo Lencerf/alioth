@@ -57,6 +57,9 @@ macro_rules! ioctl_none {
             ))
         }
     };
+    ($name:ident, $type_:expr, $nr:expr) => {
+        $crate::ioctl_none!($name, $type_, $nr, 0);
+    };
 }
 
 #[macro_export]

@@ -24,6 +24,7 @@ use alioth::virtio::dev::blk::BlockParam;
 use alioth::virtio::dev::entropy::EntropyParam;
 use alioth::virtio::dev::fs::FsParam;
 use alioth::virtio::dev::net::NetParam;
+use alioth::virtio::dev::vsock::VsockParam;
 use alioth::vm::Machine;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -113,6 +114,9 @@ struct RunArgs {
 
     #[arg(long)]
     vhost_fs: Vec<String>,
+
+    #[arg(long)]
+    vsock: Option<String>,
 }
 
 fn main_run(args: RunArgs) -> Result<()> {
@@ -175,6 +179,12 @@ fn main_run(args: RunArgs) -> Result<()> {
     for (index, fs) in args.vhost_fs.into_iter().enumerate() {
         let param: FsParam = serde_aco::from_arg(&fs)?;
         vm.add_virtio_dev(format!("vhost-fs-{index}"), param)?;
+    }
+    if let Some(vsock_param) = args.vsock {
+        let param: VsockParam = serde_aco::from_arg(&vsock_param)?;
+        match param {
+            VsockParam::Vhost(param) => vm.add_virtio_dev(format!("vhost-vsock"), param),
+        }?;
     }
 
     let payload = if let Some(fw) = args.firmware {

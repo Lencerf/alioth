@@ -25,6 +25,8 @@ pub mod dev;
 pub mod pci;
 #[path = "queue/queue.rs"]
 pub mod queue;
+#[path = "vhost/vhost.rs"]
+pub mod vhost;
 #[path = "vhost_user/vhost_user.rs"]
 pub mod vhost_user;
 
