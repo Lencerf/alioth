@@ -73,6 +73,9 @@ pub enum Error {
     #[error("vhost-user backend is missing protocol feature {0:x?}")]
     VuMissingProtocolFeature(vu::VuFeature),
 
+    #[error("insufficient buffer (size {0}) for holding {1} fds")]
+    VuInsufficientBuffer(usize, usize),
+
     #[error("vhost backend is missing device feature {0:#x}")]
     VhostMissingDeviceFeature(u64),
 
