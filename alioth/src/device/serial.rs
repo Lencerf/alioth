@@ -21,7 +21,7 @@ use std::thread::JoinHandle;
 use bitfield::bitfield;
 use bitflags::bitflags;
 use libc::{
-    cfmakeraw, fcntl, tcgetattr, tcsetattr, termios, F_GETFL, F_SETFL, OPOST, O_NONBLOCK,
+    cfmakeraw, fcntl, tcgetattr, tcsetattr, termios, ENOTTY, F_GETFL, F_SETFL, OPOST, O_NONBLOCK,
     STDIN_FILENO, STDOUT_FILENO, TCSANOW,
 };
 use mio::unix::SourceFd;
@@ -318,6 +318,7 @@ impl StdinBackup {
         let mut t = MaybeUninit::uninit();
         match ffi!(unsafe { tcgetattr(STDIN_FILENO, t.as_mut_ptr()) }) {
             Ok(_) => termios_backup = Some(unsafe { t.assume_init() }),
+            Err(e) if e.raw_os_error() == Some(ENOTTY) => {}
             Err(e) => log::error!("tcgetattr() failed: {}", e),
         }
         let mut flag_backup = None;
@@ -359,12 +360,6 @@ where
     I: IntxSender,
 {
     fn setup_termios(&mut self) -> io::Result<()> {
-        let mut raw_termios = MaybeUninit::uninit();
-        ffi!(unsafe { tcgetattr(STDIN_FILENO, raw_termios.as_mut_ptr()) })?;
-        unsafe { cfmakeraw(raw_termios.as_mut_ptr()) };
-        unsafe { raw_termios.assume_init_mut().c_oflag |= OPOST };
-        ffi!(unsafe { tcsetattr(STDIN_FILENO, TCSANOW, raw_termios.as_ptr()) })?;
-
         let flag = ffi!(unsafe { fcntl(STDIN_FILENO, F_GETFL) })?;
         ffi!(unsafe { fcntl(STDIN_FILENO, F_SETFL, flag | O_NONBLOCK) })?;
         self.poll.registry().register(
@@ -372,6 +367,12 @@ where
             TOKEN_STDIN,
             Interest::READABLE,
         )?;
+
+        let mut raw_termios = MaybeUninit::uninit();
+        ffi!(unsafe { tcgetattr(STDIN_FILENO, raw_termios.as_mut_ptr()) })?;
+        unsafe { cfmakeraw(raw_termios.as_mut_ptr()) };
+        unsafe { raw_termios.assume_init_mut().c_oflag |= OPOST };
+        ffi!(unsafe { tcsetattr(STDIN_FILENO, TCSANOW, raw_termios.as_ptr()) })?;
 
         Ok(())
     }
