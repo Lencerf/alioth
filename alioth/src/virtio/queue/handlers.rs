@@ -27,6 +27,7 @@ pub fn handle_desc(
 ) -> Result<()> {
     let guard = queue.lock_ram_layout();
     let mut q = guard.queue()?;
+    let mut send_notification = false;
     'out: loop {
         if !q.has_next_desc() {
             break;
@@ -43,15 +44,18 @@ pub fn handle_desc(
                 Ok(None) => break 'out,
                 Ok(Some(len)) => {
                     q.push_used(desc, len);
-                    if q.interrupt_enabled() {
-                        fence(Ordering::SeqCst);
-                        irq_sender.queue_irq(q_index)
+                    if !send_notification && q.interrupt_enabled() {
+                        send_notification = true;
                     }
                 }
             }
         }
         q.enable_notification(true);
         fence(Ordering::SeqCst);
+    }
+    if send_notification {
+        fence(Ordering::SeqCst);
+        irq_sender.queue_irq(q_index)
     }
     Ok(())
 }
