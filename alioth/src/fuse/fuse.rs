@@ -151,6 +151,7 @@ pub trait Fuse {
     fuse_method!(rmdir, &[u8], ());
     fuse_method!(rename, &FuseRenameIn, &[u8], ());
     fuse_method!(rename2, &FuseRename2In, &[u8], ());
+    fuse_method!(symlink, &[u8], FuseEntryOut);
     fuse_method!(setup_mapping, &FuseSetupmappingIn, ());
     fuse_method!(remove_mapping, &[u8], ());
     fn set_dax_region(&mut self, dax_region: Box<dyn DaxRegion>);

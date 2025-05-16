@@ -261,6 +261,7 @@ where
             FuseOpcode::GETXATTR => opcode_branch!(get_xattr, &[u8], &mut [u8]),
             FuseOpcode::SETXATTR => opcode_branch!(set_xattr, &[u8], _),
             FuseOpcode::CREATE => opcode_branch!(create, &_, &[u8], _),
+            FuseOpcode::SYMLINK => opcode_branch!(symlink, &[u8], _),
             FuseOpcode::UNLINK => opcode_branch!(unlink, &[u8], _),
             FuseOpcode::RMDIR => opcode_branch!(rmdir, &[u8], _),
             FuseOpcode::RENAME => opcode_branch!(rename, &_, &[u8], _),

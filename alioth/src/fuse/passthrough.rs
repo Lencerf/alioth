@@ -23,7 +23,7 @@ use std::iter::{Enumerate, Peekable};
 use std::marker::PhantomData;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirEntryExt, FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirEntryExt, FileTypeExt, MetadataExt, OpenOptionsExt, symlink};
 use std::path::Path;
 
 use zerocopy::{FromBytes, IntoBytes};
@@ -481,6 +481,22 @@ impl Fuse for Passthrough {
         let dst = self.join_path(in_.newdir, p2)?;
         rename(src, dst)?;
         Ok(())
+    }
+
+    fn symlink(&mut self, hdr: &FuseInHeader, in_: &[u8]) -> Result<FuseEntryOut> {
+        let mut paths = in_.split_inclusive(|b| *b == b'\0');
+        let Some(p1) = paths.next() else {
+            return Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+        };
+        let Some(p2) = paths.next() else {
+            return Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+        };
+        let link = self.join_path(hdr.nodeid, p1)?;
+        let original = OsStr::from_bytes(CStr::from_bytes_until_nul(p2)?.to_bytes());
+        symlink(&original, &link)?;
+        log::error!("{:?} {link:?} {original:?}", String::from_utf8_lossy(in_));
+        Err(std::io::Error::from_raw_os_error(libc::ENOSYS))?;
+        unreachable!()
     }
 
     fn setup_mapping(&mut self, hdr: &FuseInHeader, in_: &FuseSetupmappingIn) -> Result<()> {
