@@ -311,6 +311,10 @@ impl HeaderData {
                     );
                     None
                 }
+                (CommonHeader::OFFSET_COMMAND, 4) => {
+                    self.write_header(CommonHeader::OFFSET_STATUS as u64, 2, val >> 16, pci_bars);
+                    self.write_header(CommonHeader::OFFSET_COMMAND as u64, 2, val, pci_bars)
+                }
                 (OFFSET_BAR0..=OFFSET_BAR5, 4) => {
                     let bar_index = (offset - OFFSET_BAR0) >> 2;
 
