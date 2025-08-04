@@ -44,7 +44,7 @@ pub enum Error {
     #[snafu(display("Failed to access guest memory"), context(false))]
     Memory { source: Box<crate::mem::Error> },
     #[snafu(display("PCI bus error"), context(false))]
-    PciBus { source: crate::pci::Error },
+    PciBus { source: Box<crate::pci::Error> },
     #[snafu(display("Cannot access file {path:?}"))]
     AccessFile {
         path: PathBuf,
