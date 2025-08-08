@@ -38,7 +38,7 @@ where
             let mut desc = desc?;
             match op(&mut desc) {
                 Err(e) => {
-                    log::error!("{dev_name}: queue {q_index}: {e}");
+                    log::error!("{dev_name}: queue {q_index}: {e:?}");
                     queue.enable_notification(true);
                     break 'out;
                 }
