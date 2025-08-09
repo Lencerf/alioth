@@ -38,7 +38,7 @@ where
             let mut desc = desc?;
             match op(&mut desc) {
                 Err(e) => {
-                    log::error!("{dev_name}: queue {q_index}: {e}");
+                    log::error!("{dev_name}: queue {q_index}: {e:?}");
                     queue.enable_notification(true);
                     break 'out;
                 }
@@ -70,9 +70,14 @@ where
     Q: VirtQueue<'m>,
 {
     handle_desc(dev_name, q_index, queue, irq_sender, |desc| {
+        let sizes: Vec<_> = desc.writable.iter().map(|b| b.len()).collect();
+        log::info!("{dev_name}: writable: {sizes:02x?}");
         let ret = reader.read_vectored(&mut desc.writable);
         match ret {
-            Ok(0) => Err(std::io::Error::from(ErrorKind::UnexpectedEof))?,
+            Ok(0) => {
+                // TODO check if writable buffer is empty
+                Err(std::io::Error::from(ErrorKind::UnexpectedEof))?
+            }
             Ok(len) => Ok(Some(len)),
             Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e)?,

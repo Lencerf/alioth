@@ -96,7 +96,7 @@ bitflags! {
 
 const FEATURE_BUILT_IN: u64 = VirtioFeature::EVENT_IDX.bits() | VirtioFeature::VERSION_1.bits();
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceId {
     Net = 1,
     Block = 2,

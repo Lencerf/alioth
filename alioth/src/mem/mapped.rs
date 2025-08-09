@@ -328,18 +328,15 @@ impl Ram {
         }
     }
 
-    pub fn write<T>(&self, gpa: u64, val: &T) -> Result<(), Error>
-    where
-        T: IntoBytes + Immutable,
-    {
-        let buf = val.as_bytes();
-        let host_ref = self.get_partial_slice_mut(gpa, size_of::<T>() as u64)?;
+    pub fn write(&self, gpa: u64, buf: &[u8]) -> Result<(), Error> {
+        let len = buf.len() as u64;
+        let host_ref = self.get_partial_slice_mut(gpa, len)?;
         if host_ref.len() == buf.len() {
             host_ref.copy_from_slice(buf);
             Ok(())
         } else {
             let mut cur = 0;
-            for r in self.slice_iter_mut(gpa, size_of::<T>() as u64) {
+            for r in self.slice_iter_mut(gpa, len) {
                 let s = r?;
                 let s_len = s.len();
                 s.copy_from_slice(&buf[cur..(cur + s_len)]);
@@ -430,7 +427,7 @@ impl RamBus {
         T: IntoBytes + Immutable,
     {
         let ram = self.ram.read();
-        ram.write(gpa, val)
+        ram.write(gpa, val.as_bytes())
     }
 
     pub fn read_range(&self, gpa: u64, len: u64, dst: &mut impl Write) -> Result<()> {

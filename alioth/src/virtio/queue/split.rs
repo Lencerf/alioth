@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// #[path = "split_test.rs"]
+// #[cfg(test)]
+// mod tests;
+
 use std::mem::size_of;
 use std::sync::atomic::{Ordering, fence};
 
 use alioth_macros::Layout;
 use bitflags::bitflags;
-use zerocopy::{FromBytes, Immutable, IntoBytes};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::mem::mapped::Ram;
 use crate::virtio::queue::{Descriptor, Queue, VirtQueue};
 use crate::virtio::{Result, VirtioFeature, error};
 
 #[repr(C, align(16))]
-#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, FromBytes, Immutable, IntoBytes)]
 pub struct Desc {
     pub addr: u64,
     pub len: u32,
@@ -49,10 +53,10 @@ bitflags! {
 }
 
 #[repr(C, align(2))]
-#[derive(Debug, Clone, Layout)]
+#[derive(Debug, Clone, Layout, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct AvailHeader {
-    flags: u16,
-    idx: u16,
+    pub flags: u16,
+    pub idx: u16,
 }
 
 bitflags! {
@@ -63,17 +67,17 @@ bitflags! {
 }
 
 #[repr(C, align(4))]
-#[derive(Debug, Clone, Layout)]
+#[derive(Debug, Clone, Layout, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct UsedHeader {
-    flags: u16,
-    idx: u16,
+    pub flags: u16,
+    pub idx: u16,
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, KnownLayout, Immutable, FromBytes, IntoBytes, PartialEq, Eq)]
 pub struct UsedElem {
-    id: u32,
-    len: u32,
+    pub id: u32,
+    pub len: u32,
 }
 
 #[derive(Debug)]
@@ -89,9 +93,9 @@ pub struct SplitQueue<'q, 'm> {
     used_event: Option<*mut u16>,
 
     used_hdr: *mut UsedHeader,
-    used_ring: *mut UsedElem,
+    pub used_ring: *mut UsedElem,
     avail_event: Option<*mut u16>,
-    used_index: u16,
+    pub used_index: u16,
 
     desc: *mut Desc,
 }
