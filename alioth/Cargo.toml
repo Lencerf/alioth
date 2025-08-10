@@ -29,3 +29,5 @@ io-uring = "0.7"
 [dev-dependencies]
 assert_matches.workspace = true
 rstest.workspace = true
+tempdir.workspace = true
+flexi_logger = "0.31"
