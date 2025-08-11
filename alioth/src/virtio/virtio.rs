@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+#[path = "virtio_test.rs"]
+mod tests;
+
 #[path = "dev/dev.rs"]
 pub mod dev;
 pub mod pci;
@@ -96,7 +100,7 @@ bitflags! {
 
 const FEATURE_BUILT_IN: u64 = VirtioFeature::EVENT_IDX.bits() | VirtioFeature::VERSION_1.bits();
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceId {
     Net = 1,
     Block = 2,
