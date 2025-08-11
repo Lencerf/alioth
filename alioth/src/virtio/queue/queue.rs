@@ -12,17 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod split;
 #[cfg(test)]
 #[path = "queue_test.rs"]
 mod tests;
 
+pub mod packed;
+pub mod split;
+
 use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering, fence};
+
+use bitflags::bitflags;
 
 use crate::virtio::{IrqSender, Result};
 
 pub const QUEUE_SIZE_MAX: u16 = 256;
+
+bitflags! {
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct DescFlag: u16 {
+        const NEXT = 1;
+        const WRITE = 2;
+        const INDIRECT = 4;
+        const AVAIL = 1 << 7;
+        const USED = 1 << 15;
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Queue {
@@ -35,7 +50,9 @@ pub struct Queue {
 
 #[derive(Debug)]
 pub struct Descriptor<'m> {
-    pub id: u16,
+    id: u16,
+    avail_span: u16,
+    index: u16,
     pub readable: Vec<IoSlice<'m>>,
     pub writable: Vec<IoSliceMut<'m>>,
 }
@@ -97,6 +114,7 @@ pub trait VirtQueue<'m> {
     ) -> Result<()> {
         self.handle_desc(q_index, irq_sender, |desc| {
             let ret = reader.read_vectored(&mut desc.writable);
+            log::info!("RX: {q_index}: {ret:?}");
             match ret {
                 Ok(0) => {
                     let size: usize = desc.writable.iter().map(|s| s.len()).sum();
@@ -117,6 +135,7 @@ pub trait VirtQueue<'m> {
     ) -> Result<()> {
         self.handle_desc(q_index, irq_sender, |desc| {
             let ret = writer.write_vectored(&desc.readable);
+            log::info!("TX: {q_index}: {ret:?}");
             match ret {
                 Ok(0) => {
                     let size: usize = desc.readable.iter().map(|s| s.len()).sum();

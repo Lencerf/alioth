@@ -37,6 +37,7 @@ use crate::hv::IoeventFd;
 use crate::mem::emulated::Mmio;
 use crate::mem::mapped::{Ram, RamBus};
 use crate::mem::{LayoutChanged, LayoutUpdated, MemRegion};
+use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::{QUEUE_SIZE_MAX, Queue, VirtQueue};
 #[cfg(target_os = "linux")]
@@ -397,7 +398,9 @@ where
         let feature = param.feature & !VirtioFeature::ACCESS_PLATFORM.bits();
         let queue_regs = self.context.queue_regs.clone();
         if VirtioFeature::from_bits_retain(feature).contains(VirtioFeature::RING_PACKED) {
-            todo!()
+            let new_queue = |reg| PackedQueue::new(reg, &ram, feature);
+            let queues: Result<Box<_>> = queue_regs.iter().map(new_queue).collect();
+            self.event_loop(&mut (queues?), &ram, &param)?;
         } else {
             let new_queue = |reg| SplitQueue::new(reg, &ram, feature);
             let queues: Result<Box<_>> = queue_regs.iter().map(new_queue).collect();

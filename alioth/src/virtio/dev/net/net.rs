@@ -46,7 +46,7 @@ use crate::virtio::queue::{Descriptor, Queue, VirtQueue};
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::worker::{Waker, WorkerApi};
-use crate::virtio::{FEATURE_BUILT_IN, IrqSender, error};
+use crate::virtio::{FEATURE_BUILT_IN, IrqSender, VirtioFeature, error};
 use crate::{c_enum, impl_mmio_for_zerocopy};
 
 use self::tap::{TunFeature, tun_set_iff, tun_set_offload, tun_set_vnet_hdr_sz};
@@ -213,7 +213,7 @@ impl Net {
             | NetFeature::HOST_ECN
             | NetFeature::HOST_UFO
             | NetFeature::HOST_USO
-            | NetFeature::CTRL_VQ
+            // | NetFeature::CTRL_VQ
             | detect_tap_offload(&socket);
         if max_queue_pairs > 1 {
             dev_feat |= NetFeature::MQ;
@@ -314,7 +314,10 @@ impl Virtio for Net {
     }
 
     fn feature(&self) -> u64 {
-        self.feature.bits() | FEATURE_BUILT_IN
+        self.feature.bits()
+            | VirtioFeature::VERSION_1.bits()
+            | VirtioFeature::EVENT_IDX.bits()
+            | VirtioFeature::RING_PACKED.bits()
     }
 
     fn spawn_worker<S, E>(

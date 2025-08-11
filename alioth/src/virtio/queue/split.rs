@@ -24,6 +24,7 @@ use bitflags::bitflags;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::mem::mapped::Ram;
+use crate::virtio::queue::DescFlag;
 use crate::virtio::queue::{Descriptor, Queue, VirtQueue};
 use crate::virtio::{Result, VirtioFeature, error};
 
@@ -34,15 +35,6 @@ pub struct Desc {
     pub len: u32,
     pub flag: u16,
     pub next: u16,
-}
-
-bitflags! {
-    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct DescFlag: u16 {
-        const NEXT = 1;
-        const WRITE = 2;
-        const INDIRECT = 4;
-    }
 }
 
 bitflags! {
@@ -202,6 +194,8 @@ impl<'m> SplitQueue<'_, 'm> {
         let readable = self.ram.translate_iov(&readable)?;
         let writable = self.ram.translate_iov_mut(&writable)?;
         Ok(Some(Descriptor {
+            avail_span: 1,
+            index: desc_id,
             id: desc_id,
             readable,
             writable,
@@ -277,6 +271,8 @@ impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
         let writable = self.ram.translate_iov_mut(&writable)?;
         Ok(Descriptor {
             id: desc_id,
+            index: desc_id,
+            avail_span: 1,
             readable,
             writable,
         })
