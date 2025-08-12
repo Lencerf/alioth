@@ -49,7 +49,7 @@ pub trait VirtQueue<'m> {
     fn has_next_desc(&self) -> bool;
     fn push_used(&mut self, desc: Descriptor, len: usize) -> u16;
     fn enable_notification(&self, enabled: bool);
-    fn interrupt_enabled(&self) -> bool;
+    fn interrupt_enabled(&self, desc: &Descriptor) -> bool;
 
     fn handle_desc(
         &mut self,
@@ -74,8 +74,8 @@ pub trait VirtQueue<'m> {
                     }
                     Ok(None) => break 'out,
                     Ok(Some(len)) => {
+                        send_irq = send_irq || self.interrupt_enabled(&desc);
                         self.push_used(desc, len);
-                        send_irq = send_irq || self.interrupt_enabled();
                     }
                 }
             }

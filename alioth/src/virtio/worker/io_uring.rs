@@ -248,8 +248,9 @@ where
                         }
                     }
                     BufferAction::Written(len) => {
+                        let send_irq = q.interrupt_enabled(&buffer);
                         q.push_used(buffer, len);
-                        if q.interrupt_enabled() {
+                        if send_irq {
                             self.irq_sender.queue_irq(index);
                         }
                     }
@@ -292,8 +293,9 @@ where
             queue_submit.count -= 1;
 
             let written_len = dev.complete_buffer(index, &mut buffer, event)?;
+            let send_irq = queue.interrupt_enabled(&buffer);
             queue.push_used(buffer, written_len);
-            if queue.interrupt_enabled() {
+            if send_irq {
                 self.irq_sender.queue_irq(index);
             }
             self.submit_buffers(dev, index)

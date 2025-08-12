@@ -318,9 +318,9 @@ impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
         }
     }
 
-    fn interrupt_enabled(&self) -> bool {
+    fn interrupt_enabled(&self, _: &Descriptor) -> bool {
         match self.used_event() {
-            Some(used_event) => used_event == self.used_index.wrapping_sub(1),
+            Some(used_event) => used_event == self.used_index,
             None => self.flag_interrupt_enabled(),
         }
     }
