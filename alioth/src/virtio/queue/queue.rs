@@ -47,7 +47,7 @@ pub trait VirtQueue<'m> {
     fn avail_index(&self) -> u16;
     fn get_descriptor(&self, index: u16) -> Result<Descriptor<'m>>;
     fn has_next_desc(&self) -> bool;
-    fn push_used(&mut self, desc: Descriptor, len: usize) -> u16;
+    fn push_used(&mut self, desc: Descriptor, len: usize);
     fn enable_notification(&self, enabled: bool);
     fn interrupt_enabled(&self, desc: &Descriptor) -> bool;
 

@@ -282,18 +282,16 @@ impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
         })
     }
 
-    fn push_used(&mut self, desc: Descriptor, len: usize) -> u16 {
-        let used_index = self.used_index;
+    fn push_used(&mut self, desc: Descriptor, len: usize) {
         let used_elem = UsedElem {
             id: desc.id as u32,
             len: len as u32,
         };
-        let wrapped_index = used_index & (self.size - 1);
+        let wrapped_index = self.used_index & (self.size - 1);
         unsafe { *self.used_ring.offset(wrapped_index as isize) = used_elem };
         fence(Ordering::SeqCst);
-        self.used_index = used_index.wrapping_add(1);
+        self.used_index = self.used_index.wrapping_add(1);
         self.set_used_index();
-        used_index
     }
 
     fn enable_notification(&self, enabled: bool) {
