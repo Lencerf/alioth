@@ -25,7 +25,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::mem::mapped::Ram;
 use crate::virtio::queue::{DescChain, QueueReg, VirtQueue};
-use crate::virtio::{Result, VirtioFeature, error};
+use crate::virtio::{Result, error};
 
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
@@ -83,20 +83,14 @@ pub struct UsedElem {
 #[derive(Debug)]
 pub struct SplitQueue<'r, 'm> {
     reg: &'r QueueReg,
-
     ram: &'m Ram,
-
     size: u16,
-
     avail_hdr: *mut AvailHeader,
     avail_ring: *mut u16,
     used_event: Option<*mut u16>,
-
     used_hdr: *mut UsedHeader,
     used_ring: *mut UsedElem,
     avail_event: Option<*mut u16>,
-    used_index: u16,
-
     desc: *mut Desc,
 }
 
@@ -107,8 +101,12 @@ impl<'m> SplitQueue<'_, 'm> {
         unsafe { &*self.avail_hdr }.idx
     }
 
-    pub fn set_used_index(&self) {
-        unsafe { &mut *self.used_hdr }.idx = self.used_index
+    pub fn used_index(&self) -> u16 {
+        unsafe { &*self.used_hdr }.idx
+    }
+
+    pub fn set_used_index(&self, val: u16) {
+        unsafe { &mut *self.used_hdr }.idx = val;
     }
 
     pub fn used_event(&self) -> Option<u16> {
@@ -133,12 +131,7 @@ impl<'m> SplitQueue<'_, 'm> {
         unsafe { &*self.avail_hdr }.flags == 0
     }
 
-    pub fn read_avail(&self, index: u16) -> u16 {
-        let wrapped_index = index & (self.size - 1);
-        unsafe { *self.avail_ring.offset(wrapped_index as isize) }
-    }
-
-    pub fn get_desc(&self, id: u16) -> Result<&Desc> {
+    fn get_desc(&self, id: u16) -> Result<&Desc> {
         if id < self.size {
             Ok(unsafe { &*self.desc.offset(id as isize) })
         } else {
@@ -192,28 +185,13 @@ impl<'m> SplitQueue<'_, 'm> {
         }
         Ok((readable, writeable))
     }
-
-    fn get_next_desc_chain(&self) -> Result<Option<DescChain<'m>>> {
-        if self.used_index == self.avail_index() {
-            return Ok(None);
-        }
-        let desc_id = self.read_avail(self.used_index);
-        let (readable, writable) = self.get_desc_iov(desc_id)?;
-        let readable = self.ram.translate_iov(&readable)?;
-        let writable = self.ram.translate_iov_mut(&writable)?;
-        Ok(Some(DescChain {
-            id: desc_id,
-            readable,
-            writable,
-        }))
-    }
 }
 
 impl<'r, 'm> SplitQueue<'r, 'm> {
     pub fn new(
         reg: &'r QueueReg,
         ram: &'m Ram,
-        feature: u64,
+        event_idx: bool,
     ) -> Result<Option<SplitQueue<'r, 'm>>> {
         if !reg.enabled.load(Ordering::Acquire) {
             return Ok(None);
@@ -221,10 +199,9 @@ impl<'r, 'm> SplitQueue<'r, 'm> {
         let size = reg.size.load(Ordering::Acquire) as u64;
         let mut avail_event = None;
         let mut used_event = None;
-        let feature = VirtioFeature::from_bits_retain(feature);
         let used = reg.device.load(Ordering::Acquire);
         let avail = reg.driver.load(Ordering::Acquire);
-        if feature.contains(VirtioFeature::EVENT_IDX) {
+        if event_idx {
             let avail_event_gpa =
                 used + size_of::<UsedHeader>() as u64 + size * size_of::<UsedElem>() as u64;
             avail_event = Some(ram.get_ptr(avail_event_gpa)?);
@@ -233,7 +210,6 @@ impl<'r, 'm> SplitQueue<'r, 'm> {
             used_event = Some(ram.get_ptr(used_event_gpa)?);
         }
         let used_hdr = ram.get_ptr::<UsedHeader>(used)?;
-        let used_index = unsafe { &*used_hdr }.idx;
         let avail_ring_gpa = avail + size_of::<AvailHeader>() as u64;
         let used_ring_gpa = used + size_of::<UsedHeader>() as u64;
         let desc = reg.desc.load(Ordering::Acquire);
@@ -247,57 +223,47 @@ impl<'r, 'm> SplitQueue<'r, 'm> {
             used_hdr,
             used_ring: ram.get_ptr(used_ring_gpa)?,
             avail_event,
-            used_index,
             desc: ram.get_ptr(desc)?,
         }))
     }
 }
 
-impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
+impl<'r, 'm> VirtQueue<'m> for SplitQueue<'r, 'm> {
     fn reg(&self) -> &QueueReg {
         self.reg
     }
 
-    fn size(&self) -> u16 {
-        self.size
+    fn desc_avail(&self, index: u16) -> bool {
+        index < self.avail_index()
     }
 
-    fn next_desc_chain(&self) -> Option<Result<DescChain<'m>>> {
-        self.get_next_desc_chain().transpose()
-    }
-
-    fn has_next_desc(&self) -> bool {
-        self.used_index != self.avail_index()
-    }
-
-    fn avail_index(&self) -> u16 {
-        self.avail_index()
-    }
-
-    fn get_desc_chain(&self, index: u16) -> Result<DescChain<'m>> {
-        let desc_id = self.read_avail(index);
+    fn get_desc_chain(&self, index: u16) -> Result<Option<DescChain<'m>>> {
+        if !self.desc_avail(index) {
+            return Ok(None);
+        }
+        let wrapped_index = index & (self.size - 1);
+        let desc_id = unsafe { *self.avail_ring.offset(wrapped_index as isize) };
         let (readable, writable) = self.get_desc_iov(desc_id)?;
         let readable = self.ram.translate_iov(&readable)?;
         let writable = self.ram.translate_iov_mut(&writable)?;
-        Ok(DescChain {
+        Ok(Some(DescChain {
+            count: 1,
             id: desc_id,
             readable,
             writable,
-        })
+        }))
     }
 
-    fn push_used(&mut self, desc: DescChain, len: u32) -> u16 {
-        let used_index = self.used_index;
+    fn push_used(&self, desc: DescChain, len: u32) {
+        let used_index = self.used_index();
         let used_elem = UsedElem {
             id: desc.id as u32,
-            len,
+            len: len as u32,
         };
         let wrapped_index = used_index & (self.size - 1);
         unsafe { *self.used_ring.offset(wrapped_index as isize) = used_elem };
         fence(Ordering::SeqCst);
-        self.used_index = used_index.wrapping_add(1);
-        self.set_used_index();
-        used_index
+        self.set_used_index(used_index.wrapping_add(1));
     }
 
     fn enable_notification(&self, enabled: bool) {
@@ -322,10 +288,14 @@ impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
         }
     }
 
-    fn interrupt_enabled(&self) -> bool {
+    fn interrupt_enabled(&self, _: &DescChain) -> bool {
         match self.used_event() {
-            Some(used_event) => used_event == self.used_index.wrapping_sub(1),
+            Some(used_event) => used_event == self.used_index(),
             None => self.flag_interrupt_enabled(),
         }
+    }
+
+    fn wrapping_add(&self, index: u16, count: u16) -> u16 {
+        index.wrapping_add(count)
     }
 }

@@ -39,6 +39,7 @@ use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 use crate::hv::IoeventFd;
 use crate::mem::mapped::RamBus;
 use crate::virtio::dev::{DevParam, Virtio, WakeEvent};
+use crate::virtio::queue::Status as QStatus;
 use crate::virtio::queue::{DescChain, QueueReg, VirtQueue};
 #[cfg(target_os = "linux")]
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
@@ -359,7 +360,7 @@ impl VirtioMio for Block {
             return Ok(());
         };
         let mut disk = &self.disk;
-        queue.handle_desc(index, active_mio.irq_sender, |chain| {
+        queue.handle_desc(index, active_mio.irq_sender, |_, chain| {
             let written_len = match Block::handle_desc(self, chain) {
                 Err(e) => {
                     log::error!("{}: handle descriptor: {e}", self.name);
@@ -406,7 +407,7 @@ impl VirtioMio for Block {
                     1
                 }
             };
-            Ok(Some(written_len))
+            Ok(QStatus::Done { len: written_len })
         })
     }
 }
@@ -426,12 +427,7 @@ impl VirtioIoUring for Block {
         Ok(())
     }
 
-    fn handle_desc(
-        &mut self,
-        _q_index: u16,
-        chain: &mut DescChain,
-        _irq_sender: &impl IrqSender,
-    ) -> Result<BufferAction> {
+    fn handle_desc(&mut self, _q_index: u16, chain: &mut DescChain) -> Result<BufferAction> {
         let fd = Fd(self.disk.as_raw_fd());
         let action = match Block::handle_desc(self, chain)? {
             BlkRequest::Done { written } => BufferAction::Written(written),

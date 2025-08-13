@@ -42,7 +42,7 @@ use crate::hv::IoeventFd;
 use crate::mem::mapped::RamBus;
 use crate::net::MacAddr;
 use crate::virtio::dev::{DevParam, DeviceId, Result, Virtio, WakeEvent};
-use crate::virtio::queue::{DescChain, QueueReg, VirtQueue};
+use crate::virtio::queue::{DescChain, QueueReg, Status, VirtQueue};
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::worker::{Waker, WorkerApi};
@@ -417,9 +417,9 @@ impl VirtioMio for Net {
         let irq_sender = active_mio.irq_sender;
         let registry = active_mio.poll.registry();
         if index == self.config.max_queue_pairs * 2 {
-            return queue.handle_desc(index, irq_sender, |chain| {
+            return queue.handle_desc(index, irq_sender, |_, chain| {
                 let len = self.handle_ctrl_queue(chain, Some(registry))?;
-                Ok(Some(len))
+                Ok(Status::Done { len })
             });
         }
         let Some(socket) = self.tap_sockets.get(index as usize >> 1) else {
@@ -451,12 +451,7 @@ impl VirtioIoUring for Net {
         Ok(())
     }
 
-    fn handle_desc(
-        &mut self,
-        q_index: u16,
-        chain: &mut DescChain,
-        _irq_sender: &impl IrqSender,
-    ) -> Result<BufferAction> {
+    fn handle_desc(&mut self, q_index: u16, chain: &mut DescChain) -> Result<BufferAction> {
         if q_index == self.config.max_queue_pairs * 2 {
             let len = self.handle_ctrl_queue(chain, None)?;
             return Ok(BufferAction::Written(len));

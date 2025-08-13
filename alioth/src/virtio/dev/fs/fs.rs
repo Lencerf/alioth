@@ -37,7 +37,7 @@ use crate::mem::{MemRegion, MemRegionType};
 #[cfg(target_os = "linux")]
 use crate::virtio::dev::fs::vu::VuDaxRegion;
 use crate::virtio::dev::{Result, Virtio, WakeEvent};
-use crate::virtio::queue::{DescChain, QueueReg, VirtQueue};
+use crate::virtio::queue::{DescChain, QueueReg, Status, VirtQueue};
 #[cfg(target_os = "linux")]
 use crate::virtio::vu::conn::VuChannel;
 use crate::virtio::worker::Waker;
@@ -384,9 +384,9 @@ where
         }
         let irq_sender = active_mio.irq_sender;
         let registry = active_mio.poll.registry();
-        queue.handle_desc(index, irq_sender, |chain| {
+        queue.handle_desc(index, irq_sender, |_, chain| {
             let len = self.handle_desc(chain, registry)?;
-            Ok(Some(len))
+            Ok(Status::Done { len })
         })
     }
 
