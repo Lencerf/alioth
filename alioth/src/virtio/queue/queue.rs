@@ -51,17 +51,23 @@ pub struct Queue {
 #[derive(Debug)]
 pub struct Descriptor<'m> {
     id: u16,
-    avail_span: u16,
     index: u16,
+    count: u16,
     pub readable: Vec<IoSlice<'m>>,
     pub writable: Vec<IoSliceMut<'m>>,
+}
+
+impl Descriptor<'_> {
+    pub fn count(&self) -> u16 {
+        self.count
+    }
 }
 
 pub trait VirtQueue<'m> {
     fn reg(&self) -> &Queue;
     fn size(&self) -> u16;
     fn next_desc(&self) -> Option<Result<Descriptor<'m>>>;
-    fn avail_index(&self) -> u16;
+    fn desc_available(&self, index: u16) -> bool;
     fn get_descriptor(&self, index: u16) -> Result<Descriptor<'m>>;
     fn has_next_desc(&self) -> bool;
     fn push_used(&mut self, desc: Descriptor, len: usize);

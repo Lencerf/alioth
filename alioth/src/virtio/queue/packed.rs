@@ -58,7 +58,7 @@ pub struct PackedQueue<'q, 'm> {
     ram: &'m Ram,
     size: u16,
     wrap_counter: bool,
-    avail_index: u16,
+    used_index: u16,
     desc: *mut Desc,
     enable_event_idx: bool,
     notification: *mut DescEvent,
@@ -83,7 +83,7 @@ impl<'q, 'm> PackedQueue<'q, 'm> {
             ram,
             size,
             wrap_counter: true,
-            avail_index: 0,
+            used_index: 0,
             desc: ram.get_ptr(desc)?,
             enable_event_idx: feature.contains(VirtioFeature::EVENT_IDX),
             notification,
@@ -95,13 +95,13 @@ impl<'q, 'm> PackedQueue<'q, 'm> {
         if !self.has_next_desc() {
             return Ok(None);
         }
-        log::trace!("get_next_desc: start, avail_index={}", self.avail_index);
+        log::trace!("get_next_desc: start, avail_index={}", self.used_index);
         let mut readable = Vec::new();
         let mut writeable = Vec::new();
-        let mut avail_index = self.avail_index;
-        let mut avail_span = 0;
+        let mut index = self.used_index;
+        let mut count = 0;
         let id = loop {
-            let desc = unsafe { &*self.desc.offset(avail_index as isize) };
+            let desc = unsafe { &*self.desc.offset(index as isize) };
             let flag = DescFlag::from_bits_retain(desc.flag);
             if flag.contains(DescFlag::INDIRECT) {
                 todo!()
@@ -111,17 +111,17 @@ impl<'q, 'm> PackedQueue<'q, 'm> {
             } else {
                 readable.push((desc.addr, desc.len as u64));
             }
-            avail_span += 1;
+            count += 1;
             if !flag.contains(DescFlag::NEXT) {
                 break desc.id;
             }
-            avail_index = (avail_index + 1) % self.size;
+            index = (index + 1) % self.size;
         };
-        log::trace!("get desc desc: id={id}, avail_span={avail_span}");
+        log::trace!("get desc desc: id={id}, avail_span={count}");
         Ok(Some(Descriptor {
             id,
-            index: self.avail_index,
-            avail_span,
+            index: self.used_index,
+            count,
             readable: self.ram.translate_iov(&readable)?,
             writable: self.ram.translate_iov_mut(&writeable)?,
         }))
@@ -157,39 +157,41 @@ impl<'m> VirtQueue<'m> for PackedQueue<'_, 'm> {
     }
 
     fn has_next_desc(&self) -> bool {
-        let desc = unsafe { &*self.desc.offset(self.avail_index as isize) };
+        let desc = unsafe { &*self.desc.offset(self.used_index as isize) };
         let flag = DescFlag::from_bits_retain(desc.flag);
         self.flag_is_avail(flag)
     }
 
-    fn avail_index(&self) -> u16 {
-        self.avail_index
+    fn desc_available(&self, index: u16) -> bool {
+        let index = index % self.size;
+        self.flag_is_avail(DescFlag::from_bits_retain(
+            unsafe { &*self.desc.offset(index as isize) }.flag,
+        ))
     }
 
     fn get_descriptor(&self, index: u16) -> Result<Descriptor<'m>> {
         unimplemented!()
     }
 
-    fn push_used(&mut self, desc: Descriptor, len: usize) -> u16 {
-        assert_eq!(desc.index, self.avail_index);
+    fn push_used(&mut self, desc: Descriptor, len: usize) {
+        assert_eq!(desc.index, self.used_index);
         log::trace!(
             "push used: id={}, avail_span={}, avail_index={}",
             desc.id,
-            desc.avail_span,
-            self.avail_index
+            desc.index,
+            self.used_index
         );
-        let first = unsafe { &mut *self.desc.offset(desc.index as isize) };
+        let first = unsafe { &mut *self.desc.offset(self.used_index as isize) };
         let mut flag = DescFlag::from_bits_retain(first.flag);
         self.set_flag_used(&mut flag);
         first.flag = flag.bits();
         first.id = desc.id;
         first.len = len as u32;
-        self.avail_index += desc.avail_span;
-        if self.avail_index >= self.size {
-            self.avail_index -= self.size;
+        self.used_index += desc.count;
+        if self.used_index >= self.size {
+            self.used_index -= self.size;
             self.wrap_counter = !self.wrap_counter;
         }
-        self.avail_index
     }
 
     fn enable_notification(&self, enabled: bool) {
@@ -201,8 +203,17 @@ impl<'m> VirtQueue<'m> for PackedQueue<'_, 'm> {
     fn interrupt_enabled(&self, desc: &Descriptor) -> bool {
         let interrupt = unsafe { &*self.interrupt };
         let r = if self.enable_event_idx && interrupt.enable_desc() {
-            log::info!("interrupt_enabled: {interrupt:?}");
-            self.avail_index == interrupt.offset() && self.wrap_counter == interrupt.wrap()
+            let base = self.used_index;
+            let end = base + desc.count;
+            let mut offset = interrupt.offset();
+            if interrupt.wrap() != self.wrap_counter {
+                offset += self.size;
+            }
+            base <= offset && offset < end
+            // let target =
+            //     interrupt.offset() + (((interrupt.wrap() == self.wrap_counter) as u16) << 15);
+            // log::info!("interrupt_enabled: {interrupt:?}");
+            // self.used_index == interrupt.offset() && self.wrap_counter == interrupt.wrap()
         } else {
             !interrupt.disabled()
         };

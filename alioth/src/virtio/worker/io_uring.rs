@@ -222,16 +222,20 @@ where
 
         let queue_submit = self.queue_submits.get_mut(index as usize).unwrap();
         'out: loop {
-            if q.avail_index() == queue_submit.index {
+            if !q.desc_available(queue_submit.index) {
                 break;
             }
+            // if q.index_available() == queue_submit.index {
+            //     break;
+            // }
             q.enable_notification(false);
-            while q.avail_index() != queue_submit.index {
+            while q.desc_available(queue_submit.index) {
                 if queue_submit.count >= QUEUE_RESERVE_SIZE && self.shared_count == 0 {
                     log::debug!("{}: queue-{index}: no more free entries", dev.name());
                     break 'out;
                 }
                 let mut buffer = q.get_descriptor(queue_submit.index)?;
+                let count = buffer.count();
                 match dev.handle_buffer(index, &mut buffer, self.irq_sender)? {
                     BufferAction::Sqe(sqe) => {
                         let buffer_key = ((queue_submit.index as u32) << 16) | index as u32;
@@ -255,7 +259,7 @@ where
                         }
                     }
                 }
-                queue_submit.index = queue_submit.index.wrapping_add(1);
+                queue_submit.index = queue_submit.index.wrapping_add(count);
             }
             q.enable_notification(true);
         }

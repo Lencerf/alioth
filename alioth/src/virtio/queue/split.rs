@@ -194,9 +194,9 @@ impl<'m> SplitQueue<'_, 'm> {
         let readable = self.ram.translate_iov(&readable)?;
         let writable = self.ram.translate_iov_mut(&writable)?;
         Ok(Some(Descriptor {
-            avail_span: 1,
-            index: desc_id,
             id: desc_id,
+            index: self.used_index,
+            count: 1,
             readable,
             writable,
         }))
@@ -260,8 +260,8 @@ impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
         self.used_index != self.avail_index()
     }
 
-    fn avail_index(&self) -> u16 {
-        self.avail_index()
+    fn desc_available(&self, index: u16) -> bool {
+        index < self.avail_index()
     }
 
     fn get_descriptor(&self, index: u16) -> Result<Descriptor<'m>> {
@@ -271,8 +271,8 @@ impl<'m> VirtQueue<'m> for SplitQueue<'_, 'm> {
         let writable = self.ram.translate_iov_mut(&writable)?;
         Ok(Descriptor {
             id: desc_id,
-            index: desc_id,
-            avail_span: 1,
+            index,
+            count: 1,
             readable,
             writable,
         })
