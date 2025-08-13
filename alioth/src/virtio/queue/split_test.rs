@@ -21,7 +21,7 @@ use rstest::rstest;
 use crate::mem::mapped::RamBus;
 use crate::virtio::VirtioFeature;
 use crate::virtio::queue::split::{Desc, DescFlag, SplitQueue};
-use crate::virtio::queue::{Queue, VirtQueue};
+use crate::virtio::queue::{QueueReg, VirtQueue};
 
 use crate::virtio::queue::tests::{DATA_ADDR, QUEUE_SIZE, fixture_queue, fixture_ram_bus};
 
@@ -52,7 +52,7 @@ impl<'q, 'm> SplitQueue<'q, 'm> {
 }
 
 #[rstest]
-fn disabled_queue(fixture_ram_bus: RamBus, fixture_queue: Queue) {
+fn disabled_queue(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
     fixture_queue.enabled.store(false, Ordering::Relaxed);
     let split_queue = SplitQueue::new(&fixture_queue, &*ram, 0);
@@ -60,7 +60,7 @@ fn disabled_queue(fixture_ram_bus: RamBus, fixture_queue: Queue) {
 }
 
 #[rstest]
-fn enabled_queue(fixture_ram_bus: RamBus, fixture_queue: Queue) {
+fn enabled_queue(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
     let mut q = SplitQueue::new(&fixture_queue, &*ram, 0).unwrap().unwrap();
     assert!(ptr_eq(q.reg(), &fixture_queue));
@@ -84,7 +84,7 @@ fn enabled_queue(fixture_ram_bus: RamBus, fixture_queue: Queue) {
     assert_eq!(q.avail_index(), 1);
     assert_eq!(q.read_avail(0), 0);
     assert!(q.has_next_desc());
-    let desc = q.next_desc().unwrap().unwrap();
+    let desc = q.next_desc_chain().unwrap().unwrap();
     assert_eq!(desc.id, 0);
     assert_eq!(&*desc.readable[0], str_0.as_bytes());
     assert_eq!(&*desc.readable[1], str_1.as_bytes());
@@ -93,7 +93,7 @@ fn enabled_queue(fixture_ram_bus: RamBus, fixture_queue: Queue) {
     assert!(!q.has_next_desc());
 
     q.add_desc(2, &[], &[(addr_2, str_2.len() as u32)]);
-    let mut desc = q.next_desc().unwrap().unwrap();
+    let mut desc = q.next_desc_chain().unwrap().unwrap();
     assert_eq!(desc.id, 2);
     assert_eq!(desc.readable.len(), 0);
     let buffer = desc.writable[0].as_mut();
@@ -105,7 +105,7 @@ fn enabled_queue(fixture_ram_bus: RamBus, fixture_queue: Queue) {
 }
 
 #[rstest]
-fn event_idx_enabled(fixture_ram_bus: RamBus, fixture_queue: Queue) {
+fn event_idx_enabled(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
     let q = SplitQueue::new(&fixture_queue, &*ram, VirtioFeature::EVENT_IDX.bits())
         .unwrap()
