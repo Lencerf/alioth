@@ -22,7 +22,7 @@ use rstest::{fixture, rstest};
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::virtio::Error;
 use crate::virtio::queue::split::SplitQueue;
-use crate::virtio::queue::{QUEUE_SIZE_MAX, Queue, VirtQueue};
+use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg, VirtQueue};
 use crate::virtio::tests::FakeIrqSender;
 
 pub const MEM_SIZE: usize = 2 << 20;
@@ -41,8 +41,8 @@ pub fn fixture_ram_bus() -> RamBus {
 }
 
 #[fixture]
-pub fn fixture_queue() -> Queue {
-    Queue {
+pub fn fixture_queue() -> QueueReg {
+    QueueReg {
         size: AtomicU16::new(QUEUE_SIZE),
         desc: AtomicU64::new(DESC_ADDR),
         driver: AtomicU64::new(AVAIL_ADDR),
@@ -110,7 +110,7 @@ impl<'a> Read for Reader<'a> {
 }
 
 #[rstest]
-fn test_copy_from_reader(fixture_ram_bus: RamBus, fixture_queue: Queue) {
+fn test_copy_from_reader(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
     let mut q = SplitQueue::new(&fixture_queue, &*ram, 0).unwrap().unwrap();
 
@@ -247,7 +247,7 @@ impl<'a> Write for Writer<'a> {
 }
 
 #[rstest]
-fn test_copy_to_writer(fixture_ram_bus: RamBus, fixture_queue: Queue) {
+fn test_copy_to_writer(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
     let mut q = SplitQueue::new(&fixture_queue, &*ram, 0).unwrap().unwrap();
 
