@@ -47,7 +47,7 @@ pub trait VirtQueue<'m> {
     fn avail_index(&self) -> u16;
     fn get_desc_chain(&self, index: u16) -> Result<DescChain<'m>>;
     fn has_next_desc(&self) -> bool;
-    fn push_used(&mut self, desc: DescChain, len: usize) -> u16;
+    fn push_used(&mut self, desc: DescChain, len: u32) -> u16;
     fn enable_notification(&self, enabled: bool);
     fn interrupt_enabled(&self) -> bool;
 
@@ -55,7 +55,7 @@ pub trait VirtQueue<'m> {
         &mut self,
         q_index: u16,
         irq_sender: &impl IrqSender,
-        mut op: impl FnMut(&mut DescChain) -> Result<Option<usize>>,
+        mut op: impl FnMut(&mut DescChain) -> Result<Option<u32>>,
     ) -> Result<()> {
         let mut send_irq = false;
         let mut ret = Ok(());
@@ -102,7 +102,7 @@ pub trait VirtQueue<'m> {
                     let size: usize = chain.writable.iter().map(|s| s.len()).sum();
                     if size == 0 { Ok(Some(0)) } else { Ok(None) }
                 }
-                Ok(len) => Ok(Some(len)),
+                Ok(len) => Ok(Some(len as u32)),
                 Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(None),
                 Err(e) => Err(e)?,
             }
@@ -122,7 +122,7 @@ pub trait VirtQueue<'m> {
                     let size: usize = chain.readable.iter().map(|s| s.len()).sum();
                     if size == 0 { Ok(Some(0)) } else { Ok(None) }
                 }
-                Ok(len) => Ok(Some(len)),
+                Ok(len) => Ok(Some(len as u32)),
                 Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(None),
                 Err(e) => Err(e)?,
             }
