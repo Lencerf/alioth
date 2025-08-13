@@ -22,7 +22,7 @@ use rstest::{fixture, rstest};
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::virtio::Error;
 use crate::virtio::queue::split::SplitQueue;
-use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg, VirtQueue};
+use crate::virtio::queue::{QUEUE_SIZE_MAX, Queue, QueueReg};
 use crate::virtio::tests::FakeIrqSender;
 
 pub const MEM_SIZE: usize = 2 << 20;
@@ -112,7 +112,11 @@ impl<'a> Read for Reader<'a> {
 #[rstest]
 fn test_copy_from_reader(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
-    let mut q = SplitQueue::new(&fixture_queue, &*ram, 0).unwrap().unwrap();
+    let mut q = Queue::new(
+        SplitQueue::new(&fixture_queue, &*ram, false)
+            .unwrap()
+            .unwrap(),
+    );
 
     let (irq_tx, irq_rx) = mpsc::channel();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
@@ -249,8 +253,10 @@ impl<'a> Write for Writer<'a> {
 #[rstest]
 fn test_copy_to_writer(fixture_ram_bus: RamBus, fixture_queue: QueueReg) {
     let ram = fixture_ram_bus.lock_layout();
-    let mut q = SplitQueue::new(&fixture_queue, &*ram, 0).unwrap().unwrap();
-
+    let q = SplitQueue::new(&fixture_queue, &*ram, false)
+        .unwrap()
+        .unwrap();
+    let mut q = Queue::new(q);
     let (irq_tx, irq_rx) = mpsc::channel();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
 
