@@ -104,23 +104,19 @@ impl Vcpu for HvfVcpu {
             VmEntry::Shutdown => return Ok(VmExit::Shutdown),
             _ => unimplemented!("{entry:?}"),
         }
-        let ret = unsafe { hv_vcpu_run(self.vcpu_id) };
-        check_ret(ret).context(error::RunVcpu)?;
+        loop {
+            let ret = unsafe { hv_vcpu_run(self.vcpu_id) };
+            check_ret(ret).context(error::RunVcpu)?;
 
-        let exit = unsafe { &*self.exit };
-        match exit.reason {
-            HvExitReason::EXCEPTION => {
-                if self.decode_exception(&exit.exception) {
-                    Ok(self.vmexit.clone())
-                } else {
-                    self.dump()?;
-                    error::VmExit {
-                        msg: format!("{exit:?}"),
+            let exit = unsafe { &*self.exit };
+            match exit.reason {
+                HvExitReason::EXCEPTION => {
+                    if self.handle_exception(&exit.exception)? {
+                        break Ok(self.vmexit.clone());
                     }
-                    .fail()
                 }
+                _ => todo!(),
             }
-            _ => todo!(),
         }
     }
 
