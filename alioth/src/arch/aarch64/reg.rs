@@ -107,7 +107,7 @@ bitflags! {
 bitfield! {
     /// Exception Syndrome Register (EL2)
     ///
-    /// https://developer.arm.com/documentation/ddi0595/2020-12/AArch64-Registers/ESR-EL2--Exception-Syndrome-Register--EL2-
+    /// https://developer.arm.com/documentation/ddi0601/latest/AArch64-Registers/ESR-EL2--Exception-Syndrome-Register--EL2-
     #[derive(Copy, Clone, Default, PartialEq, Eq, Hash)]
     #[repr(transparent)]
     pub struct EsrEl2(u64);
@@ -121,6 +121,7 @@ bitfield! {
 c_enum! {
     pub struct EsrEl2Ec(u8);
     {
+        HVC_64 = 0b010110;
         DATA_ABORT_LOWER = 0b100100;
         INSTR_ABRT_LOWER = 0b100000;
     }

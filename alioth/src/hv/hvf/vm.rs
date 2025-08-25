@@ -72,7 +72,8 @@ impl VmMemory for HvfMemory {
     }
 
     fn reset(&self) -> Result<()> {
-        unimplemented!()
+        log::error!("HvfMemory reset");
+        Ok(())
     }
 }
 
@@ -214,7 +215,8 @@ pub struct HvfGicV3;
 
 impl GicV3 for HvfGicV3 {
     fn init(&self) -> Result<()> {
-        unimplemented!()
+        log::error!("HvfGicV3::init");
+        Ok(())
     }
 }
 
@@ -223,7 +225,8 @@ pub struct HvfIts;
 
 impl Its for HvfIts {
     fn init(&self) -> Result<()> {
-        unimplemented!()
+        log::error!("HvfIts::init");
+        Ok(())
     }
 }
 
@@ -269,6 +272,7 @@ impl Vm for HvfVm {
             exit,
             vcpu_id,
             vmexit: VmExit::Shutdown,
+            advance_pc: false,
             exit_reg: None,
         })
     }
@@ -289,20 +293,25 @@ impl Vm for HvfVm {
         unimplemented!()
     }
 
-    fn create_irq_sender(&self, _pin: u8) -> Result<Self::IrqSender> {
-        unimplemented!()
+    fn create_irq_sender(&self, pin: u8) -> Result<Self::IrqSender> {
+        log::error!("create_irq_sender: pin={pin}");
+        Ok(HvfIrqSender {})
     }
 
     fn create_gic_v3(
         &self,
-        _distributor_base: u64,
-        _redistributor_base: u64,
-        _redistributor_count: u32,
+        distributor_base: u64,
+        redistributor_base: u64,
+        redistributor_count: u32,
     ) -> Result<Self::GicV3> {
-        unimplemented!()
+        log::error!(
+            "create_gic_v3: distributor_base={distributor_base:x}, redistributor_base={redistributor_base:x}, redistributor_count={redistributor_count}"
+        );
+        Ok(HvfGicV3)
     }
 
-    fn create_its(&self, _base: u64) -> Result<Self::Its> {
-        unimplemented!()
+    fn create_its(&self, base: u64) -> Result<Self::Its> {
+        log::error!("create_its: base={base:x}");
+        Ok(HvfIts)
     }
 }

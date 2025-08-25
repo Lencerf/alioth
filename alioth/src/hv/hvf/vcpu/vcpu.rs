@@ -30,6 +30,7 @@ pub struct HvfVcpu {
     pub exit: *mut HvVcpuExit,
     pub vcpu_id: u64,
     pub vmexit: VmExit,
+    pub advance_pc: bool,
     pub exit_reg: Option<HvReg>,
 }
 
@@ -89,12 +90,20 @@ impl Reg {
 }
 
 impl Vcpu for HvfVcpu {
-    fn reset(&self, _is_bsp: bool) -> Result<()> {
-        unimplemented!()
+    fn reset(&self, is_bsp: bool) -> Result<()> {
+        log::error!("HvfVcpu::reset: is_bsp={}", is_bsp);
+        Ok(())
     }
 
     fn dump(&self) -> Result<()> {
-        unimplemented!()
+        let sp = self.get_reg(Reg::Sp)?;
+        let pc = self.get_reg(Reg::Pc)?;
+        let pstate = self.get_reg(Reg::Pstate)?;
+        log::info!(
+            "vcpu-{}: SP=0x{sp:016x}, PC=0x{pc:016x}, PSTATE=0x{pstate:016x}",
+            self.vcpu_id
+        );
+        Ok(())
     }
 
     fn run(&mut self, entry: VmEntry) -> Result<VmExit> {
@@ -105,6 +114,11 @@ impl Vcpu for HvfVcpu {
             _ => unimplemented!("{entry:?}"),
         }
         loop {
+            if self.advance_pc {
+                let pc = self.get_reg(Reg::Pc).unwrap();
+                self.set_regs(&[(Reg::Pc, pc + 4)]).unwrap();
+                self.advance_pc = false;
+            }
             let ret = unsafe { hv_vcpu_run(self.vcpu_id) };
             check_ret(ret).context(error::RunVcpu)?;
 

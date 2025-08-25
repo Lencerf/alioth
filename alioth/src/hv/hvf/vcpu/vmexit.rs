@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::arch::psci::{PSCI_VERSION_1_1, PsciFunc};
 use crate::arch::reg::{EsrEl2DataAbort, EsrEl2Ec, Reg};
 use crate::hv::hvf::bindings::{HvReg, HvVcpuExitException, hv_vcpu_get_reg};
 use crate::hv::hvf::check_ret;
@@ -26,8 +27,33 @@ impl HvfVcpu {
             EsrEl2Ec::DATA_ABORT_LOWER => {
                 self.decode_data_abort(EsrEl2DataAbort(esr.iss()), exception.physical_address)
             }
+            EsrEl2Ec::HVC_64 => self.handle_hvc(),
             _ => error::VmExit {
-                msg: format!("Unhandled: {esr:x?}"),
+                msg: "Unhandled exception".to_owned(),
+            }
+            .fail(),
+        }
+    }
+
+    pub fn handle_hvc(&mut self) -> Result<bool> {
+        log::info!(
+            "hvc: x0 = {:x}, x1 = {:x}, x2 = {:x}, x3 = {:x}, x4 = {:x}",
+            self.get_reg(Reg::X0).unwrap(),
+            self.get_reg(Reg::X1).unwrap(),
+            self.get_reg(Reg::X2).unwrap(),
+            self.get_reg(Reg::X3).unwrap(),
+            self.get_reg(Reg::X4).unwrap(),
+        );
+        let func = self.get_reg(Reg::X0).unwrap() as u32;
+        match PsciFunc::from(func) {
+            PsciFunc::PSCI_VERSION => {
+                log::info!("PSCI_VERSION");
+                self.set_regs(&[(Reg::X0, PSCI_VERSION_1_1 as u64)])
+                    .unwrap();
+                Ok(false)
+            }
+            f => error::VmExit {
+                msg: format!("HVC: {f:x?}"),
             }
             .fail(),
         }
@@ -55,8 +81,7 @@ impl HvfVcpu {
             write,
             size: 1 << iss.sas(),
         };
-        let pc = self.get_reg(Reg::Pc).unwrap();
-        self.set_regs(&[(Reg::Pc, pc + 4)]).unwrap();
+        self.advance_pc = true;
         Ok(true)
     }
 }
