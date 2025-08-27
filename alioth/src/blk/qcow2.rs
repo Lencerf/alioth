@@ -17,7 +17,7 @@
 mod tests;
 
 use alioth_macros::Layout;
-use bitfield::bitfield;
+use bitfield::{BitRange, bitfield};
 use bitflags::bitflags;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
@@ -120,5 +120,20 @@ bitfield! {
 impl QCow2StdDesc {
     pub fn cluster_offset(&self) -> u64 {
         self.offset() << 9
+    }
+}
+
+pub const QCOW2_CMPR_SECTOR_SIZE: u64 = 512;
+
+pub struct QCow2CmprDesc(u64);
+
+impl QCow2CmprDesc {
+    pub fn offset_size(&self, cluster_bits: u32) -> (u64, u64) {
+        let size_bits = cluster_bits - 8;
+        let offset_bits = 62 - size_bits;
+        let offset = self.0 & ((1 << offset_bits) - 1);
+        let sectors = 1 + (self.0 >> offset_bits) & ((1 << size_bits) - 1);
+        let size = sectors * QCOW2_CMPR_SECTOR_SIZE - (offset & (QCOW2_CMPR_SECTOR_SIZE - 1));
+        (offset, size)
     }
 }

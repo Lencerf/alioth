@@ -16,9 +16,15 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::FileExt;
 
+use libflate::deflate::Decoder;
+use miniz_oxide::inflate::core::inflate_flags::{
+    TINFL_FLAG_IGNORE_ADLER32, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
+};
+use miniz_oxide::inflate::core::{DecompressorOxide, decompress};
+use miniz_oxide::inflate::{TINFLStatus, decompress_to_vec};
 use zerocopy::{FromZeros, IntoBytes};
 
-use crate::blk::qcow2::{QCow2Hdr, QCow2L1, QCow2L2, QCow2StdDesc};
+use crate::blk::qcow2::{QCow2CmprDesc, QCow2Hdr, QCow2L1, QCow2L2, QCow2StdDesc};
 use crate::utils::endian::Bu64;
 
 #[test]
@@ -37,23 +43,50 @@ fn test_qcow2() {
     let mut l2_table = vec![Bu64::new_zeroed(); cluster_size as usize / size_of::<Bu64>()];
     f.read_exact_at(l2_table.as_mut_bytes(), l1_0.l2_offset())
         .unwrap();
-    let mut l2_index = 0;
-    for (i, l2_entry) in l2_table.iter().enumerate() {
-        let l2_entry = QCow2L2(l2_entry.to_ne());
-        if l2_entry.compressed() || l2_entry.desc() == 0 {
-            continue;
-        }
-        l2_index = i;
-        break;
-    }
+    // let mut l2_index = 0;
+    // for (i, l2_entry) in l2_table.iter().enumerate() {
+    //     let l2_entry = QCow2L2(l2_entry.to_ne());
+    //     if l2_entry.compressed() || l2_entry.desc() == 0 {
+    //         continue;
+    //     }
+    //     l2_index = i;
+    //     break;
+    // }
+    let l2_index = 0;
     let l2_entry_0 = QCow2L2(l2_table[l2_index].to_ne());
     println!("l2_index = {l2_index}: entry = {l2_entry_0:#x?}");
     println!("virtual offset = {}", cluster_size * l2_index);
-    assert!(!l2_entry_0.compressed());
-    let l2_entry_desc = QCow2StdDesc(l2_entry_0.desc());
-    println!("cluster offset = {}", l2_entry_desc.cluster_offset());
-    let mut buf = vec![0u8; cluster_size];
-    f.read_exact_at(&mut buf, l2_entry_desc.cluster_offset())
-        .unwrap();
-    println!("{:02x?}", &buf[..32])
+    assert!(l2_entry_0.compressed());
+
+    let l2_desc = QCow2CmprDesc(l2_entry_0.desc());
+    let (offset, size) = l2_desc.offset_size(hdr.cluster_bits.to_ne());
+    let mut buf = vec![0u8; size as usize];
+    f.read_exact_at(&mut buf, offset).unwrap();
+    println!("offset = {offset:x}, size={size:x}");
+    println!("encryped: {:02x?}", &buf[..32]);
+    let mut decompressed_buf = vec![0u8; cluster_size];
+    let r = &mut DecompressorOxide::new();
+    let (status, n_read, n_write) = decompress(
+        r,
+        buf.as_slice(),
+        &mut decompressed_buf,
+        0,
+        TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
+    );
+    // let mut decoder = Decoder::new(buf.as_slice());
+    // let mut decoded = vec![];
+    // std::io::copy(&mut decoder, &mut decompressed_buf).unwrap();
+    // println!("{:02x?}", &decompressed_buf[..32]);
+    // let d = decompress_to_vec(&buf).unwrap();
+    println!("nread {n_read} nwrite {n_write}");
+    std::fs::write("/Users/lencerf/data/cluster0", &decompressed_buf).unwrap();
+    println!("{:02x?}", &decompressed_buf[..32]);
+    assert_eq!(status, TINFLStatus::Done);
+
+    // let l2_entry_desc = QCow2StdDesc(l2_entry_0.desc());
+    // println!("cluster offset = {}", l2_entry_desc.cluster_offset());
+    // let mut buf = vec![0u8; cluster_size];
+    // f.read_exact_at(&mut buf, l2_entry_desc.cluster_offset())
+    //     .unwrap();
+    // println!("{:02x?}", &buf[..32])
 }
