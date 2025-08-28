@@ -17,7 +17,7 @@
 mod tests;
 
 use alioth_macros::Layout;
-use bitfield::{BitRange, bitfield};
+use bitfield::bitfield;
 use bitflags::bitflags;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 

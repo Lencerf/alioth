@@ -16,15 +16,12 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::FileExt;
 
-use libflate::deflate::Decoder;
-use miniz_oxide::inflate::core::inflate_flags::{
-    TINFL_FLAG_IGNORE_ADLER32, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
-};
+use miniz_oxide::inflate::TINFLStatus;
+use miniz_oxide::inflate::core::inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
 use miniz_oxide::inflate::core::{DecompressorOxide, decompress};
-use miniz_oxide::inflate::{TINFLStatus, decompress_to_vec};
 use zerocopy::{FromZeros, IntoBytes};
 
-use crate::blk::qcow2::{QCow2CmprDesc, QCow2Hdr, QCow2L1, QCow2L2, QCow2StdDesc};
+use crate::blk::qcow2::{QCow2CmprDesc, QCow2Hdr, QCow2L1, QCow2L2};
 use crate::utils::endian::Bu64;
 
 #[test]
