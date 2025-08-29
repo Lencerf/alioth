@@ -57,3 +57,13 @@ c_enum! {
 }
 
 pub const PSCI_VERSION_1_1: u32 = (1 << 16) | 1;
+
+c_enum! {
+    /// https://developer.arm.com/documentation/den0022/latest/
+    pub struct PsciMigrateInfo(u32);
+    {
+        CAPABLE = 0;
+        INCAPABLE = 1;
+        NOT_REQUIRED = 2;
+    }
+}

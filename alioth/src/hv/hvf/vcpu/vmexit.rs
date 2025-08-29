@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::arch::psci::{PSCI_VERSION_1_1, PsciFunc};
-use crate::arch::reg::{EsrEl2DataAbort, EsrEl2Ec, Reg};
+use snafu::ResultExt;
+
+use crate::arch::psci::{PSCI_VERSION_1_1, PsciFunc, PsciMigrateInfo};
+use crate::arch::reg::{EsrEl2DataAbort, EsrEl2Ec, EsrEl2SysRegTrap, Reg, SReg, encode};
 use crate::hv::hvf::bindings::{HvReg, HvVcpuExitException, hv_vcpu_get_reg};
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
@@ -28,10 +30,41 @@ impl HvfVcpu {
                 self.decode_data_abort(EsrEl2DataAbort(esr.iss()), exception.physical_address)
             }
             EsrEl2Ec::HVC_64 => self.handle_hvc(),
+            EsrEl2Ec::SYS_REG_TRAP => self.handle_sys_reg_trap(EsrEl2SysRegTrap(esr.iss())),
             _ => error::VmExit {
-                msg: "Unhandled exception".to_owned(),
+                msg: format!("unhandled esr: {esr:x?}"),
             }
             .fail(),
+        }
+    }
+
+    pub fn handle_sys_reg_trap(&mut self, iss: EsrEl2SysRegTrap) -> Result<bool> {
+        let rt = HvReg::from(iss.rt());
+        if iss.is_read() {
+            return error::VmExit {
+                msg: format!("unhandled iss: {iss:x?}"),
+            }
+            .fail();
+        } else {
+            let mut val = 0;
+            let ret = unsafe { hv_vcpu_get_reg(self.vcpu_id, rt, &mut val) };
+            check_ret(ret).context(error::VcpuReg)?;
+            let sreg = SReg::from(encode(
+                iss.op0(),
+                iss.op1(),
+                iss.crn(),
+                iss.crm(),
+                iss.op2(),
+            ));
+            if sreg == SReg::OSDLR_EL1 || sreg == SReg::OSLAR_EL1 {
+                log::info!("sreg = {sreg:x?}, val = {val:x?}, rt = {rt:?} {iss:x?}");
+                self.advance_pc = true;
+                return Ok(true);
+            }
+            error::VmExit {
+                msg: format!("sreg = {sreg:x?}, val = {val:x?}, rt = {rt:?} {iss:x?}"),
+            }
+            .fail()
         }
     }
 
@@ -45,18 +78,30 @@ impl HvfVcpu {
             self.get_reg(Reg::X4).unwrap(),
         );
         let func = self.get_reg(Reg::X0).unwrap() as u32;
-        match PsciFunc::from(func) {
+        let ret = match PsciFunc::from(func) {
             PsciFunc::PSCI_VERSION => {
                 log::info!("PSCI_VERSION");
-                self.set_regs(&[(Reg::X0, PSCI_VERSION_1_1 as u64)])
-                    .unwrap();
-                Ok(false)
+                PSCI_VERSION_1_1 as u64
             }
-            f => error::VmExit {
-                msg: format!("HVC: {f:x?}"),
+            PsciFunc::MIGRATE_INFO_TYPE => PsciMigrateInfo::NOT_REQUIRED.raw() as u64,
+            PsciFunc::PSCI_FEATURES => {
+                let f = self.get_reg(Reg::X1).unwrap() as u32;
+                match PsciFunc::from(f) {
+                    PsciFunc::CPU_SUSPEND_64
+                    | PsciFunc::SYSTEM_OFF2_64
+                    | PsciFunc::SYSTEM_RESET2_64 => 0,
+                    _ => u64::MAX,
+                }
             }
-            .fail(),
-        }
+            f => {
+                return error::VmExit {
+                    msg: format!("HVC: {f:x?}"),
+                }
+                .fail();
+            }
+        };
+        self.set_regs(&[(Reg::X0, ret)]).unwrap();
+        Ok(false)
     }
 
     pub fn decode_data_abort(&mut self, iss: EsrEl2DataAbort, gpa: u64) -> Result<bool> {

@@ -34,6 +34,17 @@ pub struct HvfVcpu {
     pub exit_reg: Option<HvReg>,
 }
 
+// impl HvfVcpu {
+//     fn hv_get_reg(&self, ) {
+//         let mut val = 0;
+//         let ret = match hvf_reg {
+//             HvfReg::Reg(r) => unsafe { hv_vcpu_get_reg(self.vcpu_id, r, &mut val) },
+//             HvfReg::SReg(r) => unsafe { hv_vcpu_get_sys_reg(self.vcpu_id, r, &mut val) },
+//         };
+//         check_ret(ret).context(error::VcpuReg)?;
+//     }
+// }
+
 impl Drop for HvfVcpu {
     fn drop(&mut self) {
         let ret = unsafe { hv_vcpu_destroy(self.vcpu_id) };
