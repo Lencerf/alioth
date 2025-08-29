@@ -19,11 +19,13 @@ use snafu::ResultExt;
 
 use crate::arch::reg::{Reg, SReg};
 use crate::hv::hvf::bindings::{
-    HvExitReason, HvReg, HvVcpuExit, hv_vcpu_destroy, hv_vcpu_get_reg, hv_vcpu_get_sys_reg,
-    hv_vcpu_run, hv_vcpu_set_reg, hv_vcpu_set_sys_reg,
+    HvExitReason, HvReg, HvVcpuExit, hv_gic_get_redistributor_base, hv_gic_get_redistributor_size,
+    hv_vcpu_destroy, hv_vcpu_get_reg, hv_vcpu_get_sys_reg, hv_vcpu_run, hv_vcpu_set_reg,
+    hv_vcpu_set_sys_reg,
 };
 use crate::hv::hvf::check_ret;
 use crate::hv::{Result, Vcpu, VmEntry, VmExit, error};
+use crate::hvffi;
 
 #[derive(Debug)]
 pub struct HvfVcpu {
@@ -103,6 +105,9 @@ impl Reg {
 impl Vcpu for HvfVcpu {
     fn reset(&self, is_bsp: bool) -> Result<()> {
         log::error!("HvfVcpu::reset: is_bsp={}", is_bsp);
+        let ret = unsafe { hv_vcpu_set_sys_reg(self.vcpu_id, SReg::MPIDR_EL1, 0) };
+        check_ret(ret).context(error::VcpuReg)?;
+        // self.set_sregs(&[(SReg::MPIDR_EL1, 0)]).unwrap();
         Ok(())
     }
 
@@ -124,6 +129,13 @@ impl Vcpu for HvfVcpu {
             VmEntry::Shutdown => return Ok(VmExit::Shutdown),
             _ => unimplemented!("{entry:?}"),
         }
+        // log::info!("vcpu-{} running", self.vcpu_id);
+        // let mut redistributor_base_address = 0;
+        // hvffi!(unsafe {
+        //     hv_gic_get_redistributor_base(self.vcpu_id, &mut redistributor_base_address)
+        // })
+        // .context(error::CreateDevice)?;
+        // log::info!("redistributer base: {:x}", redistributor_base_address);
         loop {
             if self.advance_pc {
                 let pc = self.get_reg(Reg::Pc).unwrap();
@@ -134,6 +146,7 @@ impl Vcpu for HvfVcpu {
             check_ret(ret).context(error::RunVcpu)?;
 
             let exit = unsafe { &*self.exit };
+            // log::info!("vcpu-{} exited with {:x?}", self.vcpu_id, exit);
             match exit.reason {
                 HvExitReason::EXCEPTION => {
                     if self.handle_exception(&exit.exception)? {

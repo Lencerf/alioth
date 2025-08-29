@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::mem::addressable::{Addressable, SlotBackend};
-use crate::mem::{Memory, Result};
+use crate::mem::{Memory, Result, error};
 use crate::utils::truncate_u64;
 
 pub trait ChangeLayout: Debug + Send + Sync + 'static {
@@ -161,7 +161,7 @@ where
         while count < size {
             let base_addr = addr + count;
             let Some((start, dev)) = self.inner.search_next(base_addr) else {
-                break;
+                return error::NotMapped { addr: base_addr }.fail();
             };
             count += start.saturating_sub(base_addr);
             let offset = base_addr.saturating_sub(start);
@@ -186,7 +186,7 @@ where
         while count < size {
             let base_addr = addr + count;
             let Some((start, dev)) = self.inner.search_next(base_addr) else {
-                break;
+                return error::NotMapped { addr: base_addr }.fail();
             };
             count += start.saturating_sub(base_addr);
             let offset = base_addr.saturating_sub(start);

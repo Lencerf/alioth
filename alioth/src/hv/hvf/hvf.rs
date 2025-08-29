@@ -55,6 +55,14 @@ fn check_ret(ret: i32) -> std::io::Result<()> {
     Err(std::io::Error::new(kind, HvReturn(ret)))
 }
 
+#[macro_export]
+macro_rules! hvffi {
+    ($f:expr) => {{
+        let ret = $f;
+        crate::hv::hvf::check_ret(ret)
+    }};
+}
+
 #[derive(Debug)]
 pub struct Hvf {}
 

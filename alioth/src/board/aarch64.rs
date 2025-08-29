@@ -93,6 +93,11 @@ where
     pub fn init_vcpu(&self, id: u32, vcpu: &mut V::Vcpu) -> Result<()> {
         vcpu.reset(id == 0)?;
         self.arch.mpidrs.lock()[id as usize] = vcpu.get_sreg(SReg::MPIDR_EL1)?;
+        log::info!(
+            "vcpu-{} MPIDR init to {}",
+            id,
+            self.arch.mpidrs.lock()[id as usize]
+        );
         Ok(())
     }
 
@@ -465,7 +470,7 @@ where
         self.create_clock_node(root);
         self.create_timer_node(root);
         self.create_psci_node(root);
-        // log::debug!("device tree: {device_tree:#x?}");
+        log::debug!("device tree: {device_tree:#x?}");
         let blob = device_tree.to_blob();
         let ram = self.memory.ram_bus();
         assert!(blob.len() as u64 <= DEVICE_TREE_LIMIT);

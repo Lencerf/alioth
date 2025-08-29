@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, BorrowedFd};
+use std::os::raw::c_void;
 use std::ptr::null_mut;
 use std::thread::JoinHandle;
 
@@ -21,7 +22,10 @@ use parking_lot::Mutex;
 use snafu::ResultExt;
 
 use crate::hv::hvf::bindings::{
-    HvMemoryFlag, hv_vcpu_create, hv_vm_destroy, hv_vm_map, hv_vm_unmap,
+    HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
+    hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_distributor_size,
+    hv_gic_get_redistributor_region_size, hv_gic_get_redistributor_size, hv_vcpu_create,
+    hv_vm_destroy, hv_vm_map, hv_vm_unmap,
 };
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
@@ -29,6 +33,7 @@ use crate::hv::{
     GicV2, GicV3, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, Its, MemMapOption, MsiSender,
     Result, Vm, VmExit, VmMemory, error,
 };
+use crate::hvffi;
 
 #[derive(Debug)]
 pub struct HvfMemory {}
@@ -211,7 +216,9 @@ impl GicV2 for HvfGicV2 {
 }
 
 #[derive(Debug)]
-pub struct HvfGicV3;
+pub struct HvfGicV3 {
+    config: usize,
+}
 
 impl GicV3 for HvfGicV3 {
     fn init(&self) -> Result<()> {
@@ -304,10 +311,34 @@ impl Vm for HvfVm {
         redistributor_base: u64,
         redistributor_count: u32,
     ) -> Result<Self::GicV3> {
+        let mut redistributor_region_size = 0;
+        hvffi!(unsafe { hv_gic_get_redistributor_region_size(&mut redistributor_region_size) })
+            .context(error::CreateDevice)?;
+
+        let mut redistributor_size = 0;
+        hvffi!(unsafe { hv_gic_get_redistributor_size(&mut redistributor_size) })
+            .context(error::CreateDevice)?;
+
+        let mut distributor_size = 0;
+        hvffi!(unsafe { hv_gic_get_distributor_size(&mut distributor_size) })
+            .context(error::CreateDevice)?;
+
+        log::info!(
+            "create_gic_v3: distributor_size={distributor_size:x}, redistributor_size={redistributor_size:x}, redistributor_region_size={redistributor_region_size:x}"
+        );
+
+        let config = unsafe { hv_gic_config_create() };
+        hvffi!(unsafe { hv_gic_config_set_distributor_base(config, distributor_base) })
+            .context(error::CreateDevice)?;
+        hvffi!(unsafe { hv_gic_config_set_redistributor_base(config, redistributor_base) })
+            .context(error::CreateDevice)?;
+
+        let ret = unsafe { hv_gic_create(config) };
+        check_ret(ret).context(error::CreateDevice)?;
         log::error!(
             "create_gic_v3: distributor_base={distributor_base:x}, redistributor_base={redistributor_base:x}, redistributor_count={redistributor_count}"
         );
-        Ok(HvfGicV3)
+        Ok(HvfGicV3 { config })
     }
 
     fn create_its(&self, base: u64) -> Result<Self::Its> {
