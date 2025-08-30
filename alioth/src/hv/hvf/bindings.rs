@@ -125,6 +125,17 @@ unsafe extern "C" {
         spi_intid_base: &mut u32,
         spi_intid_count: &mut u32,
     ) -> i32;
+    pub fn hv_gic_get_msi_region_size(msi_region_size: &mut usize) -> i32;
+    pub fn hv_gic_get_msi_region_base_alignment(msi_region_base_alignment: &mut usize) -> i32;
+    pub fn hv_gic_get_distributor_base_alignment(distributor_base_alignment: &mut usize) -> i32;
+    pub fn hv_gic_get_redistributor_base_alignment(redistributor_base_alignment: &mut usize)
+    -> i32;
+    pub fn hv_gic_config_set_msi_region_base(config: usize, msi_region_base_address: u64);
+    pub fn hv_gic_config_set_msi_interrupt_range(
+        config: usize,
+        msi_intid_base: u32,
+        msi_intid_count: u32,
+    );
 
 }
 

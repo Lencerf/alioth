@@ -23,10 +23,11 @@ use snafu::ResultExt;
 
 use crate::hv::hvf::bindings::{
     HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
-    hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_distributor_size,
-    hv_gic_get_redistributor_region_size, hv_gic_get_redistributor_size,
-    hv_gic_get_spi_interrupt_range, hv_gic_set_spi, hv_vcpu_create, hv_vm_destroy, hv_vm_map,
-    hv_vm_unmap,
+    hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_distributor_base_alignment,
+    hv_gic_get_distributor_size, hv_gic_get_msi_region_base_alignment, hv_gic_get_msi_region_size,
+    hv_gic_get_redistributor_base_alignment, hv_gic_get_redistributor_region_size,
+    hv_gic_get_redistributor_size, hv_gic_get_spi_interrupt_range, hv_gic_set_spi, hv_vcpu_create,
+    hv_vm_destroy, hv_vm_map, hv_vm_unmap,
 };
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
@@ -326,6 +327,22 @@ impl Vm for HvfVm {
             .context(error::CreateDevice)?;
         log::info!(
             "create_gic_v3: distributor_size={distributor_size:x}, redistributor_size={redistributor_size:x}, redistributor_region_size={redistributor_region_size:x}"
+        );
+
+        let mut msi_region_size = 0;
+        hvffi!(unsafe { hv_gic_get_msi_region_size(&mut msi_region_size) })
+            .context(error::CreateDevice)?;
+        let mut msi_region_base_align = 0;
+        hvffi!(unsafe { hv_gic_get_msi_region_base_alignment(&mut msi_region_base_align) })
+            .context(error::CreateDevice)?;
+        let mut redistributor_base_align = 0;
+        hvffi!(unsafe { hv_gic_get_redistributor_base_alignment(&mut redistributor_base_align) })
+            .context(error::CreateDevice)?;
+        let mut distributor_base_align = 0;
+        hvffi!(unsafe { hv_gic_get_distributor_base_alignment(&mut distributor_base_align) })
+            .context(error::CreateDevice)?;
+        log::info!(
+            "msi_region_size={msi_region_size}, msi_region_base_align={msi_region_base_align}, redistributor_base_align={redistributor_base_align}, distributor_base_align={distributor_base_align}"
         );
 
         let mut spi_intid_base = 0;
