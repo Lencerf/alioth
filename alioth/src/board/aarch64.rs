@@ -27,7 +27,7 @@ use crate::arch::layout::{
 use crate::arch::reg::SReg;
 use crate::board::{Board, BoardConfig, PCIE_MMIO_64_SIZE, Result, VcpuGuard};
 use crate::firmware::dt::{DeviceTree, Node, PropVal};
-use crate::hv::{GicV2, GicV3, Hypervisor, Its, Vcpu, Vm};
+use crate::hv::{GicV2, GicV3, Hypervisor, Vcpu, Vm};
 use crate::loader::{ExecType, InitState};
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{MemRegion, MemRegionType};
@@ -37,7 +37,7 @@ where
     V: Vm,
 {
     V2(V::GicV2),
-    V3 { gic: V::GicV3, its: V::Its },
+    V3(V::GicV3),
 }
 
 pub struct ArchBoard<V>
@@ -53,13 +53,15 @@ impl<V: Vm> ArchBoard<V> {
     where
         H: Hypervisor<Vm = V>,
     {
-        let gicv3_with_its = |gic| vm.create_its(GIC_ITS_START).map(|its| Gic::V3 { gic, its });
-        let ret = vm
-            .create_gic_v3(GIC_V3_DIST_START, GIC_V3_REDIST_START, config.num_cpu)
-            .and_then(gicv3_with_its);
+        let ret = vm.create_gic_v3(
+            GIC_V3_DIST_START,
+            GIC_V3_REDIST_START,
+            config.num_cpu,
+            Some(GIC_ITS_START),
+        );
 
         let gic = match ret {
-            Ok(gic_v3) => gic_v3,
+            Ok(gic_v3) => Gic::V3(gic_v3),
             Err(e) => {
                 log::error!("Cannot create gic v3: {e:?}trying v2...");
                 Gic::V2(vm.create_gic_v2(GIC_V2_DIST_START, GIC_V2_CPU_INTERFACE_START)?)
@@ -132,12 +134,9 @@ where
 
     pub fn arch_init(&self) -> Result<()> {
         match &self.arch.gic {
-            Gic::V2(v2) => v2.init()?,
-            Gic::V3 { gic, its } => {
-                gic.init()?;
-                its.init()?;
-            }
-        };
+            Gic::V2(v2) => v2.init(),
+            Gic::V3(v3) => v3.init(),
+        }?;
         Ok(())
     }
 

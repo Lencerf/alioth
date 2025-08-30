@@ -241,11 +241,6 @@ pub trait GicV3: Debug + Send + Sync + 'static {
     fn init(&self) -> Result<()>;
 }
 
-#[cfg(target_arch = "aarch64")]
-pub trait Its: Debug + Send + Sync + 'static {
-    fn init(&self) -> Result<()>;
-}
-
 #[derive(Debug, Clone, Deserialize, Help)]
 pub enum Coco {
     /// Enable AMD SEV or SEV-ES.
@@ -324,12 +319,8 @@ pub trait Vm {
         distributor_base: u64,
         redistributor_base: u64,
         redistributor_count: u32,
+        its_base: Option<u64>,
     ) -> Result<Self::GicV3>;
-
-    #[cfg(target_arch = "aarch64")]
-    type Its: Its;
-    #[cfg(target_arch = "aarch64")]
-    fn create_its(&self, base: u64) -> Result<Self::Its>;
 }
 
 pub trait Hypervisor {
