@@ -120,6 +120,12 @@ unsafe extern "C" {
     pub fn hv_gic_get_redistributor_region_size(redistributor_region_size: &mut usize) -> i32;
     pub fn hv_gic_get_redistributor_size(redistributor_size: &mut usize) -> i32;
     pub fn hv_gic_get_distributor_size(distributor_size: &mut usize) -> i32;
+    pub fn hv_gic_set_spi(intid: u32, level: bool) -> i32;
+    pub fn hv_gic_get_spi_interrupt_range(
+        spi_intid_base: &mut u32,
+        spi_intid_count: &mut u32,
+    ) -> i32;
+
 }
 
 // #[repr(C)]

@@ -24,8 +24,9 @@ use snafu::ResultExt;
 use crate::hv::hvf::bindings::{
     HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
     hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_distributor_size,
-    hv_gic_get_redistributor_region_size, hv_gic_get_redistributor_size, hv_vcpu_create,
-    hv_vm_destroy, hv_vm_map, hv_vm_unmap,
+    hv_gic_get_redistributor_region_size, hv_gic_get_redistributor_size,
+    hv_gic_get_spi_interrupt_range, hv_gic_set_spi, hv_vcpu_create, hv_vm_destroy, hv_vm_map,
+    hv_vm_unmap,
 };
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
@@ -83,10 +84,13 @@ impl VmMemory for HvfMemory {
 }
 
 #[derive(Debug)]
-pub struct HvfIrqSender {}
+pub struct HvfIrqSender {
+    intid: u8,
+}
+
 impl IrqSender for HvfIrqSender {
     fn send(&self) -> Result<()> {
-        unimplemented!()
+        hvffi!(unsafe { hv_gic_set_spi(self.intid as u32, true) }).context(error::SendInterrupt)
     }
 }
 
@@ -302,7 +306,7 @@ impl Vm for HvfVm {
 
     fn create_irq_sender(&self, pin: u8) -> Result<Self::IrqSender> {
         log::error!("create_irq_sender: pin={pin}");
-        Ok(HvfIrqSender {})
+        Ok(HvfIrqSender { intid: pin + 32 })
     }
 
     fn create_gic_v3(
@@ -314,17 +318,24 @@ impl Vm for HvfVm {
         let mut redistributor_region_size = 0;
         hvffi!(unsafe { hv_gic_get_redistributor_region_size(&mut redistributor_region_size) })
             .context(error::CreateDevice)?;
-
         let mut redistributor_size = 0;
         hvffi!(unsafe { hv_gic_get_redistributor_size(&mut redistributor_size) })
             .context(error::CreateDevice)?;
-
         let mut distributor_size = 0;
         hvffi!(unsafe { hv_gic_get_distributor_size(&mut distributor_size) })
             .context(error::CreateDevice)?;
-
         log::info!(
             "create_gic_v3: distributor_size={distributor_size:x}, redistributor_size={redistributor_size:x}, redistributor_region_size={redistributor_region_size:x}"
+        );
+
+        let mut spi_intid_base = 0;
+        let mut spi_intid_count = 0;
+        hvffi!(unsafe {
+            hv_gic_get_spi_interrupt_range(&mut spi_intid_base, &mut spi_intid_count)
+        })
+        .context(error::CreateDevice)?;
+        log::info!(
+            "create_gic_v3: spi_intid_base={spi_intid_base}, spi_intid_count={spi_intid_count}"
         );
 
         let config = unsafe { hv_gic_config_create() };
