@@ -93,6 +93,11 @@ impl HvfVcpu {
                     _ => u64::MAX,
                 }
             }
+            PsciFunc::SYSTEM_OFF | PsciFunc::SYSTEM_OFF2_32 | PsciFunc::SYSTEM_OFF2_64 => {
+                log::info!("SYSTEM_OFF");
+                self.vmexit = VmExit::Shutdown;
+                return Ok(true);
+            }
             f => {
                 return error::VmExit {
                     msg: format!("HVC: {f:x?}"),
