@@ -410,7 +410,7 @@ where
             return Ok(());
         }
 
-        log::warn!("VCPU-{id} reported error, unblocking other VCPUs...");
+        log::warn!("VCPU-{id} reported error {ret:?}, unblocking other VCPUs...");
         let mut mp_sync = self.mp_sync.lock();
         mp_sync.fatal = true;
         if mp_sync.count > 0 {

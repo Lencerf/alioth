@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::raw::c_void;
 use std::ptr::null_mut;
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
@@ -235,8 +237,14 @@ impl GicV3 for HvfGicV3 {
 }
 
 #[derive(Debug)]
+pub enum VcpuEvent {
+    PowerOn { pc: u64, context: u64 },
+}
+
+#[derive(Debug)]
 pub struct HvfVm {
     pub(super) vcpus: Mutex<HashMap<u32, u64>>,
+    pub(super) senders: Arc<Mutex<HashMap<u64, Sender<VcpuEvent>>>>,
 }
 
 impl Drop for HvfVm {
@@ -271,12 +279,17 @@ impl Vm for HvfVm {
         let ret = unsafe { hv_vcpu_create(&mut vcpu_id, &mut exit, null_mut()) };
         check_ret(ret).context(error::CreateVcpu)?;
         self.vcpus.lock().insert(id, vcpu_id);
+        let (sender, receiver) = mpsc::channel();
+        self.senders.lock().insert(vcpu_id, sender);
         Ok(HvfVcpu {
             exit,
             vcpu_id,
             vmexit: VmExit::Shutdown,
             advance_pc: false,
             exit_reg: None,
+            stopped: true,
+            senders: self.senders.clone(),
+            receiver,
         })
     }
 
@@ -285,6 +298,8 @@ impl Vm for HvfVm {
     }
 
     fn stop_vcpu<T>(_id: u32, _handle: &JoinHandle<T>) -> Result<()> {
+        // log::error!("reqeusted to stop {_id}");
+        // Ok(())
         Err(std::io::ErrorKind::Unsupported.into()).context(error::StopVcpu)
     }
 

@@ -15,6 +15,11 @@
 mod vmentry;
 mod vmexit;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+
+use parking_lot::Mutex;
 use snafu::ResultExt;
 
 use crate::arch::reg::{Reg, SReg};
@@ -24,6 +29,7 @@ use crate::hv::hvf::bindings::{
     hv_vcpu_set_sys_reg,
 };
 use crate::hv::hvf::check_ret;
+use crate::hv::hvf::vm::VcpuEvent;
 use crate::hv::{Result, Vcpu, VmEntry, VmExit, error};
 use crate::hvffi;
 
@@ -34,6 +40,9 @@ pub struct HvfVcpu {
     pub vmexit: VmExit,
     pub advance_pc: bool,
     pub exit_reg: Option<HvReg>,
+    pub stopped: bool,
+    pub senders: Arc<Mutex<HashMap<u64, Sender<VcpuEvent>>>>,
+    pub receiver: Receiver<VcpuEvent>,
 }
 
 // impl HvfVcpu {
@@ -102,12 +111,28 @@ impl Reg {
     }
 }
 
+impl HvfVcpu {
+    fn handle_event(&mut self, event: &VcpuEvent) -> Result<()> {
+        log::info!("vcpu-{}: {event:x?}", self.vcpu_id);
+        match event {
+            VcpuEvent::PowerOn { pc, context } => {
+                self.set_regs(&[(Reg::Pc, *pc), (Reg::X0, *context), (Reg::Pstate, 5)])
+                    .unwrap();
+                self.stopped = false;
+                let pstate = self.get_reg(Reg::Pstate)?;
+                log::info!("==== cpu pstate = {:x} ====", pstate);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Vcpu for HvfVcpu {
-    fn reset(&self, is_bsp: bool) -> Result<()> {
+    fn reset(&mut self, is_bsp: bool) -> Result<()> {
         log::error!("HvfVcpu::reset: is_bsp={}", is_bsp);
         let ret = unsafe { hv_vcpu_set_sys_reg(self.vcpu_id, SReg::MPIDR_EL1, self.vcpu_id) };
         check_ret(ret).context(error::VcpuReg)?;
-        // self.set_sregs(&[(SReg::MPIDR_EL1, 0)]).unwrap();
+        self.stopped = !is_bsp;
         Ok(())
     }
 
@@ -129,6 +154,12 @@ impl Vcpu for HvfVcpu {
             VmEntry::Shutdown => return Ok(VmExit::Shutdown),
             _ => unimplemented!("{entry:?}"),
         }
+        while self.stopped {
+            let Ok(event) = self.receiver.recv() else {
+                return Err(std::io::ErrorKind::BrokenPipe.into()).context(error::RunVcpu);
+            };
+            self.handle_event(&event)?;
+        }
         // log::info!("vcpu-{} running", self.vcpu_id);
         // let mut redistributor_base_address = 0;
         // hvffi!(unsafe {
@@ -137,6 +168,13 @@ impl Vcpu for HvfVcpu {
         // .context(error::CreateDevice)?;
         // log::info!("redistributer base: {:x}", redistributor_base_address);
         loop {
+            // loop {
+            //     match self.receiver.try_recv() {
+            //         Ok(event) => self.handle_event(&event),
+            //         Err(TryRecvError::Empty) => break,
+            //         Err(TryRecvError::Disconnected) => return Err(error::Disconnected),
+            //     }
+            // }
             if self.advance_pc {
                 let pc = self.get_reg(Reg::Pc).unwrap();
                 self.set_regs(&[(Reg::Pc, pc + 4)]).unwrap();

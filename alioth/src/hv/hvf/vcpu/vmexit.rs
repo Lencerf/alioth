@@ -19,6 +19,7 @@ use crate::arch::reg::{EsrEl2DataAbort, EsrEl2Ec, EsrEl2SysRegTrap, Reg, SReg, e
 use crate::hv::hvf::bindings::{HvReg, HvVcpuExitException, hv_vcpu_get_reg};
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
+use crate::hv::hvf::vm::VcpuEvent;
 use crate::hv::{Result, Vcpu, VmExit, error};
 
 impl HvfVcpu {
@@ -99,6 +100,19 @@ impl HvfVcpu {
                 log::info!("SYSTEM_OFF");
                 self.vmexit = VmExit::Shutdown;
                 return Ok(true);
+            }
+            PsciFunc::CPU_ON_32 | PsciFunc::CPU_ON_64 => {
+                let mpidr = self.get_reg(Reg::X1).unwrap();
+                let pc = self.get_reg(Reg::X2).unwrap();
+                let context = self.get_reg(Reg::X3).unwrap();
+                let cpuid = mpidr as u64; // FIXME
+                if let Some(sender) = self.senders.lock().get(&cpuid) {
+                    sender.send(VcpuEvent::PowerOn { pc, context }).unwrap();
+                    0
+                } else {
+                    log::error!("Failed to get sender for CPU ID {}", cpuid);
+                    u64::MAX
+                }
             }
             f => {
                 return error::VmExit {
