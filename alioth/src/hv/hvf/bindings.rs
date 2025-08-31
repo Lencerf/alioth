@@ -96,6 +96,13 @@ bitflags! {
     }
 }
 
+c_enum! {
+    pub struct GicDistributorReg(u16);
+    {
+        TYPER = 0x0004;
+    }
+}
+
 #[link(name = "Hypervisor", kind = "framework")]
 unsafe extern "C" {
     pub fn hv_vm_create(config: *mut i32) -> i32;
@@ -121,6 +128,7 @@ unsafe extern "C" {
     pub fn hv_gic_get_redistributor_size(redistributor_size: &mut usize) -> i32;
     pub fn hv_gic_get_distributor_size(distributor_size: &mut usize) -> i32;
     pub fn hv_gic_set_spi(intid: u32, level: bool) -> i32;
+    pub fn hv_gic_send_msi(address: u64, intid: u32) -> i32;
     pub fn hv_gic_get_spi_interrupt_range(
         spi_intid_base: &mut u32,
         spi_intid_count: &mut u32,
@@ -130,13 +138,14 @@ unsafe extern "C" {
     pub fn hv_gic_get_distributor_base_alignment(distributor_base_alignment: &mut usize) -> i32;
     pub fn hv_gic_get_redistributor_base_alignment(redistributor_base_alignment: &mut usize)
     -> i32;
-    pub fn hv_gic_config_set_msi_region_base(config: usize, msi_region_base_address: u64);
+    pub fn hv_gic_config_set_msi_region_base(config: usize, msi_region_base_address: u64) -> i32;
     pub fn hv_gic_config_set_msi_interrupt_range(
         config: usize,
         msi_intid_base: u32,
         msi_intid_count: u32,
-    );
-
+    ) -> i32;
+    pub fn hv_gic_get_distributor_reg(reg: GicDistributorReg, value: &mut u64) -> i32;
+    pub fn hv_gic_set_distributor_reg(reg: GicDistributorReg, value: u64) -> i32;
 }
 
 // #[repr(C)]

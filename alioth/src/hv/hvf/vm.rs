@@ -22,18 +22,20 @@ use parking_lot::Mutex;
 use snafu::ResultExt;
 
 use crate::hv::hvf::bindings::{
-    HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
+    GicDistributorReg, HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
+    hv_gic_config_set_msi_interrupt_range, hv_gic_config_set_msi_region_base,
     hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_distributor_base_alignment,
-    hv_gic_get_distributor_size, hv_gic_get_msi_region_base_alignment, hv_gic_get_msi_region_size,
-    hv_gic_get_redistributor_base_alignment, hv_gic_get_redistributor_region_size,
-    hv_gic_get_redistributor_size, hv_gic_get_spi_interrupt_range, hv_gic_set_spi, hv_vcpu_create,
-    hv_vm_destroy, hv_vm_map, hv_vm_unmap,
+    hv_gic_get_distributor_reg, hv_gic_get_distributor_size, hv_gic_get_msi_region_base_alignment,
+    hv_gic_get_msi_region_size, hv_gic_get_redistributor_base_alignment,
+    hv_gic_get_redistributor_region_size, hv_gic_get_redistributor_size,
+    hv_gic_get_spi_interrupt_range, hv_gic_send_msi, hv_gic_set_distributor_reg, hv_gic_set_spi,
+    hv_vcpu_create, hv_vm_destroy, hv_vm_map, hv_vm_unmap,
 };
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
 use crate::hv::{
-    GicV2, GicV3, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, Its, MemMapOption, MsiSender,
-    Result, Vm, VmExit, VmMemory, error,
+    GicV2, GicV3, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, MemMapOption, MsiSender, Result,
+    Vm, VmExit, VmMemory, error,
 };
 use crate::hvffi;
 
@@ -137,17 +139,17 @@ impl IrqFd for HvfIrqFd {
 }
 
 #[derive(Debug)]
-pub struct HvfMsiSender {}
+pub struct HvfMsiSender;
 
 impl MsiSender for HvfMsiSender {
     type IrqFd = HvfIrqFd;
 
     fn create_irqfd(&self) -> Result<Self::IrqFd> {
-        unimplemented!()
+        Err(std::io::ErrorKind::Unsupported.into()).context(error::IrqFd)
     }
 
-    fn send(&self, _addr: u64, _data: u32) -> Result<()> {
-        unimplemented!()
+    fn send(&self, addr: u64, data: u32) -> Result<()> {
+        hvffi!(unsafe { hv_gic_send_msi(addr, data) }).context(error::SendInterrupt)
     }
 }
 
@@ -163,17 +165,17 @@ impl AsFd for HvfIoeventFd {
 }
 
 #[derive(Debug)]
-pub struct HvfIoeventFdRegistry {}
+pub struct HvfIoeventFdRegistry;
 
 impl IoeventFdRegistry for HvfIoeventFdRegistry {
     type IoeventFd = HvfIoeventFd;
 
     fn create(&self) -> Result<Self::IoeventFd> {
-        unimplemented!()
+        Err(std::io::ErrorKind::Unsupported.into()).context(error::IoeventFd)
     }
 
     fn deregister(&self, _fd: &Self::IoeventFd) -> Result<()> {
-        unimplemented!()
+        Err(std::io::ErrorKind::Unsupported.into()).context(error::IoeventFd)
     }
 
     fn register(
@@ -183,7 +185,7 @@ impl IoeventFdRegistry for HvfIoeventFdRegistry {
         _len: u8,
         _data: Option<u64>,
     ) -> Result<()> {
-        unimplemented!()
+        Err(std::io::ErrorKind::Unsupported.into()).context(error::IoeventFd)
     }
 }
 
@@ -233,16 +235,6 @@ impl GicV3 for HvfGicV3 {
 }
 
 #[derive(Debug)]
-pub struct HvfIts;
-
-impl Its for HvfIts {
-    fn init(&self) -> Result<()> {
-        log::error!("HvfIts::init");
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
 pub struct HvfVm {
     pub(super) vcpus: Mutex<HashMap<u32, u64>>,
 }
@@ -261,17 +253,16 @@ impl Vm for HvfVm {
     type GicV3 = HvfGicV3;
     type IoeventFdRegistry = HvfIoeventFdRegistry;
     type IrqSender = HvfIrqSender;
-    type Its = HvfIts;
     type Memory = HvfMemory;
     type MsiSender = HvfMsiSender;
     type Vcpu = HvfVcpu;
 
     fn create_ioeventfd_registry(&self) -> Result<Self::IoeventFdRegistry> {
-        unimplemented!()
+        Ok(HvfIoeventFdRegistry)
     }
 
     fn create_msi_sender(&self, _devid: u32) -> Result<Self::MsiSender> {
-        unimplemented!()
+        Ok(HvfMsiSender)
     }
 
     fn create_vcpu(&self, id: u32) -> Result<Self::Vcpu> {
@@ -302,7 +293,7 @@ impl Vm for HvfVm {
         _distributor_base: u64,
         _cpu_interface_base: u64,
     ) -> Result<Self::GicV2> {
-        unimplemented!()
+        Err(std::io::ErrorKind::Unsupported.into()).context(error::CreateDevice)
     }
 
     fn create_irq_sender(&self, pin: u8) -> Result<Self::IrqSender> {
@@ -315,6 +306,7 @@ impl Vm for HvfVm {
         distributor_base: u64,
         redistributor_base: u64,
         redistributor_count: u32,
+        its_base: Option<u64>,
     ) -> Result<Self::GicV3> {
         let mut redistributor_region_size = 0;
         hvffi!(unsafe { hv_gic_get_redistributor_region_size(&mut redistributor_region_size) })
@@ -360,17 +352,38 @@ impl Vm for HvfVm {
             .context(error::CreateDevice)?;
         hvffi!(unsafe { hv_gic_config_set_redistributor_base(config, redistributor_base) })
             .context(error::CreateDevice)?;
+        if let Some(its_base) = its_base {
+            log::info!("creating its at {its_base:x}");
+            hvffi!(unsafe { hv_gic_config_set_msi_region_base(config, its_base) })
+                .context(error::CreateDevice)?;
+            hvffi!(unsafe { hv_gic_config_set_msi_interrupt_range(config, 64, 955) })
+                .context(error::CreateDevice)?;
+        }
 
         let ret = unsafe { hv_gic_create(config) };
         check_ret(ret).context(error::CreateDevice)?;
         log::error!(
             "create_gic_v3: distributor_base={distributor_base:x}, redistributor_base={redistributor_base:x}, redistributor_count={redistributor_count}"
         );
-        Ok(HvfGicV3 { config })
-    }
 
-    fn create_its(&self, base: u64) -> Result<Self::Its> {
-        log::error!("create_its: base={base:x}");
-        Ok(HvfIts)
+        let mut typer_value = 0;
+        hvffi!(unsafe { hv_gic_get_distributor_reg(GicDistributorReg::TYPER, &mut typer_value) })
+            .context(error::CreateDevice)?;
+        log::info!(
+            "typer value = {typer_value:x}, has bit 17 = {}",
+            typer_value & (1 << 17) != 0
+        );
+        hvffi!(unsafe {
+            hv_gic_set_distributor_reg(GicDistributorReg::TYPER, typer_value | (1 << 17))
+        })
+        .context(error::CreateDevice)?;
+        let mut typer_value = 0;
+        hvffi!(unsafe { hv_gic_get_distributor_reg(GicDistributorReg::TYPER, &mut typer_value) })
+            .context(error::CreateDevice)?;
+        log::info!(
+            "typer value = {typer_value:x}, has bit 17 = {}",
+            typer_value & (1 << 17) != 0
+        );
+        Ok(HvfGicV3 { config })
     }
 }

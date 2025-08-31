@@ -336,12 +336,24 @@ where
 
     // Documentation/devicetree/bindings/interrupt-controller/arm,gic-v3.yaml
     fn create_gicv3_node(&self, root: &mut Node) {
+        #[cfg(target_os = "linux")]
         let its_node = Node {
             props: HashMap::from([
                 ("compatible", PropVal::Str("arm,gic-v3-its")),
                 ("msi-controller", PropVal::Empty),
                 ("#msi-cells", PropVal::U32(1)),
                 ("reg", PropVal::U64List(vec![GIC_ITS_START, 128 << 10])),
+                ("phandle", PropVal::PHandle(PHANDLE_MSI)),
+            ]),
+            nodes: HashMap::new(),
+        };
+        #[cfg(target_os = "macos")]
+        let its_node = Node {
+            props: HashMap::from([
+                ("compatible", PropVal::Str("arm,gic-v2m-frame")),
+                ("msi-controller", PropVal::Empty),
+                // ("#msi-cells", PropVal::U32(1)),
+                ("reg", PropVal::U64List(vec![GIC_ITS_START, 64 << 10])),
                 ("phandle", PropVal::PHandle(PHANDLE_MSI)),
             ]),
             nodes: HashMap::new(),
@@ -365,7 +377,10 @@ where
                 ),
                 ("phandle", PropVal::U32(PHANDLE_GIC)),
             ]),
+            #[cfg(target_os = "linux")]
             nodes: HashMap::from([(format!("its@{GIC_ITS_START:x}"), its_node)]),
+            #[cfg(target_os = "macos")]
+            nodes: HashMap::from([(format!("v2m@{GIC_ITS_START:x}"), its_node)]),
         };
 
         root.nodes
