@@ -340,6 +340,10 @@ where
             drop(vcpus);
 
             let maybe_reboot = self.vcpu_loop(vcpu, id);
+            if let Err(e) = &maybe_reboot {
+                log::error!("maybe_reboot failed: {e:?}");
+                // break Err(e);
+            }
 
             let vcpus = self.vcpus.read();
             let mut mp_sync = self.mp_sync.lock();
@@ -370,6 +374,7 @@ where
             self.reset_vcpu(id, vcpu)?;
 
             if let Err(e) = maybe_reboot {
+                log::error!("maybe_reboot failed: {e:?}");
                 break Err(e);
             }
 

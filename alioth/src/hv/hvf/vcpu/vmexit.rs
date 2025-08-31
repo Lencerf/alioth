@@ -89,7 +89,9 @@ impl HvfVcpu {
                 match PsciFunc::from(f) {
                     PsciFunc::CPU_SUSPEND_64
                     | PsciFunc::SYSTEM_OFF2_64
-                    | PsciFunc::SYSTEM_RESET2_64 => 0,
+                    | PsciFunc::SYSTEM_RESET2_64
+                    | PsciFunc::CPU_ON_32
+                    | PsciFunc::CPU_ON_64 => 0,
                     _ => u64::MAX,
                 }
             }

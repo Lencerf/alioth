@@ -285,7 +285,7 @@ impl Vm for HvfVm {
     }
 
     fn stop_vcpu<T>(_id: u32, _handle: &JoinHandle<T>) -> Result<()> {
-        unimplemented!()
+        Err(std::io::ErrorKind::Unsupported.into()).context(error::StopVcpu)
     }
 
     fn create_gic_v2(

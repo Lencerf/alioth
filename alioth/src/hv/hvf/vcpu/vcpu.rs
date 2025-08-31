@@ -105,7 +105,7 @@ impl Reg {
 impl Vcpu for HvfVcpu {
     fn reset(&self, is_bsp: bool) -> Result<()> {
         log::error!("HvfVcpu::reset: is_bsp={}", is_bsp);
-        let ret = unsafe { hv_vcpu_set_sys_reg(self.vcpu_id, SReg::MPIDR_EL1, 0) };
+        let ret = unsafe { hv_vcpu_set_sys_reg(self.vcpu_id, SReg::MPIDR_EL1, self.vcpu_id) };
         check_ret(ret).context(error::VcpuReg)?;
         // self.set_sregs(&[(SReg::MPIDR_EL1, 0)]).unwrap();
         Ok(())
