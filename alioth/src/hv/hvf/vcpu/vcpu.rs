@@ -15,14 +15,21 @@
 mod vmentry;
 mod vmexit;
 
+use std::collections::HashMap;
+use std::io::ErrorKind;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender};
+
+use parking_lot::Mutex;
 use snafu::ResultExt;
 
-use crate::arch::reg::{Reg, SReg};
+use crate::arch::reg::{MpidrEl1, Reg, SReg};
 use crate::hv::hvf::bindings::{
     HvExitReason, HvReg, HvVcpuExit, hv_vcpu_destroy, hv_vcpu_get_reg, hv_vcpu_get_sys_reg,
     hv_vcpu_run, hv_vcpu_set_reg, hv_vcpu_set_sys_reg,
 };
 use crate::hv::hvf::check_ret;
+use crate::hv::hvf::vm::VcpuEvent;
 use crate::hv::{Result, Vcpu, VmEntry, VmExit, error};
 
 #[derive(Debug)]
@@ -31,6 +38,22 @@ pub struct HvfVcpu {
     pub vcpu_id: u64,
     pub vmexit: Option<VmExit>,
     pub exit_reg: Option<HvReg>,
+    pub senders: Arc<Mutex<HashMap<MpidrEl1, Sender<VcpuEvent>>>>,
+    pub receiver: Receiver<VcpuEvent>,
+    pub power_on: bool,
+}
+
+impl HvfVcpu {
+    fn handle_event(&mut self, event: &VcpuEvent) -> Result<()> {
+        match event {
+            VcpuEvent::PowerOn { pc, context } => {
+                self.set_regs(&[(Reg::Pc, *pc), (Reg::X0, *context), (Reg::Pstate, 5)])?;
+                self.power_on = true;
+            }
+            VcpuEvent::PowerOff => self.power_on = false,
+        }
+        Ok(())
+    }
 }
 
 impl Drop for HvfVcpu {
@@ -89,7 +112,8 @@ impl Reg {
 }
 
 impl Vcpu for HvfVcpu {
-    fn reset(&self, _is_bsp: bool) -> Result<()> {
+    fn reset(&mut self, is_bsp: bool) -> Result<()> {
+        self.power_on = is_bsp;
         Ok(())
     }
 
@@ -104,9 +128,26 @@ impl Vcpu for HvfVcpu {
             VmEntry::Shutdown => return Ok(VmExit::Shutdown),
             _ => unimplemented!("{entry:?}"),
         }
+        if !self.power_on {
+            let Ok(event) = self.receiver.recv() else {
+                return Err(ErrorKind::BrokenPipe.into()).context(error::RunVcpu);
+            };
+            self.handle_event(&event)?;
+            if !self.power_on {
+                return Ok(VmExit::Shutdown);
+            }
+        }
         loop {
             let ret = unsafe { hv_vcpu_run(self.vcpu_id) };
             check_ret(ret).context(error::RunVcpu)?;
+
+            while let Ok(event) = self.receiver.try_recv() {
+                log::info!("received {event:?}");
+                self.handle_event(&event)?;
+                if !self.power_on {
+                    return Ok(VmExit::Shutdown);
+                }
+            }
 
             let exit = unsafe { &*self.exit };
             match exit.reason {
