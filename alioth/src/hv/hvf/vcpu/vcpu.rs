@@ -47,7 +47,7 @@ impl HvfVcpu {
     fn handle_event(&mut self, event: &VcpuEvent) -> Result<()> {
         match event {
             VcpuEvent::PowerOn { pc, context } => {
-                self.set_regs(&[(Reg::Pc, *pc), (Reg::X0, *context), (Reg::Pstate, 5)])?;
+                self.set_regs(&[(Reg::Pc, *pc), (Reg::X0, *context), (Reg::Pstate, 3)])?;
                 self.power_on = true;
             }
             VcpuEvent::PowerOff => self.power_on = false,
@@ -138,6 +138,7 @@ impl Vcpu for HvfVcpu {
             }
         }
         loop {
+            // log::info!("vcpu - {} run", self.vcpu_id);
             let ret = unsafe { hv_vcpu_run(self.vcpu_id) };
             check_ret(ret).context(error::RunVcpu)?;
 

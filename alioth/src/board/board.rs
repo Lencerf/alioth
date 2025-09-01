@@ -23,6 +23,7 @@ use std::ffi::CStr;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
+use std::u32;
 
 use libc::{MAP_PRIVATE, MAP_SHARED};
 use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard};
@@ -310,6 +311,7 @@ where
         id: u32,
         vcpu: &mut V::Vcpu,
         boot_rx: &Receiver<()>,
+        event_tx: &Sender<u32>,
     ) -> Result<(), Error> {
         self.init_vcpu(id, vcpu)?;
         boot_rx.recv().unwrap();
@@ -379,6 +381,14 @@ where
                 break Ok(());
             }
             mp_sync.state = BoardState::Running;
+            // self.sync_vcpus(&vcpus)?;
+            if id == 0 {
+                log::info!("wirll equested reset");
+                event_tx.send(u32::MAX).unwrap();
+                log::info!("requested reset");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            // self.sync_vcpus(&vcpus)?;
         }
     }
 
@@ -399,7 +409,7 @@ where
     ) -> Result<(), Error> {
         let mut vcpu = self.create_vcpu(id, &event_tx)?;
 
-        let ret = self.run_vcpu_inner(id, &mut vcpu, &boot_rx);
+        let ret = self.run_vcpu_inner(id, &mut vcpu, &boot_rx, &event_tx);
         event_tx.send(id).unwrap();
 
         if matches!(ret, Ok(_) | Err(Error::PeerFailure { .. })) {

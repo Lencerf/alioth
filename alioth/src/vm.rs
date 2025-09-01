@@ -272,7 +272,15 @@ where
     }
 
     pub fn wait(&self) -> Result<()> {
-        self.event_rx.recv().unwrap();
+        loop {
+            let s = self.event_rx.recv().unwrap();
+            if s == u32::MAX {
+                log::info!("get reset request");
+                self.board.arch_init()?;
+            } else {
+                break;
+            }
+        }
         let vcpus = self.board.vcpus.read();
         for _ in 1..vcpus.len() {
             self.event_rx.recv().unwrap();

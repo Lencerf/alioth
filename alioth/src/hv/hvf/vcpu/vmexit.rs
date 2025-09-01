@@ -16,7 +16,9 @@ use snafu::ResultExt;
 
 use crate::arch::psci::{PSCI_VERSION_1_1, PsciFunc, PsciMigrateInfo};
 use crate::arch::reg::{EsrEl2DataAbort, EsrEl2Ec, MpidrEl1, Reg};
-use crate::hv::hvf::bindings::{HvReg, HvVcpuExitException, hv_vcpu_get_reg};
+use crate::hv::hvf::bindings::{
+    HvReg, HvVcpuExitException, hv_gic_reset, hv_gic_set_spi, hv_vcpu_get_reg,
+};
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
 use crate::hv::hvf::vm::VcpuEvent;
@@ -81,7 +83,10 @@ impl HvfVcpu {
                     | PsciFunc::SYSTEM_OFF2_32
                     | PsciFunc::SYSTEM_OFF2_64
                     | PsciFunc::CPU_ON_32
-                    | PsciFunc::CPU_ON_64 => 0,
+                    | PsciFunc::CPU_ON_64
+                    | PsciFunc::SYSTEM_RESET
+                    | PsciFunc::SYSTEM_RESET2_32
+                    | PsciFunc::SYSTEM_RESET2_64 => 0,
                     _ => u64::MAX,
                 }
             }
@@ -100,6 +105,14 @@ impl HvfVcpu {
                     log::error!("Failed to find CPU with mpidr {mpidr:#x}");
                     u64::MAX
                 }
+            }
+            PsciFunc::SYSTEM_RESET | PsciFunc::SYSTEM_RESET2_32 | PsciFunc::SYSTEM_RESET2_64 => {
+                let ret = unsafe { hv_gic_reset() };
+                check_ret(ret).context(error::CreateDevice)?;
+                let ret = unsafe { hv_gic_set_spi(33, false) };
+                check_ret(ret).context(error::CreateDevice)?;
+                self.vmexit = Some(VmExit::Reboot);
+                return Ok(());
             }
             f => {
                 return error::VmExit {

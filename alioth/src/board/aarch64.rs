@@ -108,6 +108,7 @@ where
     }
 
     pub fn init_boot_vcpu(&self, vcpu: &mut V::Vcpu, init_state: &InitState) -> Result<()> {
+        log::info!("init_boot_vcpus: {init_state:x?}");
         vcpu.set_regs(&init_state.regs)?;
         vcpu.set_sregs(&init_state.sregs)?;
         Ok(())

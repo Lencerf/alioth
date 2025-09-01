@@ -133,6 +133,7 @@ unsafe extern "C" {
         msi_intid_count: u32,
     ) -> i32;
     pub fn hv_gic_create(config: *mut c_void) -> i32;
+    pub fn hv_gic_reset() -> i32;
     pub fn hv_gic_set_spi(intid: u32, level: bool) -> i32;
     pub fn hv_gic_send_msi(address: u64, intid: u32) -> i32;
     pub fn hv_vcpus_exit(vcpus: *const u64, vcpu_count: u32) -> i32;

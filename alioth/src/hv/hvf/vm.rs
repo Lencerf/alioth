@@ -29,8 +29,8 @@ use crate::hv::hvf::bindings::{
     HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
     hv_gic_config_set_msi_interrupt_range, hv_gic_config_set_msi_region_base,
     hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_spi_interrupt_range,
-    hv_gic_send_msi, hv_gic_set_spi, hv_vcpu_create, hv_vcpu_set_sys_reg, hv_vcpus_exit,
-    hv_vm_destroy, hv_vm_map, hv_vm_unmap,
+    hv_gic_reset, hv_gic_send_msi, hv_gic_set_spi, hv_vcpu_create, hv_vcpu_set_sys_reg,
+    hv_vcpus_exit, hv_vm_destroy, hv_vm_map, hv_vm_unmap,
 };
 use crate::hv::hvf::vcpu::HvfVcpu;
 use crate::hv::hvf::{OsObject, check_ret};
@@ -234,6 +234,8 @@ pub struct HvfGicV3;
 
 impl GicV3 for HvfGicV3 {
     fn init(&self) -> Result<()> {
+        let ret = unsafe { hv_gic_reset() };
+        check_ret(ret).context(error::CreateDevice)?;
         Ok(())
     }
 }
@@ -243,6 +245,8 @@ pub struct HvfGicV2m;
 
 impl GicV2m for HvfGicV2m {
     fn init(&self) -> Result<()> {
+        let ret = unsafe { hv_gic_reset() };
+        check_ret(ret).context(error::CreateDevice)?;
         Ok(())
     }
 }
@@ -363,6 +367,8 @@ impl Vm for HvfVm {
         let mut count = 0;
         let ret = unsafe { hv_gic_get_spi_interrupt_range(&mut spi_base, &mut count) };
         check_ret(ret).context(error::CreateDevice)?;
+        // let ret = unsafe { hv_gic_set_spi(spi_base + pin as u32, false) };
+        // check_ret(ret).context(error::CreateDevice)?;
         Ok(HvfIrqSender {
             spi: spi_base + pin as u32,
         })
