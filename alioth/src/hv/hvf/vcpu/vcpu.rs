@@ -90,11 +90,11 @@ impl Reg {
 
 impl Vcpu for HvfVcpu {
     fn reset(&self, _is_bsp: bool) -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
 
     fn dump(&self) -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
 
     fn run(&mut self, entry: VmEntry) -> Result<VmExit> {
