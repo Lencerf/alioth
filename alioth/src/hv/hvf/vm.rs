@@ -45,7 +45,7 @@ fn encode_mpidr(id: u32) -> MpidrEl1 {
 }
 
 #[derive(Debug)]
-pub struct HvfMemory {}
+pub struct HvfMemory;
 
 impl VmMemory for HvfMemory {
     fn deregister_encrypted_range(&self, _range: &[u8]) -> Result<()> {
@@ -67,8 +67,7 @@ impl VmMemory for HvfMemory {
             flags |= HvMemoryFlag::EXEC;
         }
         let ret = unsafe { hv_vm_map(hva as *const u8, gpa, size as usize, flags) };
-        check_ret(ret).context(error::GuestMap { hva, gpa, size })?;
-        Ok(())
+        check_ret(ret).context(error::GuestMap { hva, gpa, size })
     }
 
     fn register_encrypted_range(&self, _range: &[u8]) -> Result<()> {
@@ -86,7 +85,7 @@ impl VmMemory for HvfMemory {
     }
 
     fn reset(&self) -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
 }
 
@@ -316,7 +315,7 @@ impl Vm for HvfVm {
     }
 
     fn create_vm_memory(&mut self) -> Result<Self::Memory> {
-        Ok(HvfMemory {})
+        Ok(HvfMemory)
     }
 
     fn stop_vcpu<T>(_id: u32, _handle: &JoinHandle<T>) -> Result<()> {
