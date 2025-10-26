@@ -2,7 +2,7 @@
 members = [
     "alioth",
     "alioth-cli",
-    "alioth-macros",
+    "alioth-macros", "libmock",
     "serde-aco",
     "serde-aco-derive",
 ]
@@ -22,6 +22,7 @@ alioth-macros = { version = "0.7.0", path = "alioth-macros" }
 alioth = { version = "0.9.0", path = "alioth" }
 ctor = "0.6"
 flexi_logger = "0.31"
+libmock = { version = "0.1.0", path = "libmock" }
 serde-aco = { version = "0.8.0", path = "serde-aco" }
 serde-aco-derive = { version = "0.7.0", path = "serde-aco-derive" }
 assert_matches = "1"
