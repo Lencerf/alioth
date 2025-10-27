@@ -44,6 +44,7 @@ use crate::arch::reg::{Reg, SReg};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::sev::{SevPolicy, SnpPageType, SnpPolicy};
 use crate::errors::{DebugTrace, trace_error};
+use crate::sync::notifier::Notifier;
 
 #[cfg(target_os = "macos")]
 pub use self::hvf::Hvf;
@@ -92,8 +93,8 @@ pub enum Error {
     MemoryCreated,
     #[snafu(display("Failed to configure an IrqFd"))]
     IrqFd { error: std::io::Error },
-    #[snafu(display("Failed to configure an IoeventFd"))]
-    IoeventFd { error: std::io::Error },
+    #[snafu(display("Failed to configure a Notifier"))]
+    Notifier { error: std::io::Error },
     #[snafu(display("Failed to create an IrqSender for pin {pin}"))]
     CreateIrq { pin: u8, error: std::io::Error },
     #[snafu(display("Failed to send an interrupt"))]
@@ -209,21 +210,12 @@ pub trait VmMemory: Debug + Send + Sync + 'static {
     fn mark_private_memory(&self, gpa: u64, size: u64, private: bool) -> Result<()>;
 }
 
-pub trait IoeventFd: Debug + Send + Sync + AsFd + 'static {}
-
-pub trait IoeventFdRegistry: Debug + Send + Sync + 'static {
-    type IoeventFd: IoeventFd;
-    fn create(&self) -> Result<Self::IoeventFd>;
-    fn register(&self, fd: &Self::IoeventFd, gpa: u64, len: u8, data: Option<u64>) -> Result<()>;
+pub trait IoNotifierRegistry: Debug + Send + Sync + 'static {
+    fn create(&self) -> Result<Notifier>;
+    fn register(&self, fd: &Notifier, gpa: u64, len: u8, data: Option<u64>) -> Result<()>;
     #[cfg(target_arch = "x86_64")]
-    fn register_port(
-        &self,
-        fd: &Self::IoeventFd,
-        port: u16,
-        len: u8,
-        data: Option<u64>,
-    ) -> Result<()>;
-    fn deregister(&self, fd: &Self::IoeventFd) -> Result<()>;
+    fn register_port(&self, fd: &Notifier, port: u16, len: u8, data: Option<u64>) -> Result<()>;
+    fn deregister(&self, fd: &Notifier) -> Result<()>;
 }
 
 pub trait IrqFd: Debug + Send + Sync + AsFd + 'static {
@@ -293,7 +285,7 @@ pub trait Vm {
     type Memory: VmMemory;
     type IrqSender: IrqSender + Send + Sync;
     type MsiSender: MsiSender;
-    type IoeventFdRegistry: IoeventFdRegistry;
+    type IoeventFdRegistry: IoNotifierRegistry;
     fn create_vcpu(&self, id: u32) -> Result<Self::Vcpu, Error>;
     fn create_irq_sender(&self, pin: u8) -> Result<Self::IrqSender, Error>;
     fn create_msi_sender(

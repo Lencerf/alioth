@@ -24,7 +24,7 @@ use alioth_macros::Layout;
 use parking_lot::{Mutex, RwLock};
 use zerocopy::{FromZeros, Immutable, IntoBytes};
 
-use crate::hv::{self, IoeventFd, IoeventFdRegistry, IrqFd, MsiSender};
+use crate::hv::{self, IoNotifierRegistry, IrqFd, MsiSender};
 use crate::mem::emulated::{Action, Mmio};
 use crate::mem::{MemRange, MemRegion, MemRegionCallback, MemRegionEntry};
 use crate::pci::cap::{
@@ -183,26 +183,24 @@ pub struct VirtioPciRegister {
 }
 
 #[derive(Debug)]
-pub struct VirtioPciRegisterMmio<M, E>
+pub struct VirtioPciRegisterMmio<M>
 where
     M: MsiSender,
-    E: IoeventFd,
 {
     name: Arc<str>,
     reg: Register,
     queues: Arc<[QueueReg]>,
     irq_sender: Arc<PciIrqSender<M>>,
-    ioeventfds: Option<Arc<[E]>>,
-    event_tx: Sender<WakeEvent<PciIrqSender<M>, E>>,
+    ioeventfds: Option<Arc<[Notifier]>>,
+    event_tx: Sender<WakeEvent<PciIrqSender<M>>>,
     notifier: Arc<Notifier>,
 }
 
-impl<M, E> VirtioPciRegisterMmio<M, E>
+impl<M> VirtioPciRegisterMmio<M>
 where
     M: MsiSender,
-    E: IoeventFd,
 {
-    fn wake_up_dev(&self, event: WakeEvent<PciIrqSender<M>, E>) {
+    fn wake_up_dev(&self, event: WakeEvent<PciIrqSender<M>>) {
         let is_start = matches!(event, WakeEvent::Start { .. });
         if let Err(e) = self.event_tx.send(event) {
             log::error!("{}: failed to send event: {e}", self.name);
@@ -246,10 +244,9 @@ where
     }
 }
 
-impl<M, E> Mmio for VirtioPciRegisterMmio<M, E>
+impl<M> Mmio for VirtioPciRegisterMmio<M>
 where
     M: MsiSender,
-    E: IoeventFd,
 {
     fn size(&self) -> u64 {
         (size_of::<VirtioPciRegister>() + size_of::<u32>() * self.queues.len()) as u64
@@ -541,15 +538,15 @@ where
 #[derive(Debug)]
 struct IoeventFdCallback<R>
 where
-    R: IoeventFdRegistry,
+    R: IoNotifierRegistry,
 {
     registry: R,
-    ioeventfds: Arc<[R::IoeventFd]>,
+    ioeventfds: Arc<[Notifier]>,
 }
 
 impl<R> MemRegionCallback for IoeventFdCallback<R>
 where
-    R: IoeventFdRegistry,
+    R: IoNotifierRegistry,
 {
     fn mapped(&self, addr: u64) -> mem::Result<()> {
         for (q_index, fd) in self.ioeventfds.iter().enumerate() {
@@ -656,28 +653,26 @@ impl PciCap for VirtioPciNotifyCap {
 }
 
 #[derive(Debug)]
-pub struct VirtioPciDevice<M, E>
+pub struct VirtioPciDevice<M>
 where
     M: MsiSender,
-    E: IoeventFd,
 {
-    pub dev: VirtioDevice<PciIrqSender<M>, E>,
+    pub dev: VirtioDevice<PciIrqSender<M>>,
     pub config: EmulatedConfig,
-    pub registers: Arc<VirtioPciRegisterMmio<M, E>>,
+    pub registers: Arc<VirtioPciRegisterMmio<M>>,
 }
 
-impl<M, E> VirtioPciDevice<M, E>
+impl<M> VirtioPciDevice<M>
 where
     M: MsiSender,
-    E: IoeventFd,
 {
     pub fn new<R>(
-        dev: VirtioDevice<PciIrqSender<M>, E>,
+        dev: VirtioDevice<PciIrqSender<M>>,
         msi_sender: M,
         ioeventfd_reg: R,
     ) -> Result<Self>
     where
-        R: IoeventFdRegistry<IoeventFd = E>,
+        R: IoNotifierRegistry,
     {
         let (class, subclass) = get_class(dev.id);
         let mut header = DeviceHeader {
@@ -836,7 +831,7 @@ where
             .collect::<Result<Arc<_>, _>>();
         let ioeventfds = match maybe_ioeventfds {
             Ok(fds) => Some(fds),
-            Err(hv::Error::IoeventFd { error, .. }) if error.kind() == ErrorKind::Unsupported => {
+            Err(hv::Error::Notifier { error, .. }) if error.kind() == ErrorKind::Unsupported => {
                 None
             }
             Err(e) => {
@@ -908,10 +903,9 @@ where
     }
 }
 
-impl<M, E> Pci for VirtioPciDevice<M, E>
+impl<M> Pci for VirtioPciDevice<M>
 where
     M: MsiSender,
-    E: IoeventFd,
 {
     fn config(&self) -> &dyn PciConfig {
         &self.config

@@ -16,7 +16,7 @@ use std::cmp::min;
 use std::fs::File;
 use std::io::{ErrorKind, Write};
 use std::iter::zip;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -26,8 +26,8 @@ use snafu::Snafu;
 use zerocopy::IntoBytes;
 
 use crate::errors::DebugTrace;
-use crate::hv::IoeventFd;
 use crate::mem::mapped::{ArcMemPages, RamBus};
+use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{StartParam, VirtioDevice, WakeEvent};
 use crate::virtio::vu::Error as VuError;
 use crate::virtio::vu::bindings::{
@@ -119,19 +119,6 @@ impl IrqSender for VuIrqSender {
     }
 }
 
-#[derive(Debug)]
-pub struct VuEventfd {
-    fd: File,
-}
-
-impl AsFd for VuEventfd {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.fd.as_fd()
-    }
-}
-
-impl IoeventFd for VuEventfd {}
-
 #[derive(Debug, Default)]
 struct VuQueueInit {
     enable: bool,
@@ -154,14 +141,14 @@ pub struct VuBackend {
     channel: Option<Arc<VuChannel>>,
     status: DevStatus,
     memory: Arc<RamBus>,
-    dev: VirtioDevice<VuIrqSender, VuEventfd>,
+    dev: VirtioDevice<VuIrqSender>,
     init: VuInit,
 }
 
 impl VuBackend {
     pub fn new(
         conn: UnixStream,
-        dev: VirtioDevice<VuIrqSender, VuEventfd>,
+        dev: VirtioDevice<VuIrqSender>,
         memory: Arc<RamBus>,
     ) -> Result<Self> {
         conn.set_nonblocking(false)?;
@@ -184,7 +171,7 @@ impl VuBackend {
         self.dev.name.as_ref()
     }
 
-    fn wake_up_dev(&self, event: WakeEvent<VuIrqSender, VuEventfd>) {
+    fn wake_up_dev(&self, event: WakeEvent<VuIrqSender>) {
         let is_start = matches!(event, WakeEvent::Start { .. });
         if let Err(e) = self.dev.event_tx.send(event) {
             log::error!("{}: failed to send event: {e}", self.dev.name);
@@ -207,7 +194,7 @@ impl VuBackend {
         error::Convert { hva }.fail()
     }
 
-    fn parse_init(&mut self) -> Result<StartParam<VuIrqSender, VuEventfd>> {
+    fn parse_init(&mut self) -> Result<StartParam<VuIrqSender>> {
         for (index, (param, queue)) in zip(&self.init.queues, &*self.dev.queue_regs).enumerate() {
             let index = index as u16;
             queue.enabled.store(param.enable, Ordering::Release);
@@ -244,7 +231,7 @@ impl VuBackend {
         let mut ioeventfds = vec![];
         for (index, q) in queues.iter_mut().enumerate() {
             match q.ioeventfd.take() {
-                Some(fd) => ioeventfds.push(VuEventfd { fd }),
+                Some(fd) => ioeventfds.push(Notifier::from(fd)),
                 None => {
                     let index = index as u16;
                     return error::MissingIoeventfd { index }.fail();

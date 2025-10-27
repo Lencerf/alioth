@@ -36,9 +36,10 @@ use crate::ffi;
 use crate::hv::kvm::vcpu::{KvmRunBlock, KvmVcpu};
 use crate::hv::kvm::{KvmError, kvm_error};
 use crate::hv::{
-    Error, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, MemMapOption, MsiSender, Result, Vm,
-    VmMemory, error,
+    Error, IoNotifierRegistry, IrqFd, IrqSender, MemMapOption, MsiSender, Result, Vm, VmMemory,
+    error,
 };
+use crate::sync::notifier::Notifier;
 #[cfg(target_arch = "x86_64")]
 use crate::sys::kvm::KVM_IRQCHIP_IOAPIC;
 #[cfg(target_arch = "aarch64")]
@@ -528,35 +529,16 @@ impl MsiSender for KvmMsiSender {
 }
 
 #[derive(Debug)]
-pub struct KvmIoeventFd {
-    fd: OwnedFd,
-}
-
-impl AsFd for KvmIoeventFd {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.fd.as_fd()
-    }
-}
-
-impl IoeventFd for KvmIoeventFd {}
-
-#[derive(Debug)]
 pub struct KvmIoeventFdRegistry {
     vm: Arc<VmInner>,
 }
 
-impl IoeventFdRegistry for KvmIoeventFdRegistry {
-    type IoeventFd = KvmIoeventFd;
-
-    fn create(&self) -> Result<Self::IoeventFd> {
-        let fd =
-            ffi!(unsafe { eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK) }).context(error::IoeventFd)?;
-        Ok(KvmIoeventFd {
-            fd: unsafe { OwnedFd::from_raw_fd(fd) },
-        })
+impl IoNotifierRegistry for KvmIoeventFdRegistry {
+    fn create(&self) -> Result<Notifier> {
+        Notifier::new().context(error::Notifier)
     }
 
-    fn register(&self, fd: &Self::IoeventFd, gpa: u64, len: u8, data: Option<u64>) -> Result<()> {
+    fn register(&self, fd: &Notifier, gpa: u64, len: u8, data: Option<u64>) -> Result<()> {
         let mut request = KvmIoEventFd {
             addr: gpa,
             len: len as u32,
@@ -567,7 +549,7 @@ impl IoeventFdRegistry for KvmIoeventFdRegistry {
             request.datamatch = data;
             request.flags |= KvmIoEventFdFlag::DATA_MATCH;
         }
-        unsafe { kvm_ioeventfd(&self.vm.fd, &request) }.context(error::IoeventFd)?;
+        unsafe { kvm_ioeventfd(&self.vm.fd, &request) }.context(error::Notifier)?;
         let mut fds = self.vm.ioeventfds.lock();
         fds.insert(request.fd, request);
         Ok(())
@@ -576,7 +558,7 @@ impl IoeventFdRegistry for KvmIoeventFdRegistry {
     #[cfg(target_arch = "x86_64")]
     fn register_port(
         &self,
-        _fd: &Self::IoeventFd,
+        _fd: &Notifier,
         _port: u16,
         _len: u8,
         _data: Option<u64>,
@@ -584,11 +566,11 @@ impl IoeventFdRegistry for KvmIoeventFdRegistry {
         unimplemented!()
     }
 
-    fn deregister(&self, fd: &Self::IoeventFd) -> Result<()> {
+    fn deregister(&self, fd: &Notifier) -> Result<()> {
         let mut fds = self.vm.ioeventfds.lock();
         if let Some(mut request) = fds.remove(&fd.as_fd().as_raw_fd()) {
             request.flags |= KvmIoEventFdFlag::DEASSIGN;
-            unsafe { kvm_ioeventfd(&self.vm.fd, &request) }.context(error::IoeventFd)?;
+            unsafe { kvm_ioeventfd(&self.vm.fd, &request) }.context(error::Notifier)?;
         }
         Ok(())
     }

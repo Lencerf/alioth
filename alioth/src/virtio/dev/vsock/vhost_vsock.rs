@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -27,7 +27,6 @@ use serde::Deserialize;
 use serde_aco::Help;
 
 use crate::ffi;
-use crate::hv::IoeventFd;
 use crate::mem::LayoutUpdated;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
@@ -136,30 +135,28 @@ impl Virtio for VhostVsock {
         }))
     }
 
-    fn spawn_worker<S, E>(
+    fn spawn_worker<S>(
         self,
-        event_rx: Receiver<WakeEvent<S, E>>,
+        event_rx: Receiver<WakeEvent<S>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
     ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
     where
         S: IrqSender,
-        E: IoeventFd,
     {
         Mio::spawn_worker(self, event_rx, memory, queue_regs)
     }
 }
 
 impl VirtioMio for VhostVsock {
-    fn activate<'m, Q, S, E>(
+    fn activate<'m, Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         self.vhost_dev.set_features(&(feature as u64))?;
         for (index, fd) in active_mio.ioeventfds.iter().take(2).enumerate() {
@@ -237,15 +234,14 @@ impl VirtioMio for VhostVsock {
         }
     }
 
-    fn handle_event<'a, 'm, Q, S, E>(
+    fn handle_event<'a, 'm, Q, S>(
         &mut self,
         event: &Event,
-        _active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        _active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         let q_index = event.token();
         error::VhostQueueErr {
@@ -256,15 +252,14 @@ impl VirtioMio for VhostVsock {
         Ok(())
     }
 
-    fn handle_queue<'m, Q, S, E>(
+    fn handle_queue<'m, Q, S>(
         &mut self,
         index: u16,
-        _active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        _active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         match index {
             0 | 1 => unreachable!("{}: queue 0 and 1 are offloaded to kernel", self.name),

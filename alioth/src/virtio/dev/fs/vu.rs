@@ -33,7 +33,6 @@ use zerocopy::{FromZeros, IntoBytes};
 use crate::errors::BoxTrace;
 use crate::fuse::bindings::FuseSetupmappingFlag;
 use crate::fuse::{self, DaxRegion};
-use crate::hv::IoeventFd;
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::mem::{LayoutChanged, MemRegion, MemRegionType};
 use crate::sync::notifier::Notifier;
@@ -150,15 +149,14 @@ impl Virtio for VuFs {
         self.frontend.num_queues()
     }
 
-    fn spawn_worker<S, E>(
+    fn spawn_worker<S>(
         self,
-        event_rx: Receiver<WakeEvent<S, E>>,
+        event_rx: Receiver<WakeEvent<S>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
     ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
     where
         S: IrqSender,
-        E: IoeventFd,
     {
         Mio::spawn_worker(self, event_rx, memory, queue_regs)
     }
@@ -181,15 +179,14 @@ impl Virtio for VuFs {
 }
 
 impl VirtioMio for VuFs {
-    fn activate<'m, Q, S, E>(
+    fn activate<'m, Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         self.frontend.activate(feature, active_mio)?;
         if let Some(channel) = self.frontend.channel() {
@@ -203,15 +200,14 @@ impl VirtioMio for VuFs {
         Ok(())
     }
 
-    fn handle_event<'a, 'm, Q, S, E>(
+    fn handle_event<'a, 'm, Q, S>(
         &mut self,
         event: &Event,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         let q_index = event.token().0;
         if q_index < active_mio.queues.len() {
@@ -302,15 +298,14 @@ impl VirtioMio for VuFs {
         Ok(())
     }
 
-    fn handle_queue<'m, Q, S, E>(
+    fn handle_queue<'m, Q, S>(
         &mut self,
         index: u16,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         self.frontend.handle_queue(index, active_mio)
     }

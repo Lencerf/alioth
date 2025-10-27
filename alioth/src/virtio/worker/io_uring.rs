@@ -22,7 +22,6 @@ use io_uring::cqueue::Entry as Cqe;
 use io_uring::squeue::Entry as Sqe;
 use io_uring::{SubmissionQueue, opcode, types};
 
-use crate::hv::IoeventFd;
 use crate::mem::mapped::{Ram, RamBus};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{
@@ -38,15 +37,14 @@ pub enum BufferAction {
 }
 
 pub trait VirtioIoUring: Virtio {
-    fn activate<'m, Q, S, E>(
+    fn activate<'m, Q, S>(
         &mut self,
         feature: u128,
-        ring: &mut ActiveIoUring<'_, '_, 'm, Q, S, E>,
+        ring: &mut ActiveIoUring<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
-        S: IrqSender,
-        E: IoeventFd;
+        S: IrqSender;
 
     fn handle_desc(&mut self, q_index: u16, chain: &mut DescChain) -> Result<BufferAction>;
 
@@ -70,15 +68,14 @@ impl IoUring {
         Ok(())
     }
 
-    pub fn spawn_worker<D, S, E>(
+    pub fn spawn_worker<D, S>(
         dev: D,
-        event_rx: Receiver<WakeEvent<S, E>>,
+        event_rx: Receiver<WakeEvent<S>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
     ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
     where
         D: VirtioIoUring,
-        E: IoeventFd,
         S: IrqSender,
     {
         let notifier = Notifier::new()?;
@@ -112,17 +109,16 @@ where
         Ok(())
     }
 
-    fn event_loop<'m, S, Q, E>(
+    fn event_loop<'m, S, Q>(
         &mut self,
         memory: &'m Ram,
-        context: &mut Context<D, S, E>,
+        context: &mut Context<D, S>,
         queues: &mut [Option<Queue<'_, 'm, Q>>],
-        param: &StartParam<S, E>,
+        param: &StartParam<S>,
     ) -> Result<()>
     where
         S: IrqSender,
         Q: VirtQueue<'m>,
-        E: IoeventFd,
     {
         let submit_counts = iter::repeat_n(0, queues.len()).collect();
         let mut active_ring = ActiveIoUring {
@@ -164,22 +160,21 @@ where
     }
 }
 
-pub struct ActiveIoUring<'a, 'r, 'm, Q, S, E>
+pub struct ActiveIoUring<'a, 'r, 'm, Q, S>
 where
     Q: VirtQueue<'m>,
 {
     ring: io_uring::IoUring,
     pub queues: &'a mut [Option<Queue<'r, 'm, Q>>],
     pub irq_sender: &'a S,
-    pub ioeventfds: &'a [E],
+    pub ioeventfds: &'a [Notifier],
     pub mem: &'m Ram,
     shared_count: u16,
     submit_counts: Box<[u16]>,
 }
 
-fn submit_queue_ioeventfd<E>(index: u16, fd: &E, sq: &mut SubmissionQueue) -> Result<()>
+fn submit_queue_ioeventfd(index: u16, fd: &Notifier, sq: &mut SubmissionQueue) -> Result<()>
 where
-    E: IoeventFd,
 {
     let token = index as u64 | TOKEN_QUEUE;
 
@@ -190,11 +185,10 @@ where
     Ok(())
 }
 
-impl<'m, Q, S, E> ActiveIoUring<'_, '_, 'm, Q, S, E>
+impl<'m, Q, S> ActiveIoUring<'_, '_, 'm, Q, S>
 where
     Q: VirtQueue<'m>,
     S: IrqSender,
-    E: IoeventFd,
 {
     fn submit_buffers<D>(&mut self, dev: &mut D, q_index: u16) -> Result<()>
     where
@@ -231,12 +225,11 @@ where
     }
 }
 
-impl<'m, D, Q, S, E> ActiveBackend<D> for ActiveIoUring<'_, '_, 'm, Q, S, E>
+impl<'m, D, Q, S> ActiveBackend<D> for ActiveIoUring<'_, '_, 'm, Q, S>
 where
     D: VirtioIoUring,
     Q: VirtQueue<'m>,
     S: IrqSender,
-    E: IoeventFd,
 {
     type Event = Cqe;
 

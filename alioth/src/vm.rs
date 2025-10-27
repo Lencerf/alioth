@@ -40,7 +40,7 @@ use crate::device::serial::Serial;
 use crate::errors::{DebugTrace, trace_error};
 #[cfg(target_os = "linux")]
 use crate::hv::Kvm;
-use crate::hv::{Hypervisor, IoeventFdRegistry, Vm, VmConfig};
+use crate::hv::{Hypervisor, Vm, VmConfig};
 use crate::loader::Payload;
 use crate::mem::Memory;
 #[cfg(target_arch = "aarch64")]
@@ -114,10 +114,7 @@ where
     _event_tx: Sender<u32>,
 }
 
-pub type VirtioPciDev<H> = VirtioPciDevice<
-    <<H as Hypervisor>::Vm as Vm>::MsiSender,
-    <<<H as Hypervisor>::Vm as Vm>::IoeventFdRegistry as IoeventFdRegistry>::IoeventFd,
->;
+pub type VirtioPciDev<H> = VirtioPciDevice<<<H as Hypervisor>::Vm as Vm>::MsiSender>;
 
 impl<H> Machine<H>
 where

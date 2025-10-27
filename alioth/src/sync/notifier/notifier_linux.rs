@@ -14,7 +14,7 @@
 
 use std::fs::File;
 use std::io::{ErrorKind, Read, Result, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use libc::{EFD_CLOEXEC, EFD_NONBLOCK, eventfd};
 use mio::event::Source;
@@ -68,5 +68,19 @@ impl Source for Notifier {
 impl AsFd for Notifier {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()
+    }
+}
+
+impl From<OwnedFd> for Notifier {
+    fn from(value: OwnedFd) -> Self {
+        Notifier {
+            fd: File::from(value),
+        }
+    }
+}
+
+impl From<File> for Notifier {
+    fn from(value: File) -> Self {
+        Notifier { fd: value }
     }
 }

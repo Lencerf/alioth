@@ -26,7 +26,6 @@ use mio::{Interest, Registry, Token};
 use zerocopy::IntoBytes;
 
 use crate::errors::BoxTrace;
-use crate::hv::IoeventFd;
 use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::mem::{LayoutChanged, MemRegion};
@@ -254,15 +253,14 @@ impl Virtio for VuFrontend {
         self.device_feature as u128
     }
 
-    fn spawn_worker<S, E>(
+    fn spawn_worker<S>(
         self,
-        event_rx: Receiver<WakeEvent<S, E>>,
+        event_rx: Receiver<WakeEvent<S>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
     ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
     where
         S: IrqSender,
-        E: IoeventFd,
     {
         Mio::spawn_worker(self, event_rx, memory, queue_regs)
     }
@@ -288,15 +286,14 @@ impl Virtio for VuFrontend {
 }
 
 impl VirtioMio for VuFrontend {
-    fn activate<'m, Q, S, E>(
+    fn activate<'m, Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         let name = &*self.name;
         self.session
@@ -372,28 +369,26 @@ impl VirtioMio for VuFrontend {
         Ok(())
     }
 
-    fn handle_event<'a, 'm, Q, S, E>(
+    fn handle_event<'a, 'm, Q, S>(
         &mut self,
         _: &Event,
-        _: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        _: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         unreachable!()
     }
 
-    fn handle_queue<'m, Q, S, E>(
+    fn handle_queue<'m, Q, S>(
         &mut self,
         index: u16,
-        _: &mut ActiveMio<'_, '_, 'm, Q, S, E>,
+        _: &mut ActiveMio<'_, '_, 'm, Q, S>,
     ) -> Result<()>
     where
         Q: VirtQueue<'m>,
         S: IrqSender,
-        E: IoeventFd,
     {
         unreachable!(
             "{}: queue {index} notification should go to vhost-user backend",

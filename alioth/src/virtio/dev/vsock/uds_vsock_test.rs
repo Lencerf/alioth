@@ -35,9 +35,7 @@ use crate::virtio::dev::{DevParam, StartParam, Virtio, WakeEvent};
 use crate::virtio::queue::QueueReg;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::tests::{GuestQueue, VirtQueueGuest};
-use crate::virtio::tests::{
-    DATA_ADDR, FakeIoeventFd, FakeIrqSender, fixture_queues, fixture_ram_bus,
-};
+use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, fixture_queues, fixture_ram_bus};
 use crate::virtio::{DeviceId, FEATURE_BUILT_IN, VirtioFeature};
 
 #[test]
@@ -57,7 +55,7 @@ fn send_to_tx<'m, Q>(
     ram: &'m Ram,
     buf_addr: u64,
     q: &mut GuestQueue<'m, Q>,
-    tx: &Sender<WakeEvent<FakeIrqSender, FakeIoeventFd>>,
+    tx: &Sender<WakeEvent<FakeIrqSender>>,
     notifier: &Notifier,
     irq_rx: &Receiver<u16>,
     expect_rx: bool,
@@ -140,7 +138,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
     let start_param = StartParam {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender,
-        ioeventfds: Option::<Arc<[FakeIoeventFd]>>::None,
+        ioeventfds: Option::<Arc<[Notifier]>>::None,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
 

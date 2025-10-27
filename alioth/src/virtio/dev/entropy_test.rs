@@ -27,14 +27,13 @@ use tempfile::TempDir;
 use crate::ffi;
 use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::RamBus;
+use crate::sync::notifier::Notifier;
 use crate::virtio::dev::entropy::{EntropyConfig, EntropyParam};
 use crate::virtio::dev::{DevParam, StartParam, Virtio, WakeEvent};
 use crate::virtio::queue::QueueReg;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::tests::GuestQueue;
-use crate::virtio::tests::{
-    DATA_ADDR, FakeIoeventFd, FakeIrqSender, fixture_queues, fixture_ram_bus,
-};
+use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, fixture_queues, fixture_ram_bus};
 use crate::virtio::{DeviceId, FEATURE_BUILT_IN, VirtioFeature};
 
 #[test]
@@ -85,7 +84,7 @@ fn entropy_test(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     let start_param = StartParam {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender,
-        ioeventfds: Option::<Arc<[FakeIoeventFd]>>::None,
+        ioeventfds: Option::<Arc<[Notifier]>>::None,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();

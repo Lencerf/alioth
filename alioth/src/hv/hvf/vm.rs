@@ -32,8 +32,8 @@ use crate::arch::reg::{MpidrEl1, SReg};
 use crate::hv::hvf::vcpu::HvfVcpu;
 use crate::hv::hvf::{OsObject, check_ret};
 use crate::hv::{
-    GicV2, GicV2m, GicV3, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, Its, MemMapOption,
-    MsiSender, Result, Vm, VmMemory, error,
+    GicV2, GicV2m, GicV3, IoeventFdRegistry, IrqFd, IrqSender, Its, MemMapOption, MsiSender,
+    Notifier, Result, Vm, VmMemory, error,
 };
 use crate::sys::hvf::{
     HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
@@ -167,7 +167,7 @@ impl MsiSender for HvfMsiSender {
 #[derive(Debug)]
 pub struct HvfIoeventFd {}
 
-impl IoeventFd for HvfIoeventFd {}
+impl Notifier for HvfIoeventFd {}
 
 impl AsFd for HvfIoeventFd {
     fn as_fd(&self) -> BorrowedFd<'_> {
@@ -179,19 +179,19 @@ impl AsFd for HvfIoeventFd {
 pub struct HvfIoeventFdRegistry;
 
 impl IoeventFdRegistry for HvfIoeventFdRegistry {
-    type IoeventFd = HvfIoeventFd;
+    type Notifier = HvfIoeventFd;
 
-    fn create(&self) -> Result<Self::IoeventFd> {
-        Err(ErrorKind::Unsupported.into()).context(error::IoeventFd)
+    fn create(&self) -> Result<Self::Notifier> {
+        Err(ErrorKind::Unsupported.into()).context(error::Notifier)
     }
 
-    fn deregister(&self, _fd: &Self::IoeventFd) -> Result<()> {
+    fn deregister(&self, _fd: &Self::Notifier) -> Result<()> {
         unreachable!()
     }
 
     fn register(
         &self,
-        _fd: &Self::IoeventFd,
+        _fd: &Self::Notifier,
         _gpa: u64,
         _len: u8,
         _data: Option<u64>,
