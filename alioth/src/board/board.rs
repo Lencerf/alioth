@@ -26,6 +26,8 @@ use std::thread::JoinHandle;
 
 use libc::{MAP_PRIVATE, MAP_SHARED};
 use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard};
+use serde::Deserialize;
+use serde_aco::Help;
 use snafu::{ResultExt, Snafu};
 
 #[cfg(target_arch = "x86_64")]
@@ -95,6 +97,17 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+const fn default_cpu_count() -> u32 {
+    1
+}
+
+#[derive(Debug, Deserialize, Default, Help)]
+pub struct CpuConfig {
+    /// Number of vCPUs assigned to the guest. [default: 1]
+    #[serde(default = "default_cpu_count")]
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BoardState {
     Created,
@@ -114,7 +127,7 @@ pub const PCIE_MMIO_64_SIZE: u64 = 1 << 40;
 
 pub struct BoardConfig {
     pub mem: MemConfig,
-    pub num_cpu: u32,
+    pub cpu: CpuConfig,
     pub coco: Option<Coco>,
 }
 
