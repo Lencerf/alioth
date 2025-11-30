@@ -143,7 +143,7 @@ where
             let board = board.clone();
             let handle = thread::Builder::new()
                 .name(format!("vcpu_{vcpu_id}"))
-                .spawn(move || board.run_vcpu(vcpu_id, event_tx, boot_rx))
+                .spawn(move || board.run_vcpu(vcpu_id as u32, event_tx, boot_rx))
                 .context(error::VcpuThread { id: vcpu_id })?;
             if event_rx.recv_timeout(Duration::from_secs(2)).is_err() {
                 let err = std::io::ErrorKind::TimedOut.into();

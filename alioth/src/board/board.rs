@@ -56,7 +56,7 @@ use crate::vfio::iommu::Ioas;
 #[cfg(target_arch = "aarch64")]
 pub(crate) use self::aarch64::ArchBoard;
 #[cfg(target_arch = "x86_64")]
-pub(crate) use self::x86_64::ArchBoard;
+pub(crate) use self::x86_64::{ArchBoard, CpuTopology};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -97,7 +97,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-const fn default_cpu_count() -> u32 {
+const fn default_cpu_count() -> u16 {
     1
 }
 
@@ -105,7 +105,9 @@ const fn default_cpu_count() -> u32 {
 pub struct CpuConfig {
     /// Number of vCPUs assigned to the guest. [default: 1]
     #[serde(default = "default_cpu_count")]
-    pub count: u32,
+    pub count: u16,
+    /// Architecture specific CPU topology
+    pub topology: Option<CpuTopology>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

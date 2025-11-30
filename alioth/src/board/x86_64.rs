@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
+use serde::Deserialize;
+use serde_aco::Help;
 use snafu::ResultExt;
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
@@ -47,10 +49,52 @@ use crate::mem::mapped::ArcMemPages;
 use crate::mem::{MemRange, MemRegion, MemRegionEntry, MemRegionType};
 use crate::utils::wrapping_sum;
 
+#[derive(Clone, Copy, Debug, Deserialize, Default, Help)]
+pub struct CpuTopology {
+    /// Number of threads per core.
+    pub threads: u8,
+    /// Number of cores per complex.
+    pub cores: u16,
+    /// Number of complexes per die.
+    pub complexes: u8,
+    /// Number of dies per socket.
+    pub dies: u8,
+    /// Number of sockets.
+    pub sockets: u8,
+}
+
+impl CpuTopology {
+    fn new_flat(cores: u16) -> Self {
+        Self {
+            threads: 1,
+            cores,
+            complexes: 1,
+            dies: 1,
+            sockets: 1,
+        }
+    }
+}
+
 pub struct ArchBoard<V> {
     cpuids: HashMap<CpuidIn, CpuidResult>,
     sev_ap_eip: AtomicU32,
     _phantom: PhantomData<V>,
+}
+
+fn add_topology(cpuids: &mut HashMap<CpuidIn, CpuidResult>, func: u32, levels: &[(u8, u16)]) {
+    let edx = 0; // patched later in init_vcpu()
+    for (index, (level, count)) in levels.iter().chain(&[(0, 0)]).enumerate() {
+        let eax = count.next_power_of_two().trailing_zeros();
+        let ebx = *count as u32;
+        let ecx = ((*level as u32) << 8) | (index as u32);
+        cpuids.insert(
+            CpuidIn {
+                func,
+                index: Some(index as u32),
+            },
+            CpuidResult { eax, ebx, ecx, edx },
+        );
+    }
 }
 
 impl<V: Vm> ArchBoard<V> {
@@ -59,6 +103,46 @@ impl<V: Vm> ArchBoard<V> {
         H: Hypervisor<Vm = V>,
     {
         let mut cpuids = hv.get_supported_cpuids()?;
+
+        let topology = config.cpu.topology;
+        let topology = topology.unwrap_or(CpuTopology::new_flat(config.cpu.count));
+
+        let threads_per_core = topology.threads as u16;
+        let threads_per_complex = topology.cores * threads_per_core;
+        let threads_per_die = topology.complexes as u16 * threads_per_complex;
+        let threads_per_socket = topology.dies as u16 * threads_per_die;
+
+        add_topology(
+            &mut cpuids,
+            0xb,
+            &[(1, threads_per_core), (2, threads_per_socket)],
+        );
+        let leaf0 = CpuidIn {
+            func: 0,
+            index: None,
+        };
+        if let Some(func0) = cpuids.get(&leaf0) {
+            let vendor = [func0.ebx, func0.edx, func0.ecx];
+            match vendor.as_bytes() {
+                b"GenuineIntel" => add_topology(
+                    &mut cpuids,
+                    0x1f,
+                    &[(1, threads_per_core), (2, threads_per_socket)],
+                ),
+                b"AuthenticAMD" => add_topology(
+                    &mut cpuids,
+                    0x8000_0026,
+                    &[
+                        (1, threads_per_core),
+                        (2, threads_per_complex),
+                        (3, threads_per_die),
+                        (4, threads_per_socket),
+                    ],
+                ),
+                _ => {}
+            }
+        }
+
         for (in_, out) in &mut cpuids {
             if in_.func == 0x1 {
                 out.ecx |= (1 << 24) | (1 << 31);
@@ -81,11 +165,18 @@ impl<V: Vm> ArchBoard<V> {
                 }
             }
         }
-        let highest = unsafe { __cpuid(0x8000_0000) }.eax;
+        let host_8000_0000 = unsafe { __cpuid(0x8000_0000) };
+        cpuids.insert(
+            CpuidIn {
+                func: 0x8000_0000,
+                index: None,
+            },
+            host_8000_0000,
+        );
         // 0x8000_0002 to 0x8000_0004: processor name
         // 0x8000_0005: L1 cache/LTB
         // 0x8000_0006: L2 cache/TLB and L3 cache
-        for func in 0x8000_0002..=std::cmp::min(highest, 0x8000_0006) {
+        for func in 0x8000_0002..=0x8000_0006 {
             let host_cpuid = unsafe { __cpuid(func) };
             cpuids.insert(CpuidIn { func, index: None }, host_cpuid);
         }
@@ -266,7 +357,7 @@ where
             if in_.func == 0x1 {
                 out.ebx &= 0x00ff_ffff;
                 out.ebx |= id << 24;
-            } else if in_.func == 0xb || in_.func == 0x1f {
+            } else if in_.func == 0xb || in_.func == 0x1f || in_.func == 0x80000026 {
                 out.edx = id;
             }
         }
@@ -400,7 +491,7 @@ where
 
         let offset_madt = offset_fadt + size_of_val(&fadt);
         debug_assert_eq!(offset_madt % 4, 0);
-        let (madt, madt_ioapic, madt_apics) = create_madt(self.config.num_cpu);
+        let (madt, madt_ioapic, madt_apics) = create_madt(self.config.cpu.count as u32);
         table_bytes.extend(madt.as_bytes());
         table_bytes.extend(madt_ioapic.as_bytes());
         for apic in madt_apics {
