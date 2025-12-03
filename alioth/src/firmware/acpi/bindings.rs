@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+#[path = "bindings_test.rs"]
+mod tests;
+
 use bitfield::bitfield;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -234,29 +238,4 @@ bitfield! {
     pub sle_typx, _: 4, 2;
     pub ignore, _: 1;
     pub _reserved1, _: 0;
-}
-
-#[cfg(test)]
-mod test {
-    use std::mem::size_of;
-
-    use super::{
-        AcpiGenericAddress, AcpiMadtIoApic, AcpiMadtLocalX2apic, AcpiMcfgAllocation, AcpiTableFadt,
-        AcpiTableHeader, AcpiTableMadt, AcpiTableMcfg1, AcpiTableRsdp, AcpiTableXsdt,
-    };
-
-    #[test]
-    fn test_size() {
-        assert_eq!(size_of::<AcpiTableRsdp>(), 36);
-        assert_eq!(size_of::<AcpiTableHeader>(), 36);
-        assert_eq!(size_of::<AcpiGenericAddress>(), 12);
-        assert_eq!(size_of::<AcpiTableFadt>(), 276);
-        assert_eq!(size_of::<AcpiTableMadt>(), 44);
-        assert_eq!(size_of::<AcpiMadtIoApic>(), 12);
-        assert_eq!(size_of::<AcpiMadtLocalX2apic>(), 16);
-        assert_eq!(size_of::<AcpiMcfgAllocation>(), 16);
-        assert_eq!(size_of::<AcpiTableMcfg1>(), 60);
-        assert_eq!(size_of::<AcpiTableXsdt<0>>(), 36);
-        assert_eq!(size_of::<AcpiTableXsdt<4>>(), 36 + 4 * 8);
-    }
 }
