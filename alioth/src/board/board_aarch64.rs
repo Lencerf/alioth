@@ -16,8 +16,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-
 use crate::arch::layout::{
     DEVICE_TREE_LIMIT, DEVICE_TREE_START, GIC_DIST_START, GIC_MSI_START,
     GIC_V2_CPU_INTERFACE_START, GIC_V3_REDIST_START, MEM_64_START, PCIE_CONFIG_START,
@@ -25,7 +23,7 @@ use crate::arch::layout::{
     PCIE_MMIO_32_PREFETCHABLE_END, PCIE_MMIO_32_PREFETCHABLE_START, PL011_START, PL031_START,
     RAM_32_SIZE, RAM_32_START,
 };
-use crate::arch::reg::SReg;
+use crate::arch::reg::MpidrEl1;
 use crate::board::{Board, BoardConfig, PCIE_MMIO_64_SIZE, Result, VcpuGuard};
 use crate::firmware::dt::{DeviceTree, Node, PropVal};
 use crate::hv::{GicV2, GicV2m, GicV3, Hypervisor, Its, Vcpu, Vm};
@@ -54,7 +52,6 @@ where
 {
     gic: Gic<V>,
     msi: Option<Msi<V>>,
-    mpidrs: Mutex<Vec<u64>>,
 }
 
 impl<V: Vm> ArchBoard<V> {
@@ -90,8 +87,7 @@ impl<V: Vm> ArchBoard<V> {
             create_gic_v2m()
         };
 
-        let mpidrs = Mutex::new(vec![u64::MAX; config.num_cpu as usize]);
-        Ok(ArchBoard { gic, msi, mpidrs })
+        Ok(ArchBoard { gic, msi })
     }
 }
 
@@ -99,6 +95,16 @@ impl<V> Board<V>
 where
     V: Vm,
 {
+    pub fn encode_cpu_identity(&self, index: u16) -> u64 {
+        let mut mpidr = MpidrEl1(0);
+        let index = index as u64;
+        mpidr.set_aff0(index & 0xf);
+        mpidr.set_aff1(index >> 4);
+        mpidr.set_aff2(index >> 12);
+        mpidr.set_aff3(index >> 20);
+        mpidr.0
+    }
+
     pub fn setup_firmware(&self, _: &Path, _: &Payload) -> Result<InitState> {
         unimplemented!()
     }
@@ -114,9 +120,7 @@ where
     }
 
     pub fn init_vcpu(&self, id: u32, vcpu: &mut V::Vcpu) -> Result<()> {
-        vcpu.reset(id == 0)?;
-        self.arch.mpidrs.lock()[id as usize] = vcpu.get_sreg(SReg::MPIDR_EL1)?;
-        Ok(())
+        self.reset_vcpu(id, vcpu)
     }
 
     pub fn reset_vcpu(&self, id: u32, vcpu: &mut V::Vcpu) -> Result<()> {
@@ -214,35 +218,31 @@ where
     }
 
     pub fn create_cpu_nodes(&self, root: &mut Node) {
-        let mpidrs = self.arch.mpidrs.lock();
-
-        let mut cpu_nodes = mpidrs
-            .iter()
-            .map(|mpidr| {
-                let reg = mpidr & 0xff_00ff_ffff;
+        let mut cpu_nodes = (0..(self.config.num_cpu))
+            .map(|index| {
+                let mpidr = self.encode_cpu_identity(index as u16);
                 (
-                    format!("cpu@{reg}"),
+                    format!("cpu@{mpidr}"),
                     Node {
                         props: HashMap::from([
                             ("device_type", PropVal::Str("cpu")),
                             ("compatible", PropVal::Str("arm,arm-v8")),
                             ("enable-method", PropVal::Str("psci")),
-                            ("reg", PropVal::U32(reg as u32)),
-                            ("phandle", PropVal::PHandle(reg as u32 | (1 << 16))),
+                            ("reg", PropVal::U32(mpidr as u32)),
+                            ("phandle", PropVal::PHandle(mpidr as u32 | (1 << 16))),
                         ]),
                         nodes: HashMap::new(),
                     },
                 )
             })
             .collect::<HashMap<_, _>>();
-        let cores = mpidrs
-            .iter()
-            .map(|mpidr| {
-                let reg = mpidr & 0xff_00ff_ffff;
+        let cores = (0..(self.config.num_cpu))
+            .map(|index| {
+                let mpidr = self.encode_cpu_identity(index as u16);
                 (
-                    format!("core{reg}"),
+                    format!("core{mpidr}"),
                     Node {
-                        props: HashMap::from([("cpu", PropVal::PHandle(reg as u32 | (1 << 16)))]),
+                        props: HashMap::from([("cpu", PropVal::PHandle(mpidr as u32 | (1 << 16)))]),
                         nodes: HashMap::new(),
                     },
                 )

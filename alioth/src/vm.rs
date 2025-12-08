@@ -73,8 +73,8 @@ pub enum Error {
     HvError { source: Box<crate::hv::Error> },
     #[snafu(display("Failed to create board"), context(false))]
     CreateBoard { source: Box<crate::board::Error> },
-    #[snafu(display("Failed to create VCPU-{id} thread"))]
-    VcpuThread { id: u32, error: std::io::Error },
+    #[snafu(display("Failed to create VCPU-{index} thread"))]
+    VcpuThread { index: u32, error: std::io::Error },
     #[snafu(display("Failed to create a console"))]
     CreateConsole { error: std::io::Error },
     #[snafu(display("Failed to create fw-cfg device"))]
@@ -86,9 +86,9 @@ pub enum Error {
     #[cfg(target_os = "linux")]
     #[snafu(display("Failed to create a VFIO device"), context(false))]
     CreateVfio { source: Box<crate::vfio::Error> },
-    #[snafu(display("VCPU-{id} error"))]
+    #[snafu(display("VCPU-{index} error"))]
     VcpuError {
-        id: u32,
+        index: u32,
         source: Box<crate::board::Error>,
     },
     #[snafu(display("Failed to configure guest memory"), context(false))]
@@ -144,10 +144,10 @@ where
             let handle = thread::Builder::new()
                 .name(format!("vcpu_{vcpu_id}"))
                 .spawn(move || board.run_vcpu(vcpu_id, event_tx, boot_rx))
-                .context(error::VcpuThread { id: vcpu_id })?;
+                .context(error::VcpuThread { index: vcpu_id })?;
             if event_rx.recv_timeout(Duration::from_secs(2)).is_err() {
                 let err = std::io::ErrorKind::TimedOut.into();
-                Err(err).context(error::VcpuThread { id: vcpu_id })?;
+                Err(err).context(error::VcpuThread { index: vcpu_id })?;
             }
             vcpus.push((handle, boot_tx));
         }
@@ -292,13 +292,15 @@ where
         drop(vcpus);
         let mut vcpus = self.board.vcpus.write();
         let mut ret = Ok(());
-        for (id, (handle, _)) in vcpus.drain(..).enumerate() {
+        for (index, (handle, _)) in vcpus.drain(..).enumerate() {
             let Ok(r) = handle.join() else {
-                log::error!("Cannot join VCPU-{id}");
+                log::error!("Cannot join VCPU-{index}");
                 continue;
             };
             if r.is_err() && ret.is_ok() {
-                ret = r.context(error::Vcpu { id: id as u32 });
+                ret = r.context(error::Vcpu {
+                    index: index as u32,
+                });
             }
         }
         ret
