@@ -9,13 +9,13 @@ license.workspace = true
 readme = "../README.md"
 
 [dependencies]
-log = "0.4"
-flexi_logger.workspace = true
-clap = { version = "4", features = ["derive"] }
-snafu.workspace = true
 alioth.workspace = true
+clap = { version = "4", features = ["derive"] }
+flexi_logger.workspace = true
+log = "0.4"
 serde.workspace = true
 serde-aco.workspace = true
+snafu.workspace = true
 
 [[bin]]
 path = "src/main.rs"
