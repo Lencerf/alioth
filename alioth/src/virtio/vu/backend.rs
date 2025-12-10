@@ -18,8 +18,8 @@ use std::io::{ErrorKind, Write};
 use std::iter::zip;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use alioth_macros::trace_error;
 use snafu::Snafu;
@@ -29,12 +29,12 @@ use crate::errors::DebugTrace;
 use crate::hv::IoeventFd;
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::virtio::dev::{StartParam, VirtioDevice, WakeEvent};
-use crate::virtio::vu::Error as VuError;
 use crate::virtio::vu::bindings::{
-    MAX_CONFIG_SIZE, MemoryRegion, MemorySingleRegion, Message, VirtqAddr, VirtqState, VuFeature,
-    VuFrontMsg,
+    MemoryRegion, MemorySingleRegion, Message, VirtqAddr, VirtqState, VuFeature, VuFrontMsg,
+    MAX_CONFIG_SIZE,
 };
 use crate::virtio::vu::conn::{VuChannel, VuSession};
+use crate::virtio::vu::Error as VuError;
 use crate::virtio::{self, DevStatus, IrqSender, VirtioFeature};
 
 #[trace_error]
@@ -46,9 +46,7 @@ pub enum Error {
     #[snafu(display("Failed to access guest memory"), context(false))]
     Memory { source: Box<crate::mem::Error> },
     #[snafu(display("vhost-user protocol error"), context(false))]
-    Vu {
-        source: Box<crate::virtio::vu::Error>,
-    },
+    Vu { source: Box<crate::virtio::vu::Error> },
     #[snafu(display("failed to parse the payload of {req:?}"))]
     Parse { req: VuFrontMsg },
     #[snafu(display("frontend requested invalid queue index: {index}"))]
@@ -237,9 +235,7 @@ impl VuBackend {
         let queues = &mut self.init.queues;
 
         let queue_irqfds = queues.iter_mut().map(|q| q.irqfd.take()).collect();
-        let irq_sender = VuIrqSender {
-            queues: queue_irqfds,
-        };
+        let irq_sender = VuIrqSender { queues: queue_irqfds };
 
         let mut ioeventfds = vec![];
         for (index, q) in queues.iter_mut().enumerate() {
@@ -305,12 +301,8 @@ impl VuBackend {
                     return error::MissingFd { req }.fail()?;
                 };
                 log::trace!("{name}: set backend request fd: {}", fd.as_raw_fd());
-                let channel = Arc::new(VuChannel {
-                    conn: UnixStream::from(fd),
-                });
-                let r = self.dev.event_tx.send(WakeEvent::VuChannel {
-                    channel: channel.clone(),
-                });
+                let channel = Arc::new(VuChannel { conn: UnixStream::from(fd) });
+                let r = self.dev.event_tx.send(WakeEvent::VuChannel { channel: channel.clone() });
                 if r.is_err() {
                     return error::SendChannel.fail();
                 }

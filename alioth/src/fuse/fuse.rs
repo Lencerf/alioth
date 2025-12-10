@@ -54,9 +54,7 @@ pub enum Error {
     #[snafu(display("Invalid file handle"))]
     InvalidFileHandle,
     #[snafu(display("Failed to setup DAX mappings"))]
-    DaxMapping {
-        source: Box<dyn DebugTrace + Send + Sync + 'static>,
-    },
+    DaxMapping { source: Box<dyn DebugTrace + Send + Sync + 'static> },
 }
 
 impl From<&IoError> for Error {

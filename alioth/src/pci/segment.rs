@@ -19,7 +19,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::mem::emulated::{Action, Mmio};
-use crate::pci::config::{BAR_IO, BAR_MEM64, BAR_PREFETCHABLE, PciConfig};
+use crate::pci::config::{PciConfig, BAR_IO, BAR_MEM64, BAR_PREFETCHABLE};
 use crate::pci::{Bdf, Pci, Result};
 use crate::{align_up, mem};
 

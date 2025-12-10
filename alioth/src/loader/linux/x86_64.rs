@@ -34,10 +34,10 @@ use crate::mem::mapped::RamBus;
 use crate::mem::{MemRegionEntry, MemRegionType};
 
 use crate::loader::linux::bootparams::{
-    BootE820Entry, BootParams, E820_ACPI, E820_PMEM, E820_RAM, E820_RESERVED, MAGIC_AA55,
-    MAGIC_HDRS, SETUP_HEADER_OFFSET, XLoadFlags,
+    BootE820Entry, BootParams, XLoadFlags, E820_ACPI, E820_PMEM, E820_RAM, E820_RESERVED,
+    MAGIC_AA55, MAGIC_HDRS, SETUP_HEADER_OFFSET,
 };
-use crate::loader::{Error, InitState, error, search_initramfs_address};
+use crate::loader::{error, search_initramfs_address, Error, InitState};
 
 // loading bzImage and ramdisk above 4G in 64bit.
 const MINIMAL_VERSION: u16 = 0x020c;
@@ -50,19 +50,13 @@ pub fn load<P: AsRef<Path>>(
     initramfs: Option<P>,
 ) -> Result<InitState, Error> {
     let mut boot_params = BootParams::new_zeroed();
-    let access_kernel = error::AccessFile {
-        path: kernel.as_ref(),
-    };
+    let access_kernel = error::AccessFile { path: kernel.as_ref() };
     let kernel = File::open(&kernel).context(access_kernel)?;
     let kernel_meta = kernel.metadata().context(access_kernel)?;
     let mut kernel = BufReader::new(kernel);
 
-    kernel
-        .seek(SeekFrom::Start(SETUP_HEADER_OFFSET))
-        .context(access_kernel)?;
-    kernel
-        .read_exact(boot_params.hdr.as_mut_bytes())
-        .context(access_kernel)?;
+    kernel.seek(SeekFrom::Start(SETUP_HEADER_OFFSET)).context(access_kernel)?;
+    kernel.read_exact(boot_params.hdr.as_mut_bytes()).context(access_kernel)?;
 
     // For backwards compatibility, if the setup_sects field contains 0,
     // the real value is 4.
@@ -108,11 +102,7 @@ pub fn load<P: AsRef<Path>>(
         let cmdline_limit =
             std::cmp::min(boot_params.hdr.cmdline_size as u64, KERNEL_CMDLINE_LIMIT);
         if cmdline.len() as u64 > cmdline_limit {
-            return error::CmdLineTooLong {
-                len: cmdline.len(),
-                limit: cmdline_limit,
-            }
-            .fail();
+            return error::CmdLineTooLong { len: cmdline.len(), limit: cmdline_limit }.fail();
         }
         memory.write_range(KERNEL_CMDLINE_START, cmdline.len() as u64, cmdline)?;
         boot_params.hdr.cmdline_ptr = KERNEL_CMDLINE_START as u32;
@@ -121,18 +111,14 @@ pub fn load<P: AsRef<Path>>(
 
     // load kernel image
     let kernel_offset = (boot_params.hdr.setup_sects as u64 + 1) * 512;
-    kernel
-        .seek(SeekFrom::Start(kernel_offset))
-        .context(access_kernel)?;
+    kernel.seek(SeekFrom::Start(kernel_offset)).context(access_kernel)?;
     let kernel_size = kernel_meta.len() - kernel_offset;
     memory.write_range(KERNEL_IMAGE_START, kernel_size, kernel)?;
 
     // load initramfs
     let initramfs_range;
     if let Some(initramfs) = initramfs {
-        let access_initramfs = error::AccessFile {
-            path: initramfs.as_ref(),
-        };
+        let access_initramfs = error::AccessFile { path: initramfs.as_ref() };
         let initramfs = File::open(&initramfs).context(access_initramfs)?;
         let initramfs_size = initramfs.metadata().context(access_initramfs)?.len();
         let initramfs_gpa = search_initramfs_address(
@@ -146,11 +132,7 @@ pub fn load<P: AsRef<Path>>(
         boot_params.ext_ramdisk_image = (initramfs_gpa >> 32) as u32;
         boot_params.hdr.ramdisk_size = initramfs_size as u32;
         boot_params.ext_ramdisk_size = (initramfs_size >> 32) as u32;
-        log::info!(
-            "initramfs loaded at {:#x} - {:#x}, ",
-            initramfs_gpa,
-            initramfs_end - 1,
-        );
+        log::info!("initramfs loaded at {:#x} - {:#x}, ", initramfs_gpa, initramfs_end - 1,);
         initramfs_range = Some(initramfs_gpa..initramfs_end);
     } else {
         initramfs_range = None;
@@ -166,11 +148,8 @@ pub fn load<P: AsRef<Path>>(
             MemRegionType::Pmem => E820_PMEM,
             MemRegionType::Hidden => continue,
         };
-        boot_params.e820_table[region_index] = BootE820Entry {
-            addr: *addr,
-            size: region.size,
-            type_,
-        };
+        boot_params.e820_table[region_index] =
+            BootE820Entry { addr: *addr, size: region.size, type_ };
         region_index += 1;
     }
     boot_params.e820_entries = mem_regions.len() as u8;
@@ -200,42 +179,14 @@ pub fn load<P: AsRef<Path>>(
     }
 
     // set up gdt
-    let boot_cs = SegRegVal {
-        selector: 0x10,
-        base: 0,
-        limit: 0xfff_ffff,
-        access: SegAccess(0xa09b),
-    };
-    let boot_ds = SegRegVal {
-        selector: 0x18,
-        base: 0,
-        limit: 0xfff_ffff,
-        access: SegAccess(0xc093),
-    };
-    let boot_tr = SegRegVal {
-        selector: 0x20,
-        base: 0,
-        limit: 0,
-        access: SegAccess(0x8b),
-    };
-    let boot_ldtr = SegRegVal {
-        selector: 0x28,
-        base: 0,
-        limit: 0,
-        access: SegAccess(0x82),
-    };
-    let gdt = [
-        0,
-        0,
-        boot_cs.to_desc(),
-        boot_ds.to_desc(),
-        boot_tr.to_desc(),
-        boot_ldtr.to_desc(),
-    ];
-    let gdtr = DtRegVal {
-        base: BOOT_GDT_START,
-        limit: size_of_val(&gdt) as u16 - 1,
-    };
+    let boot_cs =
+        SegRegVal { selector: 0x10, base: 0, limit: 0xfff_ffff, access: SegAccess(0xa09b) };
+    let boot_ds =
+        SegRegVal { selector: 0x18, base: 0, limit: 0xfff_ffff, access: SegAccess(0xc093) };
+    let boot_tr = SegRegVal { selector: 0x20, base: 0, limit: 0, access: SegAccess(0x8b) };
+    let boot_ldtr = SegRegVal { selector: 0x28, base: 0, limit: 0, access: SegAccess(0x82) };
+    let gdt = [0, 0, boot_cs.to_desc(), boot_ds.to_desc(), boot_tr.to_desc(), boot_ldtr.to_desc()];
+    let gdtr = DtRegVal { base: BOOT_GDT_START, limit: size_of_val(&gdt) as u16 - 1 };
     let idtr = DtRegVal { base: 0, limit: 0 };
     memory.write_t(BOOT_GDT_START, &gdt)?;
 

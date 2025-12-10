@@ -16,14 +16,14 @@ use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::os::unix::prelude::OpenOptionsExt;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bitflags::bitflags;
 use libc::O_NONBLOCK;
-use mio::Registry;
 use mio::event::Event;
+use mio::Registry;
 use serde::Deserialize;
 use serde_aco::Help;
 use snafu::ResultExt;
@@ -34,9 +34,9 @@ use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevParam, DeviceId, Virtio, WakeEvent};
-use crate::virtio::queue::{QueueReg, VirtQueue, copy_from_reader};
+use crate::virtio::queue::{copy_from_reader, QueueReg, VirtQueue};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{FEATURE_BUILT_IN, IrqSender, Result, error};
+use crate::virtio::{error, IrqSender, Result, FEATURE_BUILT_IN};
 
 #[derive(Debug, Clone)]
 pub struct EntropyConfig;
@@ -74,11 +74,7 @@ impl Entropy {
         options.custom_flags(O_NONBLOCK).read(true);
         let path = param.source.as_deref().unwrap_or(Path::new("/dev/urandom"));
         let file = options.open(path).context(error::AccessFile { path })?;
-        Ok(Entropy {
-            name,
-            source: file,
-            config: Arc::new(EntropyConfig),
-        })
+        Ok(Entropy { name, source: file, config: Arc::new(EntropyConfig) })
     }
 }
 

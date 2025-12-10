@@ -18,12 +18,12 @@ use snafu::ResultExt;
 
 use crate::hv::kvm::sev::SevFd;
 use crate::hv::kvm::vm::{KvmVm, VmArch};
-use crate::hv::kvm::{Kvm, kvm_error};
-use crate::hv::{Coco, Result, VmConfig, error};
+use crate::hv::kvm::{kvm_error, Kvm};
+use crate::hv::{error, Coco, Result, VmConfig};
 use crate::sys::kvm::{
-    KvmCap, KvmCreateGuestMemfd, KvmEnableCap, KvmVmType, kvm_check_extension,
-    kvm_create_guest_memfd, kvm_create_irqchip, kvm_enable_cap, kvm_set_identity_map_addr,
-    kvm_set_tss_addr,
+    kvm_check_extension, kvm_create_guest_memfd, kvm_create_irqchip, kvm_enable_cap,
+    kvm_set_identity_map_addr, kvm_set_tss_addr, KvmCap, KvmCreateGuestMemfd, KvmEnableCap,
+    KvmVmType,
 };
 use crate::sys::sev::{KvmSevCmdId, KvmSevInit};
 
@@ -41,10 +41,7 @@ impl Kvm {
         vm_fd: &OwnedFd,
     ) -> Result<Option<OwnedFd>> {
         let memfd = if let Some(Coco::AmdSnp { .. }) = &config.coco {
-            let mut request = KvmCreateGuestMemfd {
-                size: 1 << 48,
-                ..Default::default()
-            };
+            let mut request = KvmCreateGuestMemfd { size: 1 << 48, ..Default::default() };
             let ret = unsafe { kvm_create_guest_memfd(vm_fd, &mut request) }
                 .context(kvm_error::GuestMemfd)?;
             Some(unsafe { OwnedFd::from_raw_fd(ret) })
@@ -81,9 +78,7 @@ impl Kvm {
                 Some(Coco::AmdSnp { .. }) => {
                     let bitmap =
                         unsafe { kvm_check_extension(&kvm_vm.vm.fd, KvmCap::EXIT_HYPERCALL) }
-                            .context(kvm_error::CheckExtension {
-                                ext: "KVM_CAP_EXIT_HYPERCALL",
-                            })?;
+                            .context(kvm_error::CheckExtension { ext: "KVM_CAP_EXIT_HYPERCALL" })?;
                     if bitmap != 0 {
                         let request = KvmEnableCap {
                             cap: KvmCap::EXIT_HYPERCALL,
@@ -91,11 +86,8 @@ impl Kvm {
                             flags: 0,
                             pad: [0; 64],
                         };
-                        unsafe { kvm_enable_cap(&kvm_vm.vm.fd, &request) }.context(
-                            kvm_error::EnableCap {
-                                cap: "KVM_CAP_EXIT_HYPERCALL",
-                            },
-                        )?;
+                        unsafe { kvm_enable_cap(&kvm_vm.vm.fd, &request) }
+                            .context(kvm_error::EnableCap { cap: "KVM_CAP_EXIT_HYPERCALL" })?;
                     }
                     let mut init = KvmSevInit::default();
                     kvm_vm.sev_op(KvmSevCmdId::INIT2, Some(&mut init))?;

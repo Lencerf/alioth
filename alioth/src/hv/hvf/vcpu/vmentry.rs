@@ -18,7 +18,7 @@ use snafu::ResultExt;
 
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
-use crate::hv::{Result, error};
+use crate::hv::{error, Result};
 use crate::sys::hvf::hv_vcpu_set_reg;
 
 impl HvfVcpu {

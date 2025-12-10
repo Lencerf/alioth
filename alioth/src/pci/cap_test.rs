@@ -16,8 +16,8 @@ use assert_matches::assert_matches;
 use parking_lot::RwLock;
 use rstest::rstest;
 
-use crate::hv::IrqFd;
 use crate::hv::tests::TestIrqFd;
+use crate::hv::IrqFd;
 use crate::mem::emulated::{Action, Mmio};
 use crate::pci::cap::{
     MsiCapMmio, MsiMsgCtrl, MsixCap, MsixCapMmio, MsixCapOffset, MsixMsgCtrl, MsixTableEntry,
@@ -37,10 +37,7 @@ use crate::pci::config::PciConfigArea;
 #[case(0x2, 2, 0x0)]
 #[case(0xb, 1, 0x0)]
 fn test_null_cap(#[case] offset: u64, #[case] size: u8, #[case] val: u64) {
-    let null_cap = NullCap {
-        next: 0x60,
-        size: 0xc,
-    };
+    let null_cap = NullCap { next: 0x60, size: 0xc };
     assert_matches!(null_cap.read(offset, size), Ok(v) if v == val);
 }
 
@@ -219,10 +216,7 @@ fn test_msix_cap_mmio() {
 
     let mut msix = MsixCapMmio {
         cap: RwLock::new(MsixCap {
-            header: PciCapHdr {
-                id: PciCapId::MSIX,
-                ..Default::default()
-            },
+            header: PciCapHdr { id: PciCapId::MSIX, ..Default::default() },
             control: MsixMsgCtrl::new(2),
             table_offset,
             pba_offset,
@@ -248,13 +242,9 @@ fn test_msix_cap_mmio() {
 
 #[test]
 fn test_msix_table_mmio() {
-    let entries = Box::new([
-        MsixTableMmioEntry::default(),
-        MsixTableMmioEntry::IrqFd(TestIrqFd::default()),
-    ]);
-    let table = MsixTableMmio {
-        entries: RwLock::new(entries),
-    };
+    let entries =
+        Box::new([MsixTableMmioEntry::default(), MsixTableMmioEntry::IrqFd(TestIrqFd::default())]);
+    let table = MsixTableMmio { entries: RwLock::new(entries) };
     assert_eq!(table.size(), 32);
 
     // MSI-X are masked by default
@@ -315,10 +305,7 @@ fn test_msix_table_mmio() {
 fn test_pci_cap_list() {
     let caps: Vec<Box<dyn PciCap>> = vec![
         Box::new(MsixCapMmio::new(MsixCap {
-            header: PciCapHdr {
-                id: PciCapId::MSIX,
-                next: 0,
-            },
+            header: PciCapHdr { id: PciCapId::MSIX, next: 0 },
             ..Default::default()
         })),
         Box::new(NullCap { size: 16, next: 0 }),

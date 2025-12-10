@@ -24,7 +24,7 @@ use std::sync::Arc;
 use bitfield::bitfield;
 use snafu::Snafu;
 
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::mem::{IoRegion, MemRegion};
 
 use self::config::PciConfig;
@@ -52,9 +52,7 @@ pub enum Error {
     #[snafu(display("Failed to access guest memory"), context(false))]
     Memory { source: Box<crate::mem::Error> },
     #[snafu(display("Failed to reset device"))]
-    Reset {
-        source: Box<dyn DebugTrace + Send + Sync + 'static>,
-    },
+    Reset { source: Box<dyn DebugTrace + Send + Sync + 'static> },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

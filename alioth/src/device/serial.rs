@@ -168,12 +168,15 @@ impl Default for LineStatus {
 
 #[derive(Default, Debug)]
 struct SerialReg {
-    interrupt_enable: InterruptEnable, // 0x1, Interrupt Enable Register (IER)
+    /// 0x1, Interrupt Enable Register (IER)
+    interrupt_enable: InterruptEnable,
     #[allow(dead_code)]
-    fifo_control: FifoControl, // 0x2, write, FIFO Control Register (FCR)
-    interrupt_identification: InterruptIdentification, // 0x2, read, Interrupt Identification Register
-    line_control: LineControl,                         // 0x3, Line Control Register (LCR)
-    modem_control: ModemControl,                       // 0x4, Modem Control Register (MCR)
+    ///  0x2, write, FIFO Control Register (FCR)
+    fifo_control: FifoControl, //
+    /// 0x2, read, Interrupt Identification Register
+    interrupt_identification: InterruptIdentification,
+    line_control: LineControl,   // 0x3, Line Control Register (LCR)
+    modem_control: ModemControl, // 0x4, Modem Control Register (MCR)
     line_status: LineStatus,
     modem_status: u8, // 0x6, Modem Status Register (MSR)
     scratch: u8,      // 0x7, Scratch Register (SCR)
@@ -242,20 +245,14 @@ where
             TX_HOLDING_REGISTER => {
                 if reg.modem_control.loop_back() {
                     reg.data.push_back(byte);
-                    if reg
-                        .interrupt_enable
-                        .contains(InterruptEnable::RECEIVED_DATA_AVAILABLE)
-                    {
+                    if reg.interrupt_enable.contains(InterruptEnable::RECEIVED_DATA_AVAILABLE) {
                         reg.interrupt_identification.set_rx_data_available();
                         self.send_irq();
                     }
                     reg.line_status |= LineStatus::DATA_READY;
                 } else {
                     self.console.transmit(&[byte]);
-                    if reg
-                        .interrupt_enable
-                        .contains(InterruptEnable::TX_HOLDING_REGISTER_EMPTY)
-                    {
+                    if reg.interrupt_enable.contains(InterruptEnable::TX_HOLDING_REGISTER_EMPTY) {
                         reg.interrupt_identification.set_tx_room_empty();
                         self.send_irq()
                     }
@@ -292,10 +289,7 @@ impl<I: IrqSender> UartRecv for SerialRecv<I> {
     fn receive(&self, bytes: &[u8]) {
         let mut reg = self.reg.lock();
         reg.data.extend(bytes);
-        if reg
-            .interrupt_enable
-            .contains(InterruptEnable::RECEIVED_DATA_AVAILABLE)
-        {
+        if reg.interrupt_enable.contains(InterruptEnable::RECEIVED_DATA_AVAILABLE) {
             reg.interrupt_identification.set_rx_data_available();
             if let Err(e) = self.irq_sender.send() {
                 log::error!("{}: sending interrupt: {e:?}", self.name);
@@ -313,18 +307,10 @@ where
         let irq_sender = Arc::new(irq_sender);
         let reg = Arc::new(Mutex::new(SerialReg::default()));
         let name: Arc<str> = Arc::from(format!("serial_{base_port:#x}"));
-        let uart_recv = SerialRecv {
-            irq_sender: irq_sender.clone(),
-            name: name.clone(),
-            reg: reg.clone(),
-        };
+        let uart_recv =
+            SerialRecv { irq_sender: irq_sender.clone(), name: name.clone(), reg: reg.clone() };
         let console = Console::new(name.clone(), uart_recv)?;
-        let serial = Serial {
-            name,
-            reg,
-            irq_sender,
-            console,
-        };
+        let serial = Serial { name, reg, irq_sender, console };
         Ok(serial)
     }
 

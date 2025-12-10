@@ -22,11 +22,11 @@ use crate::arch::cpuid::CpuidIn;
 use crate::arch::reg::{DtReg, DtRegVal, Reg, SReg, SegAccess, SegReg, SegRegVal};
 use crate::hv::kvm::kvm_error;
 use crate::hv::kvm::vcpu::KvmVcpu;
-use crate::hv::{Error, Result, error};
+use crate::hv::{error, Error, Result};
 use crate::sys::kvm::{
-    KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmMsrEntry, KvmMsrs, KvmRegs,
-    MAX_IO_MSRS, kvm_get_regs, kvm_get_sregs, kvm_get_sregs2, kvm_set_cpuid2, kvm_set_msrs,
-    kvm_set_regs, kvm_set_sregs, kvm_set_sregs2,
+    kvm_get_regs, kvm_get_sregs, kvm_get_sregs2, kvm_set_cpuid2, kvm_set_msrs, kvm_set_regs,
+    kvm_set_sregs, kvm_set_sregs2, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmMsrEntry, KvmMsrs,
+    KvmRegs, KVM_MAX_CPUID_ENTRIES, MAX_IO_MSRS,
 };
 
 macro_rules! set_kvm_sreg {
@@ -101,10 +101,7 @@ macro_rules! get_kvm_dt_reg {
             DtReg::Idtr => $kvm_sregs.idt,
             DtReg::Gdtr => $kvm_sregs.gdt,
         };
-        DtRegVal {
-            limit: target.limit,
-            base: target.base,
-        }
+        DtRegVal { limit: target.limit, base: target.base }
     }};
 }
 

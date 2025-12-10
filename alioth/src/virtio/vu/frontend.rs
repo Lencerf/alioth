@@ -14,9 +14,9 @@
 
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bitflags::bitflags;
@@ -39,7 +39,7 @@ use crate::virtio::vu::bindings::{
 use crate::virtio::vu::conn::{VuChannel, VuSession};
 use crate::virtio::vu::error as vu_error;
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{DevStatus, DeviceId, IrqSender, Result, VirtioFeature, error};
+use crate::virtio::{error, DevStatus, DeviceId, IrqSender, Result, VirtioFeature};
 use crate::{ffi, mem};
 
 bitflags! {
@@ -104,29 +104,17 @@ impl Mmio for VuDevConfig {
     }
 
     fn read(&self, offset: u64, size: u8) -> mem::Result<u64> {
-        let req = DeviceConfig {
-            offset: offset as u32,
-            size: size as u32,
-            flags: 0,
-        };
+        let req = DeviceConfig { offset: offset as u32, size: size as u32, flags: 0 };
         let mut ret = 0u64;
         let buf = &mut ret.as_mut_bytes()[..size as usize];
-        self.session
-            .get_config(&req, buf)
-            .box_trace(mem::error::Mmio)?;
+        self.session.get_config(&req, buf).box_trace(mem::error::Mmio)?;
         Ok(ret)
     }
 
     fn write(&self, offset: u64, size: u8, val: u64) -> mem::Result<Action> {
-        let req = DeviceConfig {
-            offset: offset as u32,
-            size: size as u32,
-            flags: 0,
-        };
+        let req = DeviceConfig { offset: offset as u32, size: size as u32, flags: 0 };
         let buf = &val.as_bytes()[..size as usize];
-        self.session
-            .set_config(&req, buf)
-            .box_trace(mem::error::Mmio)?;
+        self.session.set_config(&req, buf).box_trace(mem::error::Mmio)?;
         Ok(Action::None)
     }
 }
@@ -161,10 +149,7 @@ impl VuFrontend {
         log::trace!("{name}: get device feature: {feat:x?}");
         let need_feat = VirtioFeature::VHOST_PROTOCOL | VirtioFeature::VERSION_1;
         if !feat.contains(need_feat) {
-            return vu_error::DeviceFeature {
-                feature: need_feat.bits(),
-            }
-            .fail()?;
+            return vu_error::DeviceFeature { feature: need_feat.bits() }.fail()?;
         }
 
         let protocol_feat = VuFeature::from_bits_retain(session.get_protocol_features()?);
@@ -172,10 +157,7 @@ impl VuFrontend {
         let need_feat =
             VuFeature::MQ | VuFeature::REPLY_ACK | VuFeature::CONFIGURE_MEM_SLOTS | extra_feat;
         if !protocol_feat.contains(need_feat) {
-            return vu_error::ProtocolFeature {
-                feature: need_feat & !protocol_feat,
-            }
-            .fail()?;
+            return vu_error::ProtocolFeature { feature: need_feat & !protocol_feat }.fail()?;
         }
 
         let mut vu_feature = need_feat;
@@ -245,9 +227,7 @@ impl Virtio for VuFrontend {
 
     fn config(&self) -> Arc<Self::Config> {
         assert!(self.vu_feature.contains(VuFeature::CONFIG));
-        Arc::new(VuDevConfig {
-            session: self.session.clone(),
-        })
+        Arc::new(VuDevConfig { session: self.session.clone() })
     }
 
     fn feature(&self) -> u128 {
@@ -280,10 +260,7 @@ impl Virtio for VuFrontend {
     }
 
     fn mem_change_callback(&self) -> Option<Box<dyn LayoutChanged>> {
-        Some(Box::new(UpdateVuMem {
-            name: self.name.clone(),
-            session: self.session.clone(),
-        }))
+        Some(Box::new(UpdateVuMem { name: self.name.clone(), session: self.session.clone() }))
     }
 }
 
@@ -299,8 +276,7 @@ impl VirtioMio for VuFrontend {
         E: IoeventFd,
     {
         let name = &*self.name;
-        self.session
-            .set_features(&((feature | VirtioFeature::VHOST_PROTOCOL.bits()) as u64))?;
+        self.session.set_features(&((feature | VirtioFeature::VHOST_PROTOCOL.bits()) as u64))?;
         log::trace!("{name}: set driver feature: {feature:x?}");
 
         for (index, fd) in active_mio.ioeventfds.iter().enumerate() {
@@ -322,17 +298,12 @@ impl VirtioMio for VuFrontend {
                 Ok(())
             });
 
-            let virtq_num = VirtqState {
-                index: index as _,
-                val: reg.size.load(Ordering::Acquire) as _,
-            };
+            let virtq_num =
+                VirtqState { index: index as _, val: reg.size.load(Ordering::Acquire) as _ };
             self.session.set_virtq_num(&virtq_num)?;
             log::trace!("{name}: queue-{index}: set size: {}", virtq_num.val);
 
-            let virtq_base = VirtqState {
-                index: index as _,
-                val: 0,
-            };
+            let virtq_base = VirtqState { index: index as _, val: 0 };
             self.session.set_virtq_base(&virtq_base)?;
             log::trace!("{name}: queue-{index}: set base: {}", virtq_base.val);
 
@@ -348,10 +319,7 @@ impl VirtioMio for VuFrontend {
             self.session.set_virtq_addr(&virtq_addr)?;
             log::trace!("{name}: queue-{index}: set addr: {virtq_addr:x?}");
 
-            let virtq_enable = VirtqState {
-                index: index as _,
-                val: 1,
-            };
+            let virtq_enable = VirtqState { index: index as _, val: 1 };
             self.session.set_virtq_enable(&virtq_enable)?;
             log::trace!("{name}: queue-{index}: set enabled: {}", virtq_enable.val);
         }
@@ -395,19 +363,13 @@ impl VirtioMio for VuFrontend {
         S: IrqSender,
         E: IoeventFd,
     {
-        unreachable!(
-            "{}: queue {index} notification should go to vhost-user backend",
-            self.name
-        )
+        unreachable!("{}: queue {index} notification should go to vhost-user backend", self.name)
     }
 
     fn reset(&mut self, registry: &Registry) {
         let name = &*self.name;
         for index in 0..self.num_queues {
-            let disable = VirtqState {
-                index: index as _,
-                val: 0,
-            };
+            let disable = VirtqState { index: index as _, val: 0 };
             if let Err(e) = self.session.set_virtq_enable(&disable) {
                 log::error!("{name}: failed to disable queue-{index}: {e:?}")
             }

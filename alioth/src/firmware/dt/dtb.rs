@@ -116,10 +116,7 @@ pub struct StringBlock {
 
 impl StringBlock {
     fn new() -> Self {
-        StringBlock {
-            total_size: 0,
-            strings: HashMap::new(),
-        }
+        StringBlock { total_size: 0, strings: HashMap::new() }
     }
 
     fn add(&mut self, name: &'static str) -> usize {

@@ -45,11 +45,8 @@ pub fn recv_msg_with_fds(
 
     if size == 0 {
         let buffer_size = bufs.iter().map(|b| b.len()).sum::<usize>();
-        let err = if buffer_size == 0 {
-            ErrorKind::InvalidInput
-        } else {
-            ErrorKind::ConnectionAborted
-        };
+        let err =
+            if buffer_size == 0 { ErrorKind::InvalidInput } else { ErrorKind::ConnectionAborted };
         return Err(err.into());
     }
 
@@ -101,11 +98,7 @@ pub fn send_msg_with_fds(conn: &UnixStream, bufs: &[IoSlice], fds: &[BorrowedFd]
         *raw_fd = fd.as_raw_fd();
     }
     let fds_size = size_of_val(fds) as u32;
-    let buf_len = if fds_size > 0 {
-        unsafe { libc::CMSG_SPACE(fds_size) }
-    } else {
-        0
-    } as usize;
+    let buf_len = if fds_size > 0 { unsafe { libc::CMSG_SPACE(fds_size) } } else { 0 } as usize;
     let mut cmsg_buf = [0u64; CMSG_BUF_LEN / size_of::<u64>()];
     let uds_msg = libc::msghdr {
         msg_name: null_mut(),

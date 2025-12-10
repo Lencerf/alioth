@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    XpcObject, xpc_dictionary_create, xpc_dictionary_get_uint64, xpc_release, xpc_uint64_create,
+    xpc_dictionary_create, xpc_dictionary_get_uint64, xpc_release, xpc_uint64_create, XpcObject,
 };
 
 #[test]

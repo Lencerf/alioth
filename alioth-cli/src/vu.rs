@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread::spawn;
 
-use alioth::errors::{DebugTrace, trace_error};
+use alioth::errors::{trace_error, DebugTrace};
 use alioth::mem::mapped::RamBus;
 use alioth::virtio::dev::blk::BlkFileParam;
 use alioth::virtio::dev::fs::shared_dir::SharedDirParam;
@@ -27,39 +27,29 @@ use alioth::virtio::dev::{DevParam, Virtio, VirtioDevice};
 use alioth::virtio::vu::backend::{VuBackend, VuEventfd, VuIrqSender};
 use clap::{Args, Subcommand};
 use serde::Deserialize;
-use serde_aco::{Help, help_text};
+use serde_aco::{help_text, Help};
 use snafu::{ResultExt, Snafu};
 
-use crate::objects::{DOC_OBJECTS, parse_objects};
+use crate::objects::{parse_objects, DOC_OBJECTS};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
 #[snafu(module, context(suffix(false)))]
 pub enum Error {
     #[snafu(display("Failed to parse {arg}"))]
-    ParseArg {
-        arg: String,
-        error: serde_aco::Error,
-    },
+    ParseArg { arg: String, error: serde_aco::Error },
     #[snafu(display("Failed to parse objects"), context(false))]
     ParseObjects { source: crate::objects::Error },
     #[snafu(display("Failed to bind socket {socket:?}"))]
-    Bind {
-        socket: Box<Path>,
-        error: std::io::Error,
-    },
+    Bind { socket: Box<Path>, error: std::io::Error },
     #[snafu(display("Failed to accept connections"))]
     Accept { error: std::io::Error },
     #[snafu(display("Failed to create a VirtIO device"))]
     CreateVirtio { source: alioth::virtio::Error },
     #[snafu(display("Failed to create a vhost-user backend"))]
-    CreateVu {
-        source: alioth::virtio::vu::backend::Error,
-    },
+    CreateVu { source: alioth::virtio::vu::backend::Error },
     #[snafu(display("vhost-user device runtime error"))]
-    Runtime {
-        source: alioth::virtio::vu::backend::Error,
-    },
+    Runtime { source: alioth::virtio::vu::backend::Error },
 }
 
 fn phantom_parser<T>(_: &str) -> Result<PhantomData<T>, &'static str> {

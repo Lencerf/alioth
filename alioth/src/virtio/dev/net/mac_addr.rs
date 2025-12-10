@@ -14,8 +14,8 @@
 
 use std::str::FromStr;
 
-use serde::Deserialize;
 use serde::de::{self, Visitor};
+use serde::Deserialize;
 use serde_aco::{Help, TypedHelp};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -38,9 +38,7 @@ impl FromStr for MacAddr {
         let mut index = 0;
         for b_s in iter {
             let Ok(v) = u8::from_str_radix(b_s, 16) else {
-                return Err(Error::InvalidNumber {
-                    num: b_s.to_owned(),
-                });
+                return Err(Error::InvalidNumber { num: b_s.to_owned() });
             };
             if let Some(b) = addr.get_mut(index) {
                 *b = v;
@@ -74,10 +72,9 @@ impl<'de> Visitor<'de> for MacAddrVisitor {
         match v.parse::<MacAddr>() {
             Ok(v) => Ok(v),
             Err(Error::InvalidLength { len }) => Err(E::invalid_length(len, &"6")),
-            Err(Error::InvalidNumber { num }) => Err(E::invalid_value(
-                de::Unexpected::Str(num.as_str()),
-                &"hexadecimal",
-            )),
+            Err(Error::InvalidNumber { num }) => {
+                Err(E::invalid_value(de::Unexpected::Str(num.as_str()), &"hexadecimal"))
+            }
         }
     }
 }

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::hv::kvm::Result;
 use crate::hv::kvm::device::KvmDevice;
 use crate::hv::kvm::vm::KvmVm;
+use crate::hv::kvm::Result;
 use crate::hv::{GicV2, GicV2m, GicV3, Its};
 use crate::sys::kvm::{
     KvmDevArmVgicCtrl, KvmDevArmVgicGrp, KvmDevType, KvmVgicAddrType, KvmVgicV3RedistRegion,
@@ -36,11 +36,7 @@ pub struct KvmGicV2 {
 
 impl GicV2 for KvmGicV2 {
     fn init(&self) -> Result<()> {
-        self.dev.set_attr(
-            KvmDevArmVgicGrp::CTL.raw(),
-            KvmDevArmVgicCtrl::INIT.raw(),
-            &(),
-        )?;
+        self.dev.set_attr(KvmDevArmVgicGrp::CTL.raw(), KvmDevArmVgicCtrl::INIT.raw(), &())?;
         Ok(())
     }
 
@@ -52,8 +48,7 @@ impl GicV2 for KvmGicV2 {
 
     fn set_dist_reg(&self, cpu_index: u32, offset: u16, val: u32) -> Result<()> {
         let attr = ((cpu_index as u64) << 32) | (offset as u64);
-        self.dev
-            .set_attr(KvmDevArmVgicGrp::DIST_REGS.raw(), attr, &val)?;
+        self.dev.set_attr(KvmDevArmVgicGrp::DIST_REGS.raw(), attr, &val)?;
         Ok(())
     }
 
@@ -65,8 +60,7 @@ impl GicV2 for KvmGicV2 {
 
     fn set_cpu_reg(&self, cpu_index: u32, offset: u16, val: u32) -> Result<()> {
         let attr = ((cpu_index as u64) << 32) | (offset as u64);
-        self.dev
-            .set_attr(KvmDevArmVgicGrp::CPU_REGS.raw(), attr, &val)?;
+        self.dev.set_attr(KvmDevArmVgicGrp::CPU_REGS.raw(), attr, &val)?;
         Ok(())
     }
 
@@ -76,8 +70,7 @@ impl GicV2 for KvmGicV2 {
     }
 
     fn set_num_irqs(&self, val: u32) -> Result<()> {
-        self.dev
-            .set_attr(KvmDevArmVgicGrp::NR_IRQS.raw(), 0, &val)?;
+        self.dev.set_attr(KvmDevArmVgicGrp::NR_IRQS.raw(), 0, &val)?;
         Ok(())
     }
 }
@@ -111,11 +104,7 @@ pub struct KvmGicV3 {
 
 impl GicV3 for KvmGicV3 {
     fn init(&self) -> Result<()> {
-        self.dev.set_attr(
-            KvmDevArmVgicGrp::CTL.raw(),
-            KvmDevArmVgicCtrl::INIT.raw(),
-            &(),
-        )?;
+        self.dev.set_attr(KvmDevArmVgicGrp::CTL.raw(), KvmDevArmVgicCtrl::INIT.raw(), &())?;
         Ok(())
     }
 }
@@ -151,11 +140,7 @@ pub struct KvmIts {
 
 impl Its for KvmIts {
     fn init(&self) -> Result<()> {
-        self.dev.set_attr(
-            KvmDevArmVgicGrp::CTL.raw(),
-            KvmDevArmVgicCtrl::INIT.raw(),
-            &(),
-        )?;
+        self.dev.set_attr(KvmDevArmVgicGrp::CTL.raw(), KvmDevArmVgicCtrl::INIT.raw(), &())?;
         Ok(())
     }
 }
@@ -163,11 +148,7 @@ impl Its for KvmIts {
 impl KvmVm {
     pub fn kvm_create_its(&self, base: u64) -> Result<KvmIts> {
         let dev = KvmDevice::new(&self.vm.fd, KvmDevType::ARM_ITS)?;
-        dev.set_attr(
-            KvmDevArmVgicGrp::ADDR.raw(),
-            KvmVgicAddrType::ITS.raw(),
-            &base,
-        )?;
+        dev.set_attr(KvmDevArmVgicGrp::ADDR.raw(), KvmVgicAddrType::ITS.raw(), &base)?;
         Ok(KvmIts { dev })
     }
 }

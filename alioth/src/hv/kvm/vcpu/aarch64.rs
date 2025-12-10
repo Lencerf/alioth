@@ -16,10 +16,10 @@ use snafu::ResultExt;
 
 use crate::arch::reg::{Reg, SReg};
 use crate::hv::kvm::vcpu::KvmVcpu;
-use crate::hv::{Result, error};
+use crate::hv::{error, Result};
 use crate::sys::kvm::{
-    KvmArmVcpuFeature, KvmCap, KvmOneReg, kvm_arm_preferred_target, kvm_arm_vcpu_init,
-    kvm_get_one_reg, kvm_set_one_reg,
+    kvm_arm_preferred_target, kvm_arm_vcpu_init, kvm_get_one_reg, kvm_set_one_reg,
+    KvmArmVcpuFeature, KvmCap, KvmOneReg,
 };
 
 const fn encode_reg(reg: Reg) -> u64 {
@@ -46,19 +46,13 @@ impl KvmVcpu {
 
     fn get_one_reg(&self, reg: u64) -> Result<u64> {
         let mut val = 0;
-        let one_reg = KvmOneReg {
-            id: reg,
-            addr: &mut val as *mut _ as _,
-        };
+        let one_reg = KvmOneReg { id: reg, addr: &mut val as *mut _ as _ };
         unsafe { kvm_get_one_reg(&self.fd, &one_reg) }.context(error::VcpuReg)?;
         Ok(val)
     }
 
     fn set_one_reg(&self, reg: u64, val: u64) -> Result<()> {
-        let one_reg = KvmOneReg {
-            id: reg,
-            addr: &val as *const _ as _,
-        };
+        let one_reg = KvmOneReg { id: reg, addr: &val as *const _ as _ };
         unsafe { kvm_set_one_reg(&self.fd, &one_reg) }.context(error::VcpuReg)?;
         Ok(())
     }

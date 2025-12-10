@@ -14,12 +14,12 @@
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use libc::{EFD_CLOEXEC, EFD_NONBLOCK, eventfd};
+use libc::{eventfd, EFD_CLOEXEC, EFD_NONBLOCK};
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
@@ -28,14 +28,14 @@ use serde_aco::Help;
 
 use crate::ffi;
 use crate::hv::IoeventFd;
-use crate::mem::LayoutUpdated;
 use crate::mem::mapped::RamBus;
+use crate::mem::LayoutUpdated;
 use crate::sync::notifier::Notifier;
-use crate::sys::vhost::{VHOST_FILE_UNBIND, VirtqAddr, VirtqFile, VirtqState};
+use crate::sys::vhost::{VirtqAddr, VirtqFile, VirtqState, VHOST_FILE_UNBIND};
 use crate::virtio::dev::vsock::{VsockConfig, VsockFeature};
 use crate::virtio::dev::{DevParam, DeviceId, Virtio, WakeEvent};
 use crate::virtio::queue::{QueueReg, VirtQueue};
-use crate::virtio::vhost::{UpdateVsockMem, VhostDev, error};
+use crate::virtio::vhost::{error, UpdateVsockMem, VhostDev};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{IrqSender, Result, VirtioFeature};
 
@@ -81,18 +81,13 @@ impl VhostVsock {
         let known_feat = VirtioFeature::from_bits_truncate(dev_feat).bits()
             | VsockFeature::from_bits_truncate(dev_feat).bits();
         if !VirtioFeature::from_bits_retain(known_feat).contains(VirtioFeature::VERSION_1) {
-            return error::VhostMissingDeviceFeature {
-                feature: VirtioFeature::VERSION_1.bits(),
-            }
-            .fail()?;
+            return error::VhostMissingDeviceFeature { feature: VirtioFeature::VERSION_1.bits() }
+                .fail()?;
         }
         Ok(VhostVsock {
             name,
             vhost_dev: Arc::new(vhost_dev),
-            config: VsockConfig {
-                guest_cid: param.cid,
-                ..Default::default()
-            },
+            config: VsockConfig { guest_cid: param.cid, ..Default::default() },
             features: known_feat as u64,
             error_fds: [None, None],
         })
@@ -131,9 +126,7 @@ impl Virtio for VhostVsock {
     }
 
     fn mem_update_callback(&self) -> Option<Box<dyn LayoutUpdated>> {
-        Some(Box::new(UpdateVsockMem {
-            dev: self.vhost_dev.clone(),
-        }))
+        Some(Box::new(UpdateVsockMem { dev: self.vhost_dev.clone() }))
     }
 
     fn spawn_worker<S, E>(
@@ -163,10 +156,7 @@ impl VirtioMio for VhostVsock {
     {
         self.vhost_dev.set_features(&(feature as u64))?;
         for (index, fd) in active_mio.ioeventfds.iter().take(2).enumerate() {
-            let kick = VirtqFile {
-                index: index as u32,
-                fd: fd.as_fd().as_raw_fd(),
-            };
+            let kick = VirtqFile { index: index as u32, fd: fd.as_fd().as_raw_fd() };
             self.vhost_dev.set_virtq_kick(&kick)?;
         }
         for (index, queue) in active_mio.queues.iter().take(2).enumerate() {
@@ -176,19 +166,13 @@ impl VirtioMio for VhostVsock {
             let reg = queue.reg();
             let index = index as u32;
             active_mio.irq_sender.queue_irqfd(index as _, |fd| {
-                self.vhost_dev.set_virtq_call(&VirtqFile {
-                    index,
-                    fd: fd.as_raw_fd(),
-                })?;
+                self.vhost_dev.set_virtq_call(&VirtqFile { index, fd: fd.as_raw_fd() })?;
                 Ok(())
             })?;
 
-            self.vhost_dev.set_virtq_num(&VirtqState {
-                index,
-                val: reg.size.load(Ordering::Acquire) as _,
-            })?;
             self.vhost_dev
-                .set_virtq_base(&VirtqState { index, val: 0 })?;
+                .set_virtq_num(&VirtqState { index, val: reg.size.load(Ordering::Acquire) as _ })?;
+            self.vhost_dev.set_virtq_base(&VirtqState { index, val: 0 })?;
             let mem = active_mio.mem;
             let virtq_addr = VirtqAddr {
                 index,
@@ -203,10 +187,8 @@ impl VirtioMio for VhostVsock {
         for (index, fd) in self.error_fds.iter_mut().enumerate() {
             let err_fd =
                 unsafe { OwnedFd::from_raw_fd(ffi!(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))?) };
-            self.vhost_dev.set_virtq_err(&VirtqFile {
-                index: index as u32,
-                fd: err_fd.as_raw_fd(),
-            })?;
+            self.vhost_dev
+                .set_virtq_err(&VirtqFile { index: index as u32, fd: err_fd.as_raw_fd() })?;
             active_mio.poll.registry().register(
                 &mut SourceFd(&err_fd.as_raw_fd()),
                 Token(index as _),
@@ -225,14 +207,9 @@ impl VirtioMio for VhostVsock {
                 continue;
             };
             self.vhost_dev
-                .set_virtq_err(&VirtqFile {
-                    index: index as _,
-                    fd: VHOST_FILE_UNBIND,
-                })
+                .set_virtq_err(&VirtqFile { index: index as _, fd: VHOST_FILE_UNBIND })
                 .unwrap();
-            registry
-                .deregister(&mut SourceFd(&err_fd.as_raw_fd()))
-                .unwrap();
+            registry.deregister(&mut SourceFd(&err_fd.as_raw_fd())).unwrap();
             *error_fd = None;
         }
     }
@@ -248,11 +225,7 @@ impl VirtioMio for VhostVsock {
         E: IoeventFd,
     {
         let q_index = event.token();
-        error::VhostQueueErr {
-            dev: "vsock",
-            index: q_index.0 as u16,
-        }
-        .fail()?;
+        error::VhostQueueErr { dev: "vsock", index: q_index.0 as u16 }.fail()?;
         Ok(())
     }
 

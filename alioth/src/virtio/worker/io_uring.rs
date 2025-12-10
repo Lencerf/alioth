@@ -14,13 +14,13 @@
 
 use std::iter;
 use std::os::fd::{AsFd, AsRawFd};
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use io_uring::cqueue::Entry as Cqe;
 use io_uring::squeue::Entry as Sqe;
-use io_uring::{SubmissionQueue, opcode, types};
+use io_uring::{opcode, types, SubmissionQueue};
 
 use crate::hv::IoeventFd;
 use crate::mem::mapped::{Ram, RamBus};
@@ -82,10 +82,7 @@ impl IoUring {
         S: IrqSender,
     {
         let notifier = Notifier::new()?;
-        let ring = IoUring {
-            notifier: Arc::new(notifier),
-            notifier_token: 0,
-        };
+        let ring = IoUring { notifier: Arc::new(notifier), notifier_token: 0 };
         Worker::spawn(dev, ring, event_rx, memory, queue_regs)
     }
 }

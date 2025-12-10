@@ -22,22 +22,22 @@ use std::mem::{align_of, size_of};
 #[cfg(target_os = "linux")]
 use std::os::fd::FromRawFd;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
-use std::ptr::{NonNull, null_mut};
+use std::ptr::{null_mut, NonNull};
 use std::sync::Arc;
 
+use libc::{
+    c_void, madvise, mmap, msync, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, MAP_SHARED,
+    MS_ASYNC, PROT_READ, PROT_WRITE,
+};
 #[cfg(target_os = "linux")]
 use libc::{MADV_HUGEPAGE, MFD_CLOEXEC};
-use libc::{
-    MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, MAP_SHARED, MS_ASYNC, PROT_READ, PROT_WRITE, c_void,
-    madvise, mmap, msync, munmap,
-};
 use parking_lot::{RwLock, RwLockReadGuard};
 use snafu::ResultExt;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::ffi;
 use crate::mem::addressable::{Addressable, SlotBackend};
-use crate::mem::{Error, Result, error};
+use crate::mem::{error, Error, Result};
 
 #[derive(Debug)]
 struct MemPages {
@@ -86,10 +86,7 @@ impl ArcMemPages {
     }
 
     pub fn fd(&self) -> Option<(BorrowedFd<'_>, u64)> {
-        self._inner
-            .fd
-            .as_ref()
-            .map(|(f, offset)| (f.as_fd(), *offset))
+        self._inner.fd.as_ref().map(|(f, offset)| (f.as_fd(), *offset))
     }
 
     pub fn sync(&self) -> Result<()> {
@@ -124,10 +121,7 @@ impl ArcMemPages {
     pub fn from_memfd(name: &CStr, size: usize, prot: Option<i32>) -> Result<Self> {
         let fd = ffi!(unsafe { libc::memfd_create(name.as_ptr(), MFD_CLOEXEC) })?;
         let prot = prot.unwrap_or(PROT_WRITE | PROT_READ);
-        let addr = ffi!(
-            unsafe { mmap(null_mut(), size, prot, MAP_SHARED, fd, 0) },
-            MAP_FAILED
-        )?;
+        let addr = ffi!(unsafe { mmap(null_mut(), size, prot, MAP_SHARED, fd, 0) }, MAP_FAILED)?;
         let file = unsafe { File::from_raw_fd(fd) };
         file.set_len(size as _)?;
         Ok(Self::from_raw(addr, size, Some((file, 0))))
@@ -136,10 +130,7 @@ impl ArcMemPages {
     pub fn from_anonymous(size: usize, prot: Option<i32>, flags: Option<i32>) -> Result<Self> {
         let prot = prot.unwrap_or(PROT_WRITE | PROT_READ);
         let flags = flags.unwrap_or(MAP_PRIVATE) | MAP_ANONYMOUS;
-        let addr = ffi!(
-            unsafe { mmap(null_mut(), size, prot, flags, -1, 0) },
-            MAP_FAILED
-        )?;
+        let addr = ffi!(unsafe { mmap(null_mut(), size, prot, flags, -1, 0) }, MAP_FAILED)?;
         Ok(Self::from_raw(addr, size, None))
     }
 
@@ -148,11 +139,7 @@ impl ArcMemPages {
     fn get_valid_range(&self, offset: usize, len: usize) -> Result<(usize, usize)> {
         let end = offset.wrapping_add(len).wrapping_sub(1);
         if offset >= self.size || end < offset {
-            return error::ExceedsLimit {
-                addr: offset as u64,
-                size: len as u64,
-            }
-            .fail();
+            return error::ExceedsLimit { addr: offset as u64, size: len as u64 }.fail();
         }
         let valid_len = std::cmp::min(self.size - offset, len);
         Ok((self.addr + offset, valid_len))
@@ -236,19 +223,11 @@ impl<'m> Iterator for IterMut<'m> {
 
 impl Ram {
     fn slice_iter(&self, gpa: u64, len: u64) -> Iter<'_> {
-        Iter {
-            ram: self,
-            gpa,
-            remain: len,
-        }
+        Iter { ram: self, gpa, remain: len }
     }
 
     fn slice_iter_mut(&self, gpa: u64, len: u64) -> IterMut<'_> {
-        IterMut {
-            ram: self,
-            gpa,
-            remain: len,
-        }
+        IterMut { ram: self, gpa, remain: len }
     }
 
     fn get_partial_slice(&self, gpa: u64, len: u64) -> Result<&[u8]> {
@@ -270,17 +249,9 @@ impl Ram {
         let host_ref = self.get_partial_slice(gpa, total_len)?;
         let ptr = host_ref.as_ptr() as *const UnsafeCell<T>;
         if host_ref.len() as u64 != total_len {
-            error::NotContinuous {
-                addr: gpa,
-                size: total_len,
-            }
-            .fail()
+            error::NotContinuous { addr: gpa, size: total_len }.fail()
         } else if !ptr.is_aligned() {
-            error::NotAligned {
-                addr: ptr as u64,
-                align: align_of::<T>(),
-            }
-            .fail()
+            error::NotAligned { addr: ptr as u64, align: align_of::<T>() }.fail()
         } else {
             Ok(unsafe { &*core::ptr::slice_from_raw_parts(ptr, len as usize) })
         }
@@ -290,17 +261,9 @@ impl Ram {
         let host_ref = self.get_partial_slice_mut(gpa, size_of::<T>() as u64)?;
         let ptr = host_ref.as_mut_ptr();
         if host_ref.len() != size_of::<T>() {
-            error::NotContinuous {
-                addr: gpa,
-                size: size_of::<T>() as u64,
-            }
-            .fail()
+            error::NotContinuous { addr: gpa, size: size_of::<T>() as u64 }.fail()
         } else if !ptr.is_aligned() {
-            error::NotAligned {
-                addr: ptr as u64,
-                align: align_of::<T>(),
-            }
-            .fail()
+            error::NotAligned { addr: ptr as u64, align: align_of::<T>() }.fail()
         } else {
             Ok(ptr as *mut T)
         }
@@ -406,11 +369,7 @@ impl RamBus {
     }
 
     pub fn new() -> Self {
-        Self {
-            ram: RwLock::new(Ram {
-                inner: Addressable::default(),
-            }),
-        }
+        Self { ram: RwLock::new(Ram { inner: Addressable::default() }) }
     }
 
     pub(crate) fn add(&self, gpa: u64, user_mem: ArcMemPages) -> Result<(), Error> {

@@ -60,20 +60,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Logger::try_with_env_or_str("warn")
     }?;
     let logger = if cli.log_to_file {
-        logger.log_to_file(
-            FileSpec::default()
-                .suppress_timestamp()
-                .o_directory(cli.log_dir),
-        )
+        logger.log_to_file(FileSpec::default().suppress_timestamp().o_directory(cli.log_dir))
     } else {
         logger
     };
     let _handle = logger.start()?;
-    log::debug!(
-        "{} {} started...",
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION"),
-    );
+    log::debug!("{} {} started...", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"),);
 
     match cli.cmd {
         Command::Boot(args) => boot::boot(*args)?,

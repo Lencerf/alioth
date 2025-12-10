@@ -18,8 +18,8 @@ use std::io::{IoSlice, IoSliceMut, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bitflags::bitflags;
@@ -29,8 +29,8 @@ use io_uring::cqueue::Entry as Cqe;
 use io_uring::opcode;
 #[cfg(target_os = "linux")]
 use io_uring::types::Fd;
-use mio::Registry;
 use mio::event::Event;
+use mio::Registry;
 use serde::Deserialize;
 use serde_aco::Help;
 use snafu::ResultExt;
@@ -41,11 +41,11 @@ use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevParam, Virtio, WakeEvent};
 use crate::virtio::queue::{DescChain, QueueReg, Status as QStatus, VirtQueue};
-use crate::virtio::worker::WorkerApi;
 #[cfg(target_os = "linux")]
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, error};
+use crate::virtio::worker::WorkerApi;
+use crate::virtio::{error, DeviceId, IrqSender, Result, FEATURE_BUILT_IN};
 use crate::{c_enum, impl_mmio_for_zerocopy};
 
 c_enum! {
@@ -161,22 +161,10 @@ impl DevParam for BlkFileParam {
 }
 
 enum BlkRequest<'d, 'm> {
-    Done {
-        written: u32,
-    },
-    In {
-        data: &'d mut IoSliceMut<'m>,
-        offset: u64,
-        status: &'d mut u8,
-    },
-    Out {
-        data: &'d IoSlice<'m>,
-        offset: u64,
-        status: &'d mut u8,
-    },
-    Flush {
-        status: &'d mut u8,
-    },
+    Done { written: u32 },
+    In { data: &'d mut IoSliceMut<'m>, offset: u64, status: &'d mut u8 },
+    Out { data: &'d IoSlice<'m>, offset: u64, status: &'d mut u8 },
+    Flush { status: &'d mut u8 },
 }
 
 #[derive(Debug)]
@@ -190,32 +178,21 @@ pub struct Block {
 
 impl Block {
     pub fn new(param: BlkFileParam, name: impl Into<Arc<str>>) -> Result<Self> {
-        let access_disk = error::AccessFile {
-            path: param.path.as_ref(),
-        };
+        let access_disk = error::AccessFile { path: param.path.as_ref() };
         let disk = OpenOptions::new()
             .read(true)
             .write(!param.readonly)
             .open(&param.path)
             .context(access_disk)?;
         let len = disk.metadata().context(access_disk)?.len();
-        let config = BlockConfig {
-            capacity: len / SECTOR_SIZE as u64,
-            num_queues: 1,
-            ..Default::default()
-        };
+        let config =
+            BlockConfig { capacity: len / SECTOR_SIZE as u64, num_queues: 1, ..Default::default() };
         let config = Arc::new(config);
         let mut feature = BlockFeature::FLUSH;
         if param.readonly {
             feature |= BlockFeature::RO;
         }
-        Ok(Block {
-            name: name.into(),
-            disk,
-            config,
-            feature,
-            api: param.api,
-        })
+        Ok(Block { name: name.into(), disk, config, feature, api: param.api })
     }
 
     fn handle_desc<'d, 'm>(&self, desc: &'d mut DescChain<'m>) -> Result<BlkRequest<'d, 'm>> {
@@ -237,11 +214,7 @@ impl Block {
                 let [data] = data_in else {
                     return error::InvalidBuffer.fail();
                 };
-                Ok(BlkRequest::In {
-                    data,
-                    offset,
-                    status,
-                })
+                Ok(BlkRequest::In { data, offset, status })
             }
             RequestType::OUT => {
                 if self.feature.contains(BlockFeature::RO) {
@@ -252,11 +225,7 @@ impl Block {
                 let [data] = data_out else {
                     return error::InvalidBuffer.fail();
                 };
-                Ok(BlkRequest::Out {
-                    data,
-                    offset,
-                    status,
-                })
+                Ok(BlkRequest::Out { data, offset, status })
             }
             RequestType::FLUSH => Ok(BlkRequest::Flush { status }),
             RequestType::GET_ID => {
@@ -367,26 +336,20 @@ impl VirtioMio for Block {
                     0
                 }
                 Ok(BlkRequest::Done { written }) => written,
-                Ok(BlkRequest::In {
-                    data,
-                    offset,
-                    status,
-                }) => match disk.read_exact_at(data, offset) {
-                    Ok(_) => {
-                        *status = Status::OK.into();
-                        data.len() as u32 + 1
+                Ok(BlkRequest::In { data, offset, status }) => {
+                    match disk.read_exact_at(data, offset) {
+                        Ok(_) => {
+                            *status = Status::OK.into();
+                            data.len() as u32 + 1
+                        }
+                        Err(e) => {
+                            log::error!("{}: read: {e}", self.name);
+                            *status = Status::IOERR.into();
+                            1
+                        }
                     }
-                    Err(e) => {
-                        log::error!("{}: read: {e}", self.name);
-                        *status = Status::IOERR.into();
-                        1
-                    }
-                },
-                Ok(BlkRequest::Out {
-                    data,
-                    offset,
-                    status,
-                }) => {
+                }
+                Ok(BlkRequest::Out { data, offset, status }) => {
                     match disk.write_all_at(data, offset) {
                         Ok(_) => *status = Status::OK.into(),
                         Err(e) => {
@@ -438,9 +401,8 @@ impl VirtioIoUring for Block {
                 BufferAction::Sqe(read)
             }
             BlkRequest::Out { data, offset, .. } => {
-                let write = opcode::Write::new(fd, data.as_ptr(), data.len() as u32)
-                    .offset(offset)
-                    .build();
+                let write =
+                    opcode::Write::new(fd, data.as_ptr(), data.len() as u32).offset(offset).build();
                 BufferAction::Sqe(write)
             }
             BlkRequest::Flush { .. } => {

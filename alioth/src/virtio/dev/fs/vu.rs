@@ -18,11 +18,11 @@ use std::iter::zip;
 use std::mem::size_of_val;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, PROT_NONE, mmap};
+use libc::{mmap, MAP_ANONYMOUS, MAP_FAILED, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, PROT_NONE};
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
@@ -43,7 +43,7 @@ use crate::virtio::queue::{QueueReg, VirtQueue};
 use crate::virtio::vu::bindings::{DeviceConfig, FsMap, VuBackMsg, VuFeature};
 use crate::virtio::vu::conn::VuChannel;
 use crate::virtio::vu::frontend::VuFrontend;
-use crate::virtio::vu::{Error, error as vu_error};
+use crate::virtio::vu::{error as vu_error, Error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{DeviceId, IrqSender, Result};
 use crate::{align_up, ffi};
@@ -76,11 +76,7 @@ impl VuFs {
             }
             config
         } else {
-            let cfg = DeviceConfig {
-                offset: 0,
-                size: size_of::<FsConfig>() as u32,
-                flags: 0,
-            };
+            let cfg = DeviceConfig { offset: 0, size: size_of::<FsConfig>() as u32, flags: 0 };
             let mut config = FsConfig::new_zeroed();
             frontend.session().get_config(&cfg, config.as_mut_bytes())?;
             log::info!("{}: get config: {config:?}", frontend.name());
@@ -94,11 +90,7 @@ impl VuFs {
             None
         };
 
-        Ok(VuFs {
-            frontend,
-            config: Arc::new(config),
-            dax_region,
-        })
+        Ok(VuFs { frontend, config: Arc::new(config), dax_region })
     }
 }
 
@@ -169,10 +161,7 @@ impl Virtio for VuFs {
 
     fn shared_mem_regions(&self) -> Option<Arc<MemRegion>> {
         let dax_region = self.dax_region.as_ref()?;
-        Some(Arc::new(MemRegion::with_dev_mem(
-            dax_region.clone(),
-            MemRegionType::Hidden,
-        )))
+        Some(Arc::new(MemRegion::with_dev_mem(dax_region.clone(), MemRegionType::Hidden)))
     }
 
     fn mem_change_callback(&self) -> Option<Box<dyn LayoutChanged>> {
@@ -215,23 +204,14 @@ impl VirtioMio for VuFs {
     {
         let q_index = event.token().0;
         if q_index < active_mio.queues.len() {
-            return vu_error::QueueErr {
-                index: q_index as u16,
-            }
-            .fail()?;
+            return vu_error::QueueErr { index: q_index as u16 }.fail()?;
         }
 
         let Some(dax_region) = &self.dax_region else {
-            return vu_error::ProtocolFeature {
-                feature: VuFeature::BACKEND_REQ,
-            }
-            .fail()?;
+            return vu_error::ProtocolFeature { feature: VuFeature::BACKEND_REQ }.fail()?;
         };
         let Some(channel) = self.frontend.channel() else {
-            return vu_error::ProtocolFeature {
-                feature: VuFeature::BACKEND_REQ,
-            }
-            .fail()?;
+            return vu_error::ProtocolFeature { feature: VuFeature::BACKEND_REQ }.fail()?;
         };
         loop {
             let mut fds = [const { None }; 8];
@@ -244,11 +224,7 @@ impl VirtioMio for VuFs {
             let fs_map: FsMap = channel.recv_payload()?;
 
             if size as usize != size_of_val(&fs_map) {
-                return vu_error::PayloadSize {
-                    want: size_of_val(&fs_map),
-                    got: size,
-                }
-                .fail()?;
+                return vu_error::PayloadSize { want: size_of_val(&fs_map), got: size }.fail()?;
             }
             match VuBackMsg::from(request) {
                 VuBackMsg::SHARED_OBJECT_ADD => {
@@ -283,10 +259,7 @@ impl VirtioMio for VuFs {
                         if len == 0 {
                             continue;
                         }
-                        log::trace!(
-                            "{}: unmapping offset {offset:#x}, size {len:#x}",
-                            self.name()
-                        );
+                        log::trace!("{}: unmapping offset {offset:#x}, size {len:#x}", self.name());
                         let map_addr = dax_region.addr() + offset as usize;
                         let flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED;
                         ffi!(
@@ -349,17 +322,13 @@ impl DaxRegion for VuDaxRegion {
 
         fs_map.len[0] = len;
         let fds = [fd.as_fd()];
-        self.channel
-            .fs_map(&fs_map, &fds)
-            .box_trace(fuse::error::DaxMapping)
+        self.channel.fs_map(&fs_map, &fds).box_trace(fuse::error::DaxMapping)
     }
 
     fn unmap(&self, m_offset: u64, len: u64) -> fuse::Result<()> {
         let mut fs_map = FsMap::new_zeroed();
         fs_map.cache_offset[0] = m_offset;
         fs_map.len[0] = len;
-        self.channel
-            .fs_unmap(&fs_map)
-            .box_trace(fuse::error::DaxMapping)
+        self.channel.fs_unmap(&fs_map).box_trace(fuse::error::DaxMapping)
     }
 }

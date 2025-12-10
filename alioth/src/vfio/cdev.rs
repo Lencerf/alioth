@@ -22,12 +22,12 @@ use std::sync::Arc;
 use snafu::ResultExt;
 
 use crate::sys::vfio::{
-    VfioDeviceAttachIommufdPt, VfioDeviceBindIommufd, VfioDeviceDetachIommufdPt,
     vfio_device_attach_iommufd_pt, vfio_device_bind_iommufd, vfio_device_detach_iommufd_pt,
+    VfioDeviceAttachIommufdPt, VfioDeviceBindIommufd, VfioDeviceDetachIommufdPt,
 };
 use crate::vfio::device::Device;
 use crate::vfio::iommu::Ioas;
-use crate::vfio::{Result, error};
+use crate::vfio::{error, Result};
 
 #[derive(Debug)]
 pub struct Cdev {
@@ -41,9 +41,7 @@ impl Cdev {
             .read(true)
             .write(true)
             .open(&path)
-            .context(error::AccessDevice {
-                path: path.as_ref(),
-            })?;
+            .context(error::AccessDevice { path: path.as_ref() })?;
         Ok(Cdev { fd, ioas: None })
     }
 }

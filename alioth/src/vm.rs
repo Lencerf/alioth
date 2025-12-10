@@ -14,8 +14,8 @@
 
 #[cfg(target_os = "linux")]
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ use crate::device::pl031::Pl031;
 use crate::device::pvpanic::PvPanic;
 #[cfg(target_arch = "x86_64")]
 use crate::device::serial::Serial;
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 #[cfg(target_os = "linux")]
 use crate::hv::Kvm;
 use crate::hv::{Hypervisor, IoeventFdRegistry, Vm, VmConfig};
@@ -87,10 +87,7 @@ pub enum Error {
     #[snafu(display("Failed to create a VFIO device"), context(false))]
     CreateVfio { source: Box<crate::vfio::Error> },
     #[snafu(display("VCPU-{id} error"))]
-    VcpuError {
-        id: u32,
-        source: Box<crate::board::Error>,
-    },
+    VcpuError { id: u32, source: Box<crate::board::Error> },
     #[snafu(display("Failed to configure guest memory"), context(false))]
     Memory { source: Box<crate::mem::Error> },
     #[cfg(target_os = "linux")]
@@ -124,9 +121,7 @@ where
     H: Hypervisor + 'static,
 {
     pub fn new(hv: H, config: BoardConfig) -> Result<Self> {
-        let vm_config = VmConfig {
-            coco: config.coco.clone(),
-        };
+        let vm_config = VmConfig { coco: config.coco.clone() };
         let mut vm = hv.create_vm(&vm_config)?;
         let vm_memory = vm.create_vm_memory()?;
         let memory = Memory::new(vm_memory);
@@ -180,10 +175,7 @@ where
         let pl011_dev = Pl011::new(PL011_START, irq_line).context(error::CreateConsole)?;
         self.board.mmio_devs.write().push((
             PL011_START,
-            Arc::new(MemRegion::with_emulated(
-                Arc::new(pl011_dev),
-                MemRegionType::Hidden,
-            )),
+            Arc::new(MemRegion::with_emulated(Arc::new(pl011_dev), MemRegionType::Hidden)),
         ));
         Ok(())
     }
@@ -193,19 +185,12 @@ where
         let pl031_dev = Pl031::new(PL031_START);
         self.board.mmio_devs.write().push((
             PL031_START,
-            Arc::new(MemRegion::with_emulated(
-                Arc::new(pl031_dev),
-                MemRegionType::Hidden,
-            )),
+            Arc::new(MemRegion::with_emulated(Arc::new(pl031_dev), MemRegionType::Hidden)),
         ));
     }
 
     pub fn add_pci_dev(&self, bdf: Option<Bdf>, dev: Arc<dyn Pci>) -> Result<(), Error> {
-        let bdf = if let Some(bdf) = bdf {
-            bdf
-        } else {
-            self.board.pci_bus.reserve(None).unwrap()
-        };
+        let bdf = if let Some(bdf) = bdf { bdf } else { self.board.pci_bus.reserve(None).unwrap() };
         dev.config().get_header().set_bdf(bdf);
         log::info!("{bdf}: device: {}", dev.name());
         self.board.pci_bus.add(bdf, dev);
@@ -223,10 +208,8 @@ where
         &self,
         params: impl Iterator<Item = FwCfgItemParam>,
     ) -> Result<Arc<Mutex<FwCfg>>, Error> {
-        let items = params
-            .map(|p| p.build())
-            .collect::<Result<Vec<_>, _>>()
-            .context(error::FwCfg)?;
+        let items =
+            params.map(|p| p.build()).collect::<Result<Vec<_>, _>>().context(error::FwCfg)?;
         let fw_cfg = Arc::new(Mutex::new(
             FwCfg::new(self.board.memory.ram_bus(), items).context(error::FwCfg)?,
         ));
@@ -340,10 +323,7 @@ impl Machine<Kvm> {
             return Ok(ioas.clone());
         };
         if name.is_none() {
-            self.add_vfio_ioas(IoasParam {
-                name: Self::DEFAULT_NAME.into(),
-                dev_iommu: None,
-            })
+            self.add_vfio_ioas(IoasParam { name: Self::DEFAULT_NAME.into(), dev_iommu: None })
         } else {
             error::NotExist { name: ioas_name }.fail()
         }
@@ -376,9 +356,7 @@ impl Machine<Kvm> {
             Path::new("/dev/vfio/vfio")
         };
         let container = Arc::new(Container::new(vfio_path)?);
-        let update = Box::new(UpdateContainerMapping {
-            container: container.clone(),
-        });
+        let update = Box::new(UpdateContainerMapping { container: container.clone() });
         self.board.memory.register_change_callback(update)?;
         containers.insert(param.name, container.clone());
         Ok(container)
@@ -395,10 +373,7 @@ impl Machine<Kvm> {
                 dev_vfio: None,
             })
         } else {
-            error::NotExist {
-                name: container_name,
-            }
-            .fail()
+            error::NotExist { name: container_name }.fail()
         }
     }
 

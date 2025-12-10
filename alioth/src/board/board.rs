@@ -20,8 +20,8 @@ mod x86_64;
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use libc::{MAP_PRIVATE, MAP_SHARED};
@@ -37,11 +37,11 @@ use crate::arch::layout::{
 };
 #[cfg(target_arch = "x86_64")]
 use crate::device::fw_cfg::FwCfg;
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::hv::{Coco, Vcpu, Vm, VmEntry, VmExit};
 #[cfg(target_arch = "x86_64")]
 use crate::loader::xen;
-use crate::loader::{Executable, InitState, Payload, linux};
+use crate::loader::{linux, Executable, InitState, Payload};
 use crate::mem::emulated::Mmio;
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{MemBackend, MemConfig, MemRegion, MemRegionType, Memory};
@@ -67,20 +67,11 @@ pub enum Error {
     #[snafu(display("Failed to load payload"), context(false))]
     Loader { source: Box<crate::loader::Error> },
     #[snafu(display("Failed to create VCPU-{id}"))]
-    CreateVcpu {
-        id: u32,
-        source: Box<crate::hv::Error>,
-    },
+    CreateVcpu { id: u32, source: Box<crate::hv::Error> },
     #[snafu(display("Failed to run VCPU-{id}"))]
-    RunVcpu {
-        id: u32,
-        source: Box<crate::hv::Error>,
-    },
+    RunVcpu { id: u32, source: Box<crate::hv::Error> },
     #[snafu(display("Failed to stop VCPU-{id}"))]
-    StopVcpu {
-        id: u32,
-        source: Box<crate::hv::Error>,
-    },
+    StopVcpu { id: u32, source: Box<crate::hv::Error> },
     #[snafu(display("Failed to reset PCI devices"))]
     ResetPci { source: Box<crate::pci::Error> },
     #[snafu(display("Failed to configure firmware"))]
@@ -175,11 +166,7 @@ where
             #[cfg(target_os = "linux")]
             vfio_containers: Mutex::new(HashMap::new()),
 
-            mp_sync: Mutex::new(MpSync {
-                state: BoardState::Created,
-                count: 0,
-                fatal: false,
-            }),
+            mp_sync: Mutex::new(MpSync { state: BoardState::Created, count: 0, fatal: false }),
             cond_var: Condvar::new(),
         }
     }
@@ -230,8 +217,7 @@ where
 
     fn add_pci_devs(&self) -> Result<()> {
         #[cfg(target_arch = "x86_64")]
-        self.memory
-            .add_io_dev(PORT_PCI_ADDRESS, self.pci_bus.io_bus.clone())?;
+        self.memory.add_io_dev(PORT_PCI_ADDRESS, self.pci_bus.io_bus.clone())?;
         self.memory.add_region(
             PCIE_CONFIG_START,
             Arc::new(MemRegion::with_emulated(
@@ -242,14 +228,8 @@ where
         let pcie_mmio_64_start = self.config.pcie_mmio_64_start();
         self.pci_bus.segment.assign_resources(&[
             (0x1000, 0x10000),
-            (
-                PCIE_MMIO_32_NON_PREFETCHABLE_START,
-                PCIE_MMIO_32_NON_PREFETCHABLE_END,
-            ),
-            (
-                PCIE_MMIO_32_PREFETCHABLE_START,
-                PCIE_MMIO_32_PREFETCHABLE_END,
-            ),
+            (PCIE_MMIO_32_NON_PREFETCHABLE_START, PCIE_MMIO_32_NON_PREFETCHABLE_END),
+            (PCIE_MMIO_32_PREFETCHABLE_START, PCIE_MMIO_32_PREFETCHABLE_END),
             (pcie_mmio_64_start, pcie_mmio_64_start + PCIE_MMIO_64_SIZE),
         ]);
         Ok(())
@@ -417,11 +397,7 @@ where
         size: u64,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] name: &CStr,
     ) -> Result<ArcMemPages> {
-        let mmap_flag = if self.config.mem.shared {
-            Some(MAP_SHARED)
-        } else {
-            Some(MAP_PRIVATE)
-        };
+        let mmap_flag = if self.config.mem.shared { Some(MAP_SHARED) } else { Some(MAP_PRIVATE) };
         let pages = match self.config.mem.backend {
             #[cfg(target_os = "linux")]
             MemBackend::Memfd => ArcMemPages::from_memfd(name, size as usize, None),

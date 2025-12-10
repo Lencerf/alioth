@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use alioth::errors::{DebugTrace, trace_error};
+use alioth::errors::{trace_error, DebugTrace};
 use snafu::Snafu;
 
 pub const DOC_OBJECTS: &str = r#"Supply additional data to other command line flags.
@@ -47,16 +47,10 @@ pub fn parse_objects(objects: &[String]) -> Result<HashMap<&str, &str>, Error> {
     for obj_s in objects {
         let (key, val) = obj_s.split_once(',').unwrap_or((obj_s, ""));
         if !key.starts_with("id_") {
-            return error::InvalidKey {
-                key: key.to_owned(),
-            }
-            .fail();
+            return error::InvalidKey { key: key.to_owned() }.fail();
         }
         if map.insert(key, val).is_some() {
-            return error::DuplicateKey {
-                key: key.to_owned(),
-            }
-            .fail();
+            return error::DuplicateKey { key: key.to_owned() }.fail();
         }
     }
     Ok(map)

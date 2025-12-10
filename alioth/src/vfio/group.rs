@@ -21,11 +21,11 @@ use std::sync::Arc;
 use snafu::ResultExt;
 
 use crate::sys::vfio::{
-    VfioIommu, vfio_group_get_device_fd, vfio_group_set_container, vfio_group_unset_container,
+    vfio_group_get_device_fd, vfio_group_set_container, vfio_group_unset_container, VfioIommu,
 };
 use crate::vfio::container::Container;
 use crate::vfio::device::Device;
-use crate::vfio::{Result, error};
+use crate::vfio::{error, Result};
 
 #[derive(Debug)]
 pub struct Group {
@@ -36,10 +36,7 @@ pub struct Group {
 impl Group {
     pub fn new(path: &Path) -> Result<Self> {
         let fd = File::open(path).context(error::AccessDevice { path })?;
-        Ok(Group {
-            fd,
-            container: None,
-        })
+        Ok(Group { fd, container: None })
     }
 
     pub fn attach(&mut self, container: Arc<Container>, iommu: VfioIommu) -> Result<()> {
@@ -62,10 +59,7 @@ impl Group {
 impl Drop for Group {
     fn drop(&mut self) {
         if let Err(e) = self.detach() {
-            log::error!(
-                "Group-{}: detaching from container: {e:?}",
-                self.fd.as_raw_fd()
-            );
+            log::error!("Group-{}: detaching from container: {e:?}", self.fd.as_raw_fd());
         }
     }
 }
@@ -80,10 +74,7 @@ impl DevFd {
     pub fn new(group: Arc<Group>, id: &str) -> Result<Self> {
         let id_c = CString::new(id).unwrap();
         let fd = unsafe { vfio_group_get_device_fd(&group.fd, id_c.as_ptr()) }?;
-        Ok(DevFd {
-            fd: unsafe { File::from_raw_fd(fd) },
-            _group: group,
-        })
+        Ok(DevFd { fd: unsafe { File::from_raw_fd(fd) }, _group: group })
     }
 }
 

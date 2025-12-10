@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::hv::kvm::vcpu::KvmVcpu;
-use crate::hv::{Error, VmExit, error};
-use crate::sys::kvm::{KVM_HC_MAP_GPA_RANGE, KvmExitIo, KvmMapGpaRangeFlag, KvmSystemEvent};
+use crate::hv::{error, Error, VmExit};
+use crate::sys::kvm::{KvmExitIo, KvmMapGpaRangeFlag, KvmSystemEvent, KVM_HC_MAP_GPA_RANGE};
 
 impl KvmVcpu {
     #[cfg(target_endian = "little")]
@@ -48,11 +48,7 @@ impl KvmVcpu {
             };
             Some(data)
         };
-        VmExit::Io {
-            port: kvm_io.port,
-            write,
-            size: kvm_io.size,
-        }
+        VmExit::Io { port: kvm_io.port, write, size: kvm_io.size }
     }
 
     pub(super) fn handle_hypercall(&mut self) -> Result<VmExit, Error> {
@@ -75,10 +71,7 @@ impl KvmVcpu {
         match kvm_system_event.type_ {
             KvmSystemEvent::SHUTDOWN => Ok(VmExit::Shutdown),
             KvmSystemEvent::RESET => Ok(VmExit::Reboot),
-            _ => error::VmExit {
-                msg: format!("{kvm_system_event:#x?}"),
-            }
-            .fail(),
+            _ => error::VmExit { msg: format!("{kvm_system_event:#x?}") }.fail(),
         }
     }
 }

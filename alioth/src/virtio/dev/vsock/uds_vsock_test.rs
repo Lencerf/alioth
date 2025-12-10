@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use assert_matches::assert_matches;
@@ -28,24 +28,21 @@ use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::{Ram, RamBus};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::vsock::{
-    ShutdownFlag, UdsVsockParam, VSOCK_CID_HOST, VsockConfig, VsockFeature, VsockHeader, VsockOp,
-    VsockType, VsockVirtq,
+    ShutdownFlag, UdsVsockParam, VsockConfig, VsockFeature, VsockHeader, VsockOp, VsockType,
+    VsockVirtq, VSOCK_CID_HOST,
 };
 use crate::virtio::dev::{DevParam, StartParam, Virtio, WakeEvent};
-use crate::virtio::queue::QueueReg;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::tests::{GuestQueue, VirtQueueGuest};
+use crate::virtio::queue::QueueReg;
 use crate::virtio::tests::{
-    DATA_ADDR, FakeIoeventFd, FakeIrqSender, fixture_queues, fixture_ram_bus,
+    fixture_queues, fixture_ram_bus, FakeIoeventFd, FakeIrqSender, DATA_ADDR,
 };
-use crate::virtio::{DeviceId, FEATURE_BUILT_IN, VirtioFeature};
+use crate::virtio::{DeviceId, VirtioFeature, FEATURE_BUILT_IN};
 
 #[test]
 fn vsock_config_test() {
-    let config = VsockConfig {
-        guest_cid: 5,
-        ..Default::default()
-    };
+    let config = VsockConfig { guest_cid: 5, ..Default::default() };
     assert_eq!(config.size(), 8);
     assert_matches!(config.read(0, 8), Ok(5));
     assert_matches!(config.write(0, 8, 0), Ok(Action::None));
@@ -72,27 +69,15 @@ fn send_to_tx<'m, Q>(
         ram.write(data_addr, data).unwrap();
     }
     let buf_id = q.add_desc(
-        &[
-            (hdr_addr, size_of::<VsockHeader>() as u32),
-            (data_addr, data.len() as u32),
-        ],
+        &[(hdr_addr, size_of::<VsockHeader>() as u32), (data_addr, data.len() as u32)],
         &[],
     );
-    tx.send(WakeEvent::Notify {
-        q_index: VsockVirtq::TX.raw(),
-    })
-    .unwrap();
+    tx.send(WakeEvent::Notify { q_index: VsockVirtq::TX.raw() }).unwrap();
     notifier.notify().unwrap();
     if expect_rx {
-        assert_eq!(
-            irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            VsockVirtq::RX.raw()
-        );
+        assert_eq!(irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(), VsockVirtq::RX.raw());
     }
-    assert_eq!(
-        irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        VsockVirtq::TX.raw()
-    );
+    assert_eq!(irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(), VsockVirtq::TX.raw());
     let used = q.get_used().unwrap();
     assert_eq!(used.id, buf_id);
     assert_eq!(used.len, 0);
@@ -105,33 +90,21 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
     let regs: Arc<[QueueReg]> = Arc::from(fixture_queues);
     let reg_tx = &regs[VsockVirtq::TX.raw() as usize];
     let reg_rx = &regs[VsockVirtq::RX.raw() as usize];
-    let mut rx_q = GuestQueue::new(
-        SplitQueue::new(reg_rx, &*ram, false).unwrap().unwrap(),
-        reg_rx,
-    );
-    let mut tx_q = GuestQueue::new(
-        SplitQueue::new(reg_tx, &*ram, false).unwrap().unwrap(),
-        reg_tx,
-    );
+    let mut rx_q = GuestQueue::new(SplitQueue::new(reg_rx, &*ram, false).unwrap().unwrap(), reg_rx);
+    let mut tx_q = GuestQueue::new(SplitQueue::new(reg_tx, &*ram, false).unwrap().unwrap(), reg_tx);
 
     let temp_dir = TempDir::new().unwrap();
     let sock_path = temp_dir.path().join("vsock.sock");
 
     const GUEST_CID: u32 = 3;
-    let param = UdsVsockParam {
-        cid: GUEST_CID,
-        path: sock_path.clone().into(),
-    };
+    let param = UdsVsockParam { cid: GUEST_CID, path: sock_path.clone().into() };
     let dev = param.build("vsock").unwrap();
 
     assert_matches!(dev.id(), DeviceId::Socket);
     assert_eq!(dev.name(), "vsock");
     assert_eq!(dev.num_queues(), 3);
     assert_eq!(dev.config().guest_cid, GUEST_CID as u32);
-    assert_eq!(
-        dev.feature(),
-        VsockFeature::STREAM.bits() | FEATURE_BUILT_IN
-    );
+    assert_eq!(dev.feature(), VsockFeature::STREAM.bits() | FEATURE_BUILT_IN);
 
     let (tx, rx) = mpsc::channel();
     let (handle, notifier) = dev.spawn_worker(rx, ram_bus.clone(), regs).unwrap();
@@ -155,10 +128,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
     let buf_id = rx_q.add_desc(&[], &[(rx_buf_addr, 4096)]);
     const H2G_GUEST_PORT: u32 = 1025;
     writeln!(h2g_stream, "CONNECT {H2G_GUEST_PORT}").unwrap();
-    assert_eq!(
-        irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        VsockVirtq::RX.raw()
-    );
+    assert_eq!(irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(), VsockVirtq::RX.raw());
     let used = rx_q.get_used().unwrap();
     assert_eq!(used.id, buf_id);
     assert_eq!(used.len as usize, size_of::<VsockHeader>());
@@ -181,17 +151,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
         type_: VsockType::STREAM,
         ..Default::default()
     };
-    send_to_tx(
-        &resp_hdr,
-        &[],
-        &ram,
-        tx_buf_addr,
-        &mut tx_q,
-        &tx,
-        &notifier,
-        &irq_rx,
-        false,
-    );
+    send_to_tx(&resp_hdr, &[], &ram, tx_buf_addr, &mut tx_q, &tx, &notifier, &irq_rx, false);
     let mut reader = BufReader::new(&h2g_stream);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
@@ -214,17 +174,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
         type_: VsockType::STREAM,
         ..Default::default()
     };
-    send_to_tx(
-        &request_hdr,
-        &[],
-        &ram,
-        tx_buf_addr,
-        &mut tx_q,
-        &tx,
-        &notifier,
-        &irq_rx,
-        true,
-    );
+    send_to_tx(&request_hdr, &[], &ram, tx_buf_addr, &mut tx_q, &tx, &notifier, &irq_rx, true);
     let used = rx_q.get_used().unwrap();
     assert_eq!(used.id, rx_buf_id);
     assert_eq!(used.len as usize, size_of::<VsockHeader>());
@@ -244,19 +194,13 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
     // 1. Host to Guest via guest-initiated connection
     let h2g_data = "hello from host";
     let buf_id = rx_q.add_desc(&[], &[(rx_buf_addr, 4096)]);
-    tx.send(WakeEvent::Notify {
-        q_index: VsockVirtq::RX.raw(),
-    })
-    .unwrap();
+    tx.send(WakeEvent::Notify { q_index: VsockVirtq::RX.raw() }).unwrap();
     notifier.notify().unwrap();
     assert_eq!(irq_rx.try_recv(), Err(TryRecvError::Empty));
 
     g2h_stream.write_all(h2g_data.as_bytes()).unwrap();
     g2h_stream.flush().unwrap();
-    assert_eq!(
-        irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        VsockVirtq::RX.raw()
-    );
+    assert_eq!(irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(), VsockVirtq::RX.raw());
     let used = rx_q.get_used().unwrap();
     assert_eq!(used.id, buf_id);
     let total_len = size_of::<VsockHeader>() + h2g_data.len();
@@ -312,17 +256,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
         flags: ShutdownFlag::RECEIVE.bits(),
         ..Default::default()
     };
-    send_to_tx(
-        &shutdown_hdr,
-        &[],
-        &ram,
-        tx_buf_addr,
-        &mut tx_q,
-        &tx,
-        &notifier,
-        &irq_rx,
-        false,
-    );
+    send_to_tx(&shutdown_hdr, &[], &ram, tx_buf_addr, &mut tx_q, &tx, &notifier, &irq_rx, false);
     let mut buf = [0u8; 8];
     assert_matches!(h2g_stream.read(&mut buf), Err(e) if e.kind() == ErrorKind::WouldBlock);
     // 3.2 Send ShutdownFlag::SEND
@@ -337,17 +271,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
         flags: ShutdownFlag::SEND.bits(),
         ..Default::default()
     };
-    send_to_tx(
-        &shutdown_hdr,
-        &[],
-        &ram,
-        tx_buf_addr,
-        &mut tx_q,
-        &tx,
-        &notifier,
-        &irq_rx,
-        false,
-    );
+    send_to_tx(&shutdown_hdr, &[], &ram, tx_buf_addr, &mut tx_q, &tx, &notifier, &irq_rx, false);
     assert_matches!(h2g_stream.read(&mut buf), Ok(0));
 
     // 4. Reset guest-initiated connection
@@ -362,17 +286,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
         flags: 0,
         ..Default::default()
     };
-    send_to_tx(
-        &reset_hdr,
-        &[],
-        &ram,
-        tx_buf_addr,
-        &mut tx_q,
-        &tx,
-        &notifier,
-        &irq_rx,
-        false,
-    );
+    send_to_tx(&reset_hdr, &[], &ram, tx_buf_addr, &mut tx_q, &tx, &notifier, &irq_rx, false);
     assert_matches!(g2h_stream.read(&mut buf), Ok(0));
 
     tx.send(WakeEvent::Shutdown).unwrap();

@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use libc::{
-    F_GETFL, F_SETFL, O_NONBLOCK, OPOST, STDIN_FILENO, STDOUT_FILENO, TCSANOW, cfmakeraw, fcntl,
-    tcgetattr, tcsetattr, termios,
+    cfmakeraw, fcntl, tcgetattr, tcsetattr, termios, F_GETFL, F_SETFL, OPOST, O_NONBLOCK,
+    STDIN_FILENO, STDOUT_FILENO, TCSANOW,
 };
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
@@ -44,10 +44,7 @@ impl StdinBackup {
             Ok(f) => flag_backup = Some(f),
             Err(e) => log::error!("fcntl(STDIN_FILENO, F_GETFL) failed: {e:?}"),
         }
-        StdinBackup {
-            termios: termios_backup,
-            flag: flag_backup,
-        }
+        StdinBackup { termios: termios_backup, flag: flag_backup }
     }
 }
 
@@ -152,19 +149,10 @@ impl Console {
         let name = name.into();
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_SHUTDOWN)?;
-        let mut worker = ConsoleWorker {
-            name: name.clone(),
-            uart,
-            poll,
-        };
-        let worker_thread = std::thread::Builder::new()
-            .name(name.to_string())
-            .spawn(move || worker.do_work())?;
-        let console = Console {
-            name,
-            worker_thread: Some(worker_thread),
-            exit_waker: waker,
-        };
+        let mut worker = ConsoleWorker { name: name.clone(), uart, poll };
+        let worker_thread =
+            std::thread::Builder::new().name(name.to_string()).spawn(move || worker.do_work())?;
+        let console = Console { name, worker_thread: Some(worker_thread), exit_waker: waker };
         Ok(console)
     }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem::{MaybeUninit, size_of_val};
+use std::mem::{size_of_val, MaybeUninit};
 use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use snafu::ResultExt;
@@ -20,8 +20,8 @@ use snafu::ResultExt;
 use crate::hv::kvm::kvm_error;
 use crate::hv::{KvmError, Result};
 use crate::sys::kvm::{
-    KvmCreateDevice, KvmDevType, KvmDeviceAttr, kvm_create_device, kvm_get_device_attr,
-    kvm_set_device_attr,
+    kvm_create_device, kvm_get_device_attr, kvm_set_device_attr, KvmCreateDevice, KvmDevType,
+    KvmDeviceAttr,
 };
 
 #[derive(Debug)]
@@ -29,11 +29,7 @@ pub(super) struct KvmDevice(pub OwnedFd);
 
 impl KvmDevice {
     pub fn new(vm_fd: &impl AsFd, type_: KvmDevType) -> Result<KvmDevice, KvmError> {
-        let mut create_device = KvmCreateDevice {
-            type_,
-            fd: 0,
-            flags: 0,
-        };
+        let mut create_device = KvmCreateDevice { type_, fd: 0, flags: 0 };
         unsafe { kvm_create_device(vm_fd, &mut create_device) }
             .context(kvm_error::CreateDevice { type_ })?;
         Ok(KvmDevice(unsafe { OwnedFd::from_raw_fd(create_device.fd) }))
@@ -51,11 +47,7 @@ impl KvmDevice {
         let attr = KvmDeviceAttr {
             group,
             attr,
-            addr: if size_of_val(val) == 0 {
-                0
-            } else {
-                val as *const _ as _
-            },
+            addr: if size_of_val(val) == 0 { 0 } else { val as *const _ as _ },
             _flags: 0,
         };
         unsafe { kvm_set_device_attr(self, &attr) }.context(kvm_error::DeviceAttr)?;
@@ -64,12 +56,7 @@ impl KvmDevice {
 
     pub fn get_attr<T>(&self, group: u32, attr: u64) -> Result<T, KvmError> {
         let mut val = MaybeUninit::uninit();
-        let attr = KvmDeviceAttr {
-            group,
-            attr,
-            addr: val.as_mut_ptr() as _,
-            _flags: 0,
-        };
+        let attr = KvmDeviceAttr { group, attr, addr: val.as_mut_ptr() as _, _flags: 0 };
         unsafe { kvm_get_device_attr(self, &attr) }.context(kvm_error::DeviceAttr)?;
         Ok(unsafe { val.assume_init() })
     }

@@ -32,7 +32,7 @@ use std::path::Path;
 use bitflags::bitflags;
 use snafu::Snafu;
 
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -45,10 +45,7 @@ pub enum Error {
     #[snafu(display("PCI bus error"), context(false))]
     PciBus { source: crate::pci::Error },
     #[snafu(display("Cannot access file {path:?}"))]
-    AccessFile {
-        path: Box<Path>,
-        error: std::io::Error,
-    },
+    AccessFile { path: Box<Path>, error: std::io::Error },
     #[snafu(display("Error from OS"), context(false))]
     System { error: std::io::Error },
     #[snafu(display("Failed to create a poll"))]

@@ -15,7 +15,7 @@
 use std::ptr::null_mut;
 
 use assert_matches::assert_matches;
-use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_READ, PROT_WRITE, mmap};
+use libc::{mmap, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
 use crate::arch::reg::Reg;
 use crate::ffi;
@@ -80,20 +80,10 @@ fn test_vcpu_run() {
 
     let prot = PROT_WRITE | PROT_READ;
     let flag = MAP_ANONYMOUS | MAP_PRIVATE;
-    let user_mem = ffi!(
-        unsafe { mmap(null_mut(), 0x4000, prot, flag, -1, 0,) },
-        MAP_FAILED
-    )
-    .unwrap();
-    let mmap_option = MemMapOption {
-        read: true,
-        write: true,
-        exec: true,
-        ..Default::default()
-    };
-    memory
-        .mem_map(0, 0x4000, user_mem as usize, mmap_option)
-        .unwrap();
+    let user_mem =
+        ffi!(unsafe { mmap(null_mut(), 0x4000, prot, flag, -1, 0,) }, MAP_FAILED).unwrap();
+    let mmap_option = MemMapOption { read: true, write: true, exec: true, ..Default::default() };
+    memory.mem_map(0, 0x4000, user_mem as usize, mmap_option).unwrap();
 
     const CODE: [u8; 20] = [
         0x00, 0x00, 0x8a, 0xd2, // mov x0, #0x5000
@@ -109,19 +99,11 @@ fn test_vcpu_run() {
     vcpu.set_regs(&[(Reg::Pc, 0x1000)]).unwrap();
     assert_matches!(
         vcpu.run(VmEntry::None),
-        Ok(VmExit::Mmio {
-            addr: 0x5000,
-            write: None,
-            size: 8
-        })
+        Ok(VmExit::Mmio { addr: 0x5000, write: None, size: 8 })
     );
     assert_matches!(
         vcpu.run(VmEntry::Mmio { data: 0x10 }),
-        Ok(VmExit::Mmio {
-            addr: 0x5008,
-            write: Some(0x14),
-            size: 8
-        })
+        Ok(VmExit::Mmio { addr: 0x5008, write: Some(0x14), size: 8 })
     );
     assert_matches!(vcpu.run(VmEntry::Shutdown), Ok(VmExit::Shutdown))
 }

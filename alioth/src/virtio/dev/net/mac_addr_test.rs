@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::de::Visitor;
 use serde::de::value::Error;
+use serde::de::Visitor;
 
 use super::{MacAddr, MacAddrVisitor};
 
@@ -23,19 +23,7 @@ fn test_mac_addr_visitor() {
         MacAddrVisitor.visit_borrowed_str::<Error>("ea:d7:a8:e8:c6:2f"),
         Ok(MacAddr([0xea, 0xd7, 0xa8, 0xe8, 0xc6, 0x2f]))
     );
-    assert!(
-        MacAddrVisitor
-            .visit_borrowed_str::<Error>("ea:d7:a8:e8:c6")
-            .is_err()
-    );
-    assert!(
-        MacAddrVisitor
-            .visit_borrowed_str::<Error>("ea:d7:a8:e8:c6:ac:ac")
-            .is_err()
-    );
-    assert!(
-        MacAddrVisitor
-            .visit_borrowed_str::<Error>("ea:d7:a8:e8:c6:2g")
-            .is_err()
-    );
+    assert!(MacAddrVisitor.visit_borrowed_str::<Error>("ea:d7:a8:e8:c6").is_err());
+    assert!(MacAddrVisitor.visit_borrowed_str::<Error>("ea:d7:a8:e8:c6:ac:ac").is_err());
+    assert!(MacAddrVisitor.visit_borrowed_str::<Error>("ea:d7:a8:e8:c6:2g").is_err());
 }

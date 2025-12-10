@@ -26,7 +26,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use snafu::ResultExt;
 
-use crate::hv::{Hypervisor, Result, VmConfig, error};
+use crate::hv::{error, Hypervisor, Result, VmConfig};
 use crate::sys::hvf::hv_vm_create;
 use crate::sys::os::os_release;
 

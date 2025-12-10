@@ -14,16 +14,12 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, parse_macro_input};
+use syn::{parse_macro_input, DeriveInput};
 
 pub fn derive_layout(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let syn::Data::Struct(ref data) = input.data else {
-        panic!()
-    };
-    let syn::Fields::Named(ref fields) = data.fields else {
-        panic!()
-    };
+    let syn::Data::Struct(ref data) = input.data else { panic!() };
+    let syn::Fields::Named(ref fields) = data.fields else { panic!() };
     let name = input.ident;
     let layout_consts = fields.named.iter().map(|field| {
         let Some(ref field_ident) = field.ident else {

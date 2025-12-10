@@ -22,9 +22,9 @@ use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
 use crate::arch::layout::{DEVICE_TREE_START, KERNEL_IMAGE_START};
 use crate::arch::reg::{Pstate, Reg};
-use crate::loader::{InitState, Result, error, search_initramfs_address};
-use crate::mem::MemRegionEntry;
+use crate::loader::{error, search_initramfs_address, InitState, Result};
 use crate::mem::mapped::RamBus;
+use crate::mem::MemRegionEntry;
 
 #[repr(C)]
 #[derive(Debug, FromBytes, Immutable, IntoBytes)]
@@ -50,22 +50,15 @@ pub fn load<P: AsRef<Path>>(
     _cmdline: Option<&CStr>,
     initramfs: Option<P>,
 ) -> Result<InitState> {
-    let access_kernel = error::AccessFile {
-        path: kernel.as_ref(),
-    };
+    let access_kernel = error::AccessFile { path: kernel.as_ref() };
     let kernel = File::open(&kernel).context(access_kernel)?;
     let kernel_meta = kernel.metadata().context(access_kernel)?;
     let mut kernel = BufReader::new(kernel);
     let mut header = ImageHeader::new_zeroed();
-    kernel
-        .read_exact(header.as_mut_bytes())
-        .context(access_kernel)?;
+    kernel.read_exact(header.as_mut_bytes()).context(access_kernel)?;
     if header.magic != IMAGE_MAGIC {
-        return error::MissingMagic {
-            magic: IMAGE_MAGIC as u64,
-            found: header.magic as u64,
-        }
-        .fail();
+        return error::MissingMagic { magic: IMAGE_MAGIC as u64, found: header.magic as u64 }
+            .fail();
     }
     if header.image_size == 0 {
         header.text_offset = 0x80000;
@@ -74,16 +67,11 @@ pub fn load<P: AsRef<Path>>(
     let kernel_image_start = KERNEL_IMAGE_START + header.text_offset;
     memory.write_range(kernel_image_start, kernel_meta.len(), kernel)?;
     let kernel_image_end = KERNEL_IMAGE_START + header.text_offset + kernel_meta.len();
-    log::info!(
-        "kernel loaded at {kernel_image_start:#x} - {:#x}",
-        kernel_image_end - 1
-    );
+    log::info!("kernel loaded at {kernel_image_start:#x} - {:#x}", kernel_image_end - 1);
 
     let initramfs_range;
     if let Some(initramfs) = initramfs {
-        let access_initramfs = error::AccessFile {
-            path: initramfs.as_ref(),
-        };
+        let access_initramfs = error::AccessFile { path: initramfs.as_ref() };
         let initramfs = File::open(&initramfs).context(access_initramfs)?;
         let initramfs_size = initramfs.metadata().context(access_initramfs)?.len();
         let initramfs_gpa =
@@ -93,10 +81,7 @@ pub fn load<P: AsRef<Path>>(
         }
         let initramfs_end = initramfs_gpa + initramfs_size;
         memory.write_range(initramfs_gpa, initramfs_size, initramfs)?;
-        log::info!(
-            "initramfs loaded at {initramfs_gpa:#x} - {:#x}",
-            initramfs_end - 1,
-        );
+        log::info!("initramfs loaded at {initramfs_gpa:#x} - {:#x}", initramfs_end - 1,);
         initramfs_range = Some(initramfs_gpa..initramfs_end);
     } else {
         initramfs_range = None;

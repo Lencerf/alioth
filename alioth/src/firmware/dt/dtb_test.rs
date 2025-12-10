@@ -14,8 +14,8 @@
 
 use rstest::rstest;
 
-use crate::firmware::dt::PropVal;
 use crate::firmware::dt::dtb::StringBlock;
+use crate::firmware::dt::PropVal;
 
 #[test]
 fn test_string_block() {

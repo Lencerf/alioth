@@ -22,10 +22,7 @@ fn test_val_size() {
     assert_eq!(PropVal::String("s".to_owned()).size(), 2);
     assert_eq!(PropVal::Str("s").size(), 2);
     assert_eq!(PropVal::PHandle(1).size(), 4);
-    assert_eq!(
-        PropVal::StringList(vec!["s1".to_owned(), "s12".to_owned()]).size(),
-        7
-    );
+    assert_eq!(PropVal::StringList(vec!["s1".to_owned(), "s12".to_owned()]).size(), 7);
     assert_eq!(PropVal::U32List(vec![1, 2]).size(), 8);
     assert_eq!(PropVal::U64List(vec![1, 3]).size(), 16);
     assert_eq!(PropVal::Bytes(vec![1, 2, 3, 4]).size(), 4);

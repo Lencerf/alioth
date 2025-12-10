@@ -19,12 +19,12 @@ use std::mem::size_of;
 use std::ops::Range;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileExt;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 use libc::{PROT_READ, PROT_WRITE};
 use parking_lot::{Mutex, RwLock};
-use zerocopy::{FromBytes, transmute};
+use zerocopy::{transmute, FromBytes};
 
 use crate::errors::BoxTrace;
 use crate::hv::{IrqFd, MsiSender};
@@ -36,8 +36,8 @@ use crate::pci::cap::{
     NullCap, PciCap, PciCapHdr, PciCapId,
 };
 use crate::pci::config::{
-    BAR_IO, Command, CommonHeader, ConfigHeader, DeviceHeader, EmulatedHeader, HeaderType,
-    PciConfig, PciConfigArea, Status,
+    Command, CommonHeader, ConfigHeader, DeviceHeader, EmulatedHeader, HeaderType, PciConfig,
+    PciConfigArea, Status, BAR_IO,
 };
 use crate::pci::{self, Pci, PciBar};
 use crate::sys::vfio::{
@@ -45,7 +45,7 @@ use crate::sys::vfio::{
     VfioRegionInfoFlag,
 };
 use crate::vfio::device::Device;
-use crate::vfio::{Result, error};
+use crate::vfio::{error, Result};
 use crate::{align_down, align_up, mem};
 
 fn round_up_range(range: Range<usize>) -> Range<usize> {
@@ -99,10 +99,7 @@ where
     };
     let mut region = MemRegion {
         callbacks: Mutex::new(vec![]),
-        entries: vec![MemRegionEntry {
-            size: region_info.size,
-            type_: MemRegionType::Hidden,
-        }],
+        entries: vec![MemRegionEntry { size: region_info.size, type_: MemRegionType::Hidden }],
         ranges: vec![],
     };
     if excluded_page1.start > 0 {
@@ -305,18 +302,12 @@ where
     }
 
     fn read(&self, offset: u64, size: u8) -> mem::Result<u64> {
-        log::trace!(
-            "{}: emulated read at {offset:#x}, size={size}",
-            self.cdev.name
-        );
+        log::trace!("{}: emulated read at {offset:#x}, size={size}", self.cdev.name);
         self.cdev.dev.read(self.offset + offset, size)
     }
 
     fn write(&self, offset: u64, size: u8, val: u64) -> mem::Result<Action> {
-        log::trace!(
-            "{}: emulated write at {offset:#x}, val={val:#x}, size={size}",
-            self.cdev.name
-        );
+        log::trace!("{}: emulated write at {offset:#x}, val={val:#x}, size={size}", self.cdev.name);
         self.cdev.dev.write(self.offset + offset, size, val)?;
         Ok(Action::None)
     }
@@ -429,17 +420,13 @@ where
             let msix_cap_mmio = MsixCapMmio::new(cap);
             masked_caps.push((offset as u64, Box::new(msix_cap_mmio)));
             if let Some((offset, hdr)) = msi_info {
-                let null_cap = NullCap {
-                    size: hdr.control.cap_size(),
-                    next: hdr.header.next,
-                };
+                let null_cap = NullCap { size: hdr.control.cap_size(), next: hdr.header.next };
                 masked_caps.push((offset as u64, Box::new(null_cap)));
             }
         } else if let Some((offset, hdr)) = msi_info {
             let count = 1 << hdr.control.multi_msg_cap();
-            let irqfds = (0..count)
-                .map(|_| msi_sender.create_irqfd())
-                .collect::<Result<Box<_>, _>>()?;
+            let irqfds =
+                (0..count).map(|_| msi_sender.create_irqfd()).collect::<Result<Box<_>, _>>()?;
 
             let mut eventfds = [-1; 32];
             for (fd, irqfd) in zip(&mut eventfds, &irqfds) {
@@ -497,14 +484,10 @@ where
             None => 0,
         };
         let msix_entries = RwLock::new(
-            (0..msix_count)
-                .map(|_| MsixTableMmioEntry::Entry(MsixTableEntry::default()))
-                .collect(),
+            (0..msix_count).map(|_| MsixTableMmioEntry::Entry(MsixTableEntry::default())).collect(),
         );
 
-        let msix_table = Arc::new(MsixTableMmio {
-            entries: msix_entries,
-        });
+        let msix_table = Arc::new(MsixTableMmio { entries: msix_entries });
 
         let mut bars = [const { PciBar::Empty }; 6];
         let bar_vals = config_header.bars();
@@ -536,9 +519,7 @@ where
             let index = index as usize;
             let bar_val = bar_vals[index];
             if bar_val & BAR_IO == BAR_IO {
-                let MemRange::Emulated(range) = &region.ranges[0] else {
-                    unreachable!()
-                };
+                let MemRange::Emulated(range) = &region.ranges[0] else { unreachable!() };
                 bars[index] = PciBar::Io(Arc::new(IoRegion {
                     range: range.clone(),
                     callbacks: Mutex::new(vec![]),
@@ -688,9 +669,7 @@ where
             );
         } else {
             log::trace!("{name}: emulated BAR write at {offset:#x}, size={size}, val={val:#x}",);
-            self.cdev
-                .dev
-                .write(self.cdev_offset + offset as u64, size, val)?;
+            self.cdev.dev.write(self.cdev_offset + offset as u64, size, val)?;
         }
         Ok(Action::None)
     }

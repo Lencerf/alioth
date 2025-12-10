@@ -21,14 +21,12 @@ use snafu::ResultExt;
 
 use crate::arch::layout::MEM_64_START;
 use crate::arch::reg::{Cr0, DtReg, DtRegVal, Reg, Rflags, SReg, SegAccess, SegReg, SegRegVal};
-use crate::loader::{InitState, Result, error};
+use crate::loader::{error, InitState, Result};
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{MemRegion, MemRegionType, Memory};
 
 pub fn load<P: AsRef<Path>>(memory: &Memory, path: P) -> Result<(InitState, ArcMemPages)> {
-    let access_firmware = error::AccessFile {
-        path: path.as_ref(),
-    };
+    let access_firmware = error::AccessFile { path: path.as_ref() };
     let mut file = File::open(&path).context(access_firmware)?;
     let size = file.metadata().context(access_firmware)?.len();
     if size & 0xfff != 0 {
@@ -37,45 +35,17 @@ pub fn load<P: AsRef<Path>>(memory: &Memory, path: P) -> Result<(InitState, ArcM
 
     let mut rom =
         ArcMemPages::from_anonymous(size as usize, None, None).context(error::AddMemSlot)?;
-    file.read_exact(rom.as_slice_mut())
-        .context(access_firmware)?;
+    file.read_exact(rom.as_slice_mut()).context(access_firmware)?;
 
     let gpa = MEM_64_START - size;
-    let region = Arc::new(MemRegion::with_dev_mem(
-        rom.clone(),
-        MemRegionType::Reserved,
-    ));
+    let region = Arc::new(MemRegion::with_dev_mem(rom.clone(), MemRegionType::Reserved));
     memory.add_region(gpa, region).context(error::AddMemSlot)?;
-    let boot_cs = SegRegVal {
-        selector: 0xf000,
-        base: 0xffff0000,
-        limit: 0xffff,
-        access: SegAccess(0x9a),
-    };
-    let boot_ds = SegRegVal {
-        selector: 0x0,
-        base: 0x0,
-        limit: 0xffff,
-        access: SegAccess(0x93),
-    };
-    let boot_ss = SegRegVal {
-        selector: 0x0,
-        base: 0x0,
-        limit: 0xffff,
-        access: SegAccess(0x92),
-    };
-    let boot_tr = SegRegVal {
-        selector: 0x0,
-        base: 0x0,
-        limit: 0xffff,
-        access: SegAccess(0x83),
-    };
-    let boot_ldtr = SegRegVal {
-        selector: 0x0,
-        base: 0x0,
-        limit: 0xffff,
-        access: SegAccess(0x82),
-    };
+    let boot_cs =
+        SegRegVal { selector: 0xf000, base: 0xffff0000, limit: 0xffff, access: SegAccess(0x9a) };
+    let boot_ds = SegRegVal { selector: 0x0, base: 0x0, limit: 0xffff, access: SegAccess(0x93) };
+    let boot_ss = SegRegVal { selector: 0x0, base: 0x0, limit: 0xffff, access: SegAccess(0x92) };
+    let boot_tr = SegRegVal { selector: 0x0, base: 0x0, limit: 0xffff, access: SegAccess(0x83) };
+    let boot_ldtr = SegRegVal { selector: 0x0, base: 0x0, limit: 0xffff, access: SegAccess(0x82) };
     let init = InitState {
         regs: vec![
             (Reg::Rax, 0),
@@ -116,20 +86,8 @@ pub fn load<P: AsRef<Path>>(memory: &Memory, path: P) -> Result<(InitState, ArcM
             (SegReg::Ldtr, boot_ldtr),
         ],
         dt_regs: vec![
-            (
-                DtReg::Idtr,
-                DtRegVal {
-                    base: 0,
-                    limit: 0xffff,
-                },
-            ),
-            (
-                DtReg::Gdtr,
-                DtRegVal {
-                    base: 0,
-                    limit: 0xffff,
-                },
-            ),
+            (DtReg::Idtr, DtRegVal { base: 0, limit: 0xffff }),
+            (DtReg::Gdtr, DtRegVal { base: 0, limit: 0xffff }),
         ],
         initramfs: None,
     };

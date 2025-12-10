@@ -147,11 +147,7 @@ macro_rules! ioctl_write_buf {
         }
     };
     ($name:ident, $type_:expr, $nr:expr, $ty:ident) => {
-        $crate::ioctl_write_buf!(
-            $name,
-            $crate::sys::ioctl::ioctl_iow::<$ty<0>>($type_, $nr),
-            $ty
-        );
+        $crate::ioctl_write_buf!($name, $crate::sys::ioctl::ioctl_iow::<$ty<0>>($type_, $nr), $ty);
     };
 }
 
@@ -174,11 +170,7 @@ macro_rules! ioctl_writeread {
         }
     };
     ($name:ident, $type_:expr, $nr:expr, $ty:ty) => {
-        $crate::ioctl_writeread!(
-            $name,
-            $crate::sys::ioctl::ioctl_iowr::<$ty>($type_, $nr),
-            $ty
-        );
+        $crate::ioctl_writeread!($name, $crate::sys::ioctl::ioctl_iowr::<$ty>($type_, $nr), $ty);
     };
     ($name:ident, $code:expr) => {
         #[allow(clippy::missing_safety_doc)]

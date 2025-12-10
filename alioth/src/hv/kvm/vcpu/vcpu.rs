@@ -27,7 +27,7 @@ use std::os::fd::{OwnedFd, RawFd};
 use std::ptr::null_mut;
 use std::sync::Arc;
 
-use libc::{MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
+use libc::{mmap, munmap, MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE};
 use snafu::ResultExt;
 
 #[cfg(target_arch = "x86_64")]
@@ -37,9 +37,9 @@ use crate::arch::reg::{DtReg, DtRegVal, SegReg, SegRegVal};
 use crate::arch::reg::{Reg, SReg};
 use crate::ffi;
 use crate::hv::kvm::vm::VmInner;
-use crate::hv::kvm::{KvmError, kvm_error};
-use crate::hv::{Error, Result, Vcpu, VmEntry, VmExit, error};
-use crate::sys::kvm::{KvmExit, KvmRun, kvm_run};
+use crate::hv::kvm::{kvm_error, KvmError};
+use crate::hv::{error, Error, Result, Vcpu, VmEntry, VmExit};
+use crate::sys::kvm::{kvm_run, KvmExit, KvmRun};
 
 pub(super) struct KvmRunBlock {
     addr: usize,
@@ -49,15 +49,10 @@ pub(super) struct KvmRunBlock {
 impl KvmRunBlock {
     pub unsafe fn new(fd: RawFd, mmap_size: usize) -> Result<KvmRunBlock, KvmError> {
         let prot = PROT_READ | PROT_WRITE;
-        let addr = ffi!(
-            unsafe { mmap(null_mut(), mmap_size, prot, MAP_SHARED, fd, 0,) },
-            MAP_FAILED
-        )
-        .context(kvm_error::MmapVcpuFd)?;
-        Ok(KvmRunBlock {
-            addr: addr as usize,
-            size: mmap_size,
-        })
+        let addr =
+            ffi!(unsafe { mmap(null_mut(), mmap_size, prot, MAP_SHARED, fd, 0,) }, MAP_FAILED)
+                .context(kvm_error::MmapVcpuFd)?;
+        Ok(KvmRunBlock { addr: addr as usize, size: mmap_size })
     }
 
     pub(super) unsafe fn data_slice<T>(&self, offset: usize, count: usize) -> &[T] {
@@ -175,10 +170,7 @@ impl Vcpu for KvmVcpu {
                 KvmExit::MMIO => self.handle_mmio(),
                 KvmExit::SHUTDOWN => Ok(VmExit::Shutdown),
                 KvmExit::SYSTEM_EVENT => self.handle_system_event(),
-                reason => error::VmExit {
-                    msg: format!("unkown kvm exit: {reason:#x?}"),
-                }
-                .fail(),
+                reason => error::VmExit { msg: format!("unkown kvm exit: {reason:#x?}") }.fail(),
             },
         }
     }

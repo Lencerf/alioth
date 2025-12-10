@@ -28,12 +28,7 @@ struct TestIrqFdInner {
 
 impl Default for TestIrqFdInner {
     fn default() -> Self {
-        Self {
-            addr_hi: 0,
-            addr_lo: 0,
-            data: 0,
-            masked: true,
-        }
+        Self { addr_hi: 0, addr_lo: 0, data: 0, masked: true }
     }
 }
 

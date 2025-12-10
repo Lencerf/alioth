@@ -31,10 +31,7 @@ pub struct Notifier {
 
 impl Notifier {
     pub fn new() -> Result<Self> {
-        Ok(Notifier {
-            fd: File::open("/dev/null")?.into(),
-            registered: None,
-        })
+        Ok(Notifier { fd: File::open("/dev/null")?.into(), registered: None })
     }
 
     pub fn notify(&self) -> Result<()> {

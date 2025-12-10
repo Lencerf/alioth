@@ -15,10 +15,10 @@
 use assert_matches::assert_matches;
 use rstest::rstest;
 
-use crate::device::pvpanic::{PVPANIC_DEVICE_ID, PVPANIC_VENDOR_ID, PvPanic, PvPanicBar};
+use crate::device::pvpanic::{PvPanic, PvPanicBar, PVPANIC_DEVICE_ID, PVPANIC_VENDOR_ID};
 use crate::mem::emulated::{Action, Mmio};
+use crate::pci::config::{offset_bar, CommonHeader, HeaderType, BAR_MEM64, BAR_PREFETCHABLE};
 use crate::pci::Pci;
-use crate::pci::config::{BAR_MEM64, BAR_PREFETCHABLE, CommonHeader, HeaderType, offset_bar};
 
 #[rstest]
 #[case(CommonHeader::OFFSET_VENDOR, 2, PVPANIC_VENDOR_ID as u64)]

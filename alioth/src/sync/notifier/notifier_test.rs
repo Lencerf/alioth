@@ -23,12 +23,8 @@ fn test_notifier() {
     let mut n2 = Notifier::new().unwrap();
 
     let mut poll = Poll::new().unwrap();
-    poll.registry()
-        .register(&mut n1, Token(1), Interest::READABLE)
-        .unwrap();
-    poll.registry()
-        .register(&mut n2, Token(2), Interest::READABLE)
-        .unwrap();
+    poll.registry().register(&mut n1, Token(1), Interest::READABLE).unwrap();
+    poll.registry().register(&mut n2, Token(2), Interest::READABLE).unwrap();
 
     n1.notify().unwrap();
     n2.notify().unwrap();

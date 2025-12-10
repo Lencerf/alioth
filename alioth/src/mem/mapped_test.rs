@@ -44,9 +44,7 @@ fn test_ram_bus_read() {
         bus.add(PAGE_SIZE, mem1).unwrap();
     }
 
-    let data = MyStruct {
-        data: [1, 2, 3, 4, 5, 6, 7, 8],
-    };
+    let data = MyStruct { data: [1, 2, 3, 4, 5, 6, 7, 8] };
     let data_size = size_of::<MyStruct>() as u64;
     for gpa in (PAGE_SIZE - data_size)..=PAGE_SIZE {
         bus.write_t(gpa, &data).unwrap();

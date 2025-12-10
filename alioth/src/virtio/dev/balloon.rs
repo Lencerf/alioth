@@ -14,15 +14,15 @@
 
 use std::fmt::Debug;
 use std::io::{IoSlice, IoSliceMut};
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use alioth_macros::Layout;
 use bitflags::bitflags;
-use libc::{_SC_PAGESIZE, sysconf};
-use mio::Registry;
+use libc::{sysconf, _SC_PAGESIZE};
 use mio::event::Event;
+use mio::Registry;
 use parking_lot::RwLock;
 use serde::Deserialize;
 use serde_aco::Help;
@@ -35,7 +35,7 @@ use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevParam, DeviceId, Virtio, WakeEvent};
 use crate::virtio::queue::{QueueReg, Status, VirtQueue};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{FEATURE_BUILT_IN, IrqSender, Result};
+use crate::virtio::{IrqSender, Result, FEATURE_BUILT_IN};
 use crate::{c_enum, ffi, impl_mmio_for_zerocopy, mem};
 
 #[repr(C, align(8))]
@@ -134,10 +134,7 @@ impl Balloon {
             let err = std::io::ErrorKind::Unsupported;
             Err(std::io::Error::from(err))?;
         }
-        let config = BalloonConfig {
-            num_pages: 0,
-            ..Default::default()
-        };
+        let config = BalloonConfig { num_pages: 0, ..Default::default() };
         let mut feature = BalloonFeature::all();
         if !param.free_page_reporting {
             feature.remove(BalloonFeature::PAGE_REPORTING);
@@ -145,10 +142,7 @@ impl Balloon {
         let name = name.into();
         Ok(Balloon {
             name: name.clone(),
-            config: Arc::new(BalloonConfigMmio {
-                config: RwLock::new(config),
-                name,
-            }),
+            config: Arc::new(BalloonConfigMmio { config: RwLock::new(config), name }),
             feature,
             queues: [BalloonQueue::NotExist; 5],
         })
@@ -158,10 +152,7 @@ impl Balloon {
         for buf in desc {
             for bytes in buf.chunks(size_of::<u32>()) {
                 let Ok(page_num) = u32::read_from_bytes(bytes) else {
-                    log::error!(
-                        "{}: inflate: invalid page_num bytes: {bytes:02x?}",
-                        self.name
-                    );
+                    log::error!("{}: inflate: invalid page_num bytes: {bytes:02x?}", self.name);
                     continue;
                 };
                 let gpa = (page_num as u64) << 12;

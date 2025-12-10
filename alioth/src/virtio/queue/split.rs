@@ -14,7 +14,7 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::atomic::{Ordering, fence};
+use std::sync::atomic::{fence, Ordering};
 
 use alioth_macros::Layout;
 use bitflags::bitflags;
@@ -22,7 +22,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::mem::mapped::Ram;
 use crate::virtio::queue::{DescChain, DescFlag, QueueReg, VirtQueue};
-use crate::virtio::{Result, error};
+use crate::virtio::{error, Result};
 
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
@@ -210,12 +210,7 @@ impl<'m> VirtQueue<'m> for SplitQueue<'m> {
         }
         let readable = ram.translate_iov(&readable)?;
         let writable = ram.translate_iov_mut(&writable)?;
-        Ok(Some(DescChain {
-            id: head_id,
-            delta: 1,
-            readable,
-            writable,
-        }))
+        Ok(Some(DescChain { id: head_id, delta: 1, readable, writable }))
     }
 
     fn set_used(&self, index: Self::Index, id: u16, len: u32) {

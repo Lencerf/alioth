@@ -12,26 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 use assert_matches::assert_matches;
 
-use crate::device::pvpanic::{PVPANIC_DEVICE_ID, PVPANIC_VENDOR_ID, PvPanic};
+use crate::device::pvpanic::{PvPanic, PVPANIC_DEVICE_ID, PVPANIC_VENDOR_ID};
 use crate::mem::emulated::{Action, Mmio};
-use crate::pci::Bdf;
 use crate::pci::bus::{Address, PciBus, PciIoBus};
-use crate::pci::config::{BAR_MEM64, BAR_PREFETCHABLE, CommonHeader, offset_bar};
+use crate::pci::config::{offset_bar, CommonHeader, BAR_MEM64, BAR_PREFETCHABLE};
 use crate::pci::segment::PciSegment;
+use crate::pci::Bdf;
 
 #[test]
 fn test_pci_bus() {
     let pci_bus = PciBus::default();
 
-    assert_eq!(
-        pci_bus.reserve(Some(Bdf::new(0, 1, 0))),
-        Some(Bdf::new(0, 1, 0))
-    );
+    assert_eq!(pci_bus.reserve(Some(Bdf::new(0, 1, 0))), Some(Bdf::new(0, 1, 0)));
     let test_dev = Arc::new(PvPanic::new());
     assert_matches!(pci_bus.add(Bdf::new(0, 1, 0), test_dev), None);
 }
@@ -43,10 +40,7 @@ fn test_pci_io_bus() {
     let segment = PciSegment::new();
     assert_matches!(segment.add(Bdf::new(0, 1, 0), test_dev), None);
 
-    let io_bus = PciIoBus {
-        address: AtomicU32::new(0),
-        segment: Arc::new(segment),
-    };
+    let io_bus = PciIoBus { address: AtomicU32::new(0), segment: Arc::new(segment) };
     assert_eq!(io_bus.size(), 8);
 
     let reg_addr = Address::new(true, 0, 1, 0, CommonHeader::OFFSET_VENDOR as u8);
@@ -59,10 +53,7 @@ fn test_pci_io_bus() {
     let reg_addr = Address::new(true, 0, 1, 0, offset_bar(0) as u8);
     assert_matches!(io_bus.write(0, 4, reg_addr.0 as u64), Ok(Action::None));
     assert_matches!(io_bus.write(4, 4, 0xec00_0000), Ok(Action::None));
-    assert_eq!(
-        io_bus.read(4, 4).unwrap(),
-        (0xec00_0000 | BAR_MEM64 | BAR_PREFETCHABLE) as u64
-    );
+    assert_eq!(io_bus.read(4, 4).unwrap(), (0xec00_0000 | BAR_MEM64 | BAR_PREFETCHABLE) as u64);
 
     assert_matches!(io_bus.read(8, 1), Ok(0));
     assert_matches!(io_bus.write(8, 1, 1), Ok(Action::None));
@@ -70,10 +61,7 @@ fn test_pci_io_bus() {
 
 #[test]
 fn test_pci_io_bus_unaligned_address_access() {
-    let io_bus = PciIoBus {
-        address: AtomicU32::new(0),
-        segment: Arc::new(PciSegment::new()),
-    };
+    let io_bus = PciIoBus { address: AtomicU32::new(0), segment: Arc::new(PciSegment::new()) };
 
     let reg_addr = Address::new(true, 0, 1, 0, offset_bar(0) as u8);
     assert_matches!(io_bus.write(0, 4, reg_addr.0 as u64), Ok(Action::None));
@@ -91,10 +79,7 @@ fn test_pci_io_bus_disabled_address() {
     let segment = PciSegment::new();
     assert_matches!(segment.add(Bdf::new(0, 1, 0), test_dev), None);
 
-    let io_bus = PciIoBus {
-        address: AtomicU32::new(0),
-        segment: Arc::new(segment),
-    };
+    let io_bus = PciIoBus { address: AtomicU32::new(0), segment: Arc::new(segment) };
 
     let reg_addr = Address::new(false, 0, 1, 0, offset_bar(0) as u8);
 

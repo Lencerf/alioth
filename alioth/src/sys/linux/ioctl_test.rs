@@ -16,7 +16,7 @@ use super::{ioctl_io, ioctl_ior, ioctl_iow, ioctl_iowr};
 
 #[test]
 fn test_codes() {
-    const KVMIO: u8 = 0xAE;
+    const KVMIO: u8 = 0xae;
     assert_eq!(ioctl_io(KVMIO, 0x01), 0xae01);
     assert_eq!(ioctl_ior::<[u8; 320]>(KVMIO, 0xcc), 0x8140aecc);
     assert_eq!(ioctl_iow::<[u8; 320]>(KVMIO, 0xcd), 0x4140aecd);

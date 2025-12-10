@@ -115,13 +115,7 @@ where
     pub fn new(ctrl: MsiMsgCtrl, irqfds: Box<[F]>) -> Self {
         debug_assert_eq!(irqfds.len(), 1 << ctrl.multi_msg_cap());
         let cap = RwLock::new((
-            MsiCapHdr {
-                header: PciCapHdr {
-                    id: PciCapId::MSI,
-                    next: 0,
-                },
-                control: ctrl,
-            },
+            MsiCapHdr { header: PciCapHdr { id: PciCapId::MSI, next: 0 }, control: ctrl },
             MsiCapBody::default(),
         ));
         Self { cap, irqfds }
@@ -131,16 +125,9 @@ where
         let (hdr, body) = &*self.cap.read();
         let ctrl = &hdr.control;
         let data = &body.data;
-        let msg_mask = if ctrl.ext_msg_data() {
-            0xffff_ffff
-        } else {
-            0xffff
-        };
+        let msg_mask = if ctrl.ext_msg_data() { 0xffff_ffff } else { 0xffff };
         let (addr, msg) = if ctrl.addr_64_cap() {
-            (
-                ((data[1] as u64) << 32) | data[0] as u64,
-                data[2] & msg_mask,
-            )
+            (((data[1] as u64) << 32) | data[0] as u64, data[2] & msg_mask)
         } else {
             (data[0] as u64, data[1] & msg_mask)
         };
@@ -191,7 +178,7 @@ where
         let addr_64_cap = ctrl.addr_64_cap();
         let per_vector_masking_cap = ctrl.per_vector_masking_cap();
         match (offset, size, addr_64_cap, per_vector_masking_cap) {
-            (0x2, 2, _, _) | (0x0, 4, _, _) => {
+            (0x2, 2, ..) | (0x0, 4, ..) => {
                 let new_ctrl = MsiMsgCtrl((val >> ((2 - offset) << 3)) as u16);
 
                 if !ctrl.enable() || !new_ctrl.enable() {
@@ -206,7 +193,7 @@ where
                 need_update |= ctrl.enable() != new_ctrl.enable();
                 ctrl.set_enable(new_ctrl.enable());
             }
-            (0x4, 4, _, _) | (0x8, 4, true, _) | (0xc, 4, false, true) | (0x10, 4, true, true) => {
+            (0x4, 4, ..) | (0x8, 4, true, _) | (0xc, 4, false, true) | (0x10, 4, true, true) => {
                 let data_offset = (offset as usize - size_of::<MsiCapHdr>()) >> 2;
                 let reg = &mut body.data[data_offset];
                 need_update = hdr.control.enable() && *reg != val as u32;
@@ -215,11 +202,8 @@ where
             (0x8, 2 | 4, false, _) | (0xc, 2 | 4, true, _) => {
                 let data_offset = (offset as usize - size_of::<MsiCapHdr>()) >> 2;
                 let reg = &mut body.data[data_offset];
-                let mask = if size == 4 && hdr.control.ext_msg_data_cap() {
-                    0xffff_ffff
-                } else {
-                    0xffff
-                };
+                let mask =
+                    if size == 4 && hdr.control.ext_msg_data_cap() { 0xffff_ffff } else { 0xffff };
                 let new_val = mask_bits!(*reg, val as u32, mask);
                 need_update = hdr.control.enable() && *reg != new_val;
                 *reg = new_val;
@@ -322,12 +306,7 @@ pub struct MsixTableEntry {
 
 impl Default for MsixTableEntry {
     fn default() -> Self {
-        MsixTableEntry {
-            addr_lo: 0,
-            addr_hi: 0,
-            data: 0,
-            control: MsixVectorCtrl(1),
-        }
+        MsixTableEntry { addr_lo: 0, addr_hi: 0, data: 0, control: MsixVectorCtrl(1) }
     }
 }
 
@@ -368,9 +347,7 @@ impl Default for PciCapList {
 
 impl PciCapList {
     pub fn new() -> PciCapList {
-        Self {
-            inner: MmioBus::new(),
-        }
+        Self { inner: MmioBus::new() }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -409,11 +386,7 @@ impl TryFrom<Vec<Box<dyn PciCap>>> for PciCapList {
         let mut ptr = size_of::<DeviceHeader>() as u64;
         let num_caps = caps.len();
         for (index, mut cap) in caps.into_iter().enumerate() {
-            let next = if index == num_caps - 1 {
-                0
-            } else {
-                align_up!(ptr + Mmio::size(&cap), 2)
-            };
+            let next = if index == num_caps - 1 { 0 } else { align_up!(ptr + Mmio::size(&cap), 2) };
             cap.set_next(next as u8);
             bus.add(ptr, cap)?;
             ptr = next;
@@ -429,9 +402,7 @@ pub struct MsixCapMmio {
 
 impl MsixCapMmio {
     pub fn new(cap: MsixCap) -> Self {
-        Self {
-            cap: RwLock::new(cap),
-        }
+        Self { cap: RwLock::new(cap) }
     }
 }
 
@@ -554,10 +525,7 @@ where
         let index = offset as usize / size_of::<MsixTableEntry>();
         let mut entries = self.entries.write();
         let Some(entry) = entries.get_mut(index) else {
-            log::error!(
-                "MSI-X table size: {}, accessing index {index}",
-                entries.len()
-            );
+            log::error!("MSI-X table size: {}, accessing index {index}", entries.len());
             return Ok(false);
         };
         let mut state_changed = false;
@@ -595,10 +563,7 @@ where
         let index = offset as usize / size_of::<MsixTableEntry>();
         let entries = self.entries.read();
         let Some(entry) = entries.get(index) else {
-            log::error!(
-                "MSI-X table size: {}, accessing index {index}",
-                entries.len()
-            );
+            log::error!("MSI-X table size: {}, accessing index {index}", entries.len());
             return Ok(0);
         };
         let ret = match offset as usize % size_of::<MsixTableEntry>() {

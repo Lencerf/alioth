@@ -24,10 +24,10 @@ use crate::errors::BoxTrace;
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{self, LayoutChanged};
 use crate::sys::vfio::{
-    VfioDmaMapFlag, VfioDmaUnmapFlag, VfioIommu, VfioIommuType1DmaMap, VfioIommuType1DmaUnmap,
-    vfio_iommu_map_dma, vfio_iommu_unmap_dma, vfio_set_iommu,
+    vfio_iommu_map_dma, vfio_iommu_unmap_dma, vfio_set_iommu, VfioDmaMapFlag, VfioDmaUnmapFlag,
+    VfioIommu, VfioIommuType1DmaMap, VfioIommuType1DmaUnmap,
 };
-use crate::vfio::{Result, error};
+use crate::vfio::{error, Result};
 
 #[derive(Debug)]
 pub struct Container {
@@ -37,13 +37,8 @@ pub struct Container {
 
 impl Container {
     pub fn new(vfio_dev: impl AsRef<Path>) -> Result<Self> {
-        let fd = File::open(&vfio_dev).context(error::AccessDevice {
-            path: vfio_dev.as_ref(),
-        })?;
-        Ok(Container {
-            fd,
-            iommu: Mutex::new(None),
-        })
+        let fd = File::open(&vfio_dev).context(error::AccessDevice { path: vfio_dev.as_ref() })?;
+        Ok(Container { fd, iommu: Mutex::new(None) })
     }
 
     pub fn fd(&self) -> &File {
@@ -56,11 +51,7 @@ impl Container {
             if *current_iommu == iommu {
                 Ok(())
             } else {
-                error::SetContainerIommu {
-                    current: *current_iommu,
-                    new: iommu,
-                }
-                .fail()
+                error::SetContainerIommu { current: *current_iommu, new: iommu }.fail()
             }
         } else {
             unsafe { vfio_set_iommu(&self.fd, iommu) }?;
@@ -94,10 +85,7 @@ impl Container {
             size,
         };
         unsafe { vfio_iommu_unmap_dma(&self.fd, &mut dma_unmap) }?;
-        log::debug!(
-            "container-{}: unmapped: {iova:#018x}, size = {size:#x}",
-            self.fd.as_raw_fd(),
-        );
+        log::debug!("container-{}: unmapped: {iova:#018x}, size = {size:#x}", self.fd.as_raw_fd(),);
         Ok(())
     }
 }

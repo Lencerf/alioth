@@ -15,7 +15,7 @@
 use std::ptr::null_mut;
 
 use assert_matches::assert_matches;
-use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, mmap};
+use libc::{mmap, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE};
 
 use super::*;
 use crate::ffi;
@@ -32,38 +32,18 @@ fn test_mem_map() {
 
     let prot = PROT_WRITE | PROT_READ | PROT_EXEC;
     let flag = MAP_ANONYMOUS | MAP_PRIVATE;
-    let user_mem = ffi!(
-        unsafe { mmap(null_mut(), 0x1000, prot, flag, -1, 0,) },
-        MAP_FAILED
-    )
-    .unwrap();
-    let option_no_write = MemMapOption {
-        read: false,
-        write: true,
-        exec: true,
-        log_dirty: true,
-    };
+    let user_mem =
+        ffi!(unsafe { mmap(null_mut(), 0x1000, prot, flag, -1, 0,) }, MAP_FAILED).unwrap();
+    let option_no_write = MemMapOption { read: false, write: true, exec: true, log_dirty: true };
     assert_matches!(
         vm_memory.mem_map(0x0, 0x1000, user_mem as usize, option_no_write),
         Err(Error::KvmErr { .. })
     );
-    let option_no_exec = MemMapOption {
-        read: false,
-        write: true,
-        exec: true,
-        log_dirty: true,
-    };
+    let option_no_exec = MemMapOption { read: false, write: true, exec: true, log_dirty: true };
     assert_matches!(
         vm_memory.mem_map(0x0, 0x1000, user_mem as usize, option_no_exec),
         Err(Error::KvmErr { .. })
     );
-    let option = MemMapOption {
-        read: true,
-        write: false,
-        exec: true,
-        log_dirty: true,
-    };
-    vm_memory
-        .mem_map(0x0, 0x1000, user_mem as usize, option)
-        .unwrap();
+    let option = MemMapOption { read: true, write: false, exec: true, log_dirty: true };
+    vm_memory.mem_map(0x0, 0x1000, user_mem as usize, option).unwrap();
 }

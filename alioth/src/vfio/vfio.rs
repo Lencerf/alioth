@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_aco::Help;
 use snafu::Snafu;
 
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::sys::vfio::VfioIommu;
 
 #[trace_error]
@@ -39,10 +39,7 @@ pub enum Error {
     #[snafu(display("Error from OS"), context(false))]
     System { error: std::io::Error },
     #[snafu(display("Cannot access device {path:?}"))]
-    AccessDevice {
-        path: Box<Path>,
-        error: std::io::Error,
-    },
+    AccessDevice { path: Box<Path>, error: std::io::Error },
     #[snafu(display("Not supported PCI header type {ty:#x}"))]
     NotSupportedHeader { ty: u8 },
     #[snafu(display("Setting container iommu to {new:?}, but it already has {current:?}"))]

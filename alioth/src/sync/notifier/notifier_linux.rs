@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Result, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd};
 
-use libc::{EFD_CLOEXEC, EFD_NONBLOCK, eventfd};
+use libc::{eventfd, EFD_CLOEXEC, EFD_NONBLOCK};
 use mio::event::Source;
 use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
@@ -31,9 +31,7 @@ pub struct Notifier {
 impl Notifier {
     pub fn new() -> Result<Self> {
         let fd = ffi!(unsafe { eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK) })?;
-        Ok(Notifier {
-            fd: unsafe { File::from_raw_fd(fd) },
-        })
+        Ok(Notifier { fd: unsafe { File::from_raw_fd(fd) } })
     }
 
     pub fn notify(&self) -> Result<()> {

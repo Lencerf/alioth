@@ -23,10 +23,10 @@ use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 use crate::ffi;
 use crate::utils::uds::{recv_msg_with_fds, send_msg_with_fds};
 use crate::virtio::vu::bindings::{
-    DeviceConfig, FsMap, MAX_CONFIG_SIZE, MemorySingleRegion, Message, MessageFlag, VirtqAddr,
-    VirtqState, VuBackMsg, VuFrontMsg,
+    DeviceConfig, FsMap, MemorySingleRegion, Message, MessageFlag, VirtqAddr, VirtqState,
+    VuBackMsg, VuFrontMsg, MAX_CONFIG_SIZE,
 };
-use crate::virtio::vu::{Result, error};
+use crate::virtio::vu::{error, Result};
 
 fn send<T, R>(
     mut conn: &UnixStream,
@@ -45,11 +45,8 @@ where
         flag: MessageFlag::sender(),
         size: (size_of::<T>() + in_.len()) as u32,
     };
-    let bufs = [
-        IoSlice::new(vhost_msg.as_bytes()),
-        IoSlice::new(payload.as_bytes()),
-        IoSlice::new(in_),
-    ];
+    let bufs =
+        [IoSlice::new(vhost_msg.as_bytes()), IoSlice::new(payload.as_bytes()), IoSlice::new(in_)];
     let done = send_msg_with_fds(conn, &bufs, fds)?;
     let want = size_of_val(&vhost_msg) + vhost_msg.size as usize;
     if done != want {
@@ -73,25 +70,13 @@ where
 
     let size = conn.read_vectored(&mut bufs)?;
     if size != expect_size {
-        return error::MsgSize {
-            want: expect_size,
-            got: size,
-        }
-        .fail();
+        return error::MsgSize { want: expect_size, got: size }.fail();
     }
     if resp.request != req {
-        return error::Response {
-            want: req,
-            got: resp.request,
-        }
-        .fail();
+        return error::Response { want: req, got: resp.request }.fail();
     }
     if resp.size as usize != resp_size {
-        return error::PayloadSize {
-            want: resp_size,
-            got: resp.size,
-        }
-        .fail();
+        return error::PayloadSize { want: resp_size, got: resp.size }.fail();
     }
     if size_of::<R>() == 0 && ret_code != 0 {
         return error::RequestErr { ret: ret_code, req }.fail();
@@ -104,15 +89,9 @@ fn reply<T>(conn: &UnixStream, req: u32, payload: &T, fds: &[BorrowedFd]) -> Res
 where
     T: IntoBytes + Immutable,
 {
-    let msg = Message {
-        request: req,
-        flag: MessageFlag::receiver(),
-        size: size_of_val(payload) as _,
-    };
-    let bufs = [
-        IoSlice::new(msg.as_bytes()),
-        IoSlice::new(payload.as_bytes()),
-    ];
+    let msg =
+        Message { request: req, flag: MessageFlag::receiver(), size: size_of_val(payload) as _ };
+    let bufs = [IoSlice::new(msg.as_bytes()), IoSlice::new(payload.as_bytes())];
     let done = send_msg_with_fds(conn, &bufs, fds)?;
     let want = size_of_val(&msg) + size_of_val(payload);
     if done != want {
@@ -127,11 +106,7 @@ fn reply_config(mut conn: &UnixStream, config: &DeviceConfig, buf: &[u8]) -> Res
         flag: MessageFlag::receiver(),
         size: (size_of_val(config) + buf.len()) as _,
     };
-    let bufs = [
-        IoSlice::new(msg.as_bytes()),
-        IoSlice::new(config.as_bytes()),
-        IoSlice::new(buf),
-    ];
+    let bufs = [IoSlice::new(msg.as_bytes()), IoSlice::new(config.as_bytes()), IoSlice::new(buf)];
     let done = conn.write_vectored(&bufs)?;
     let want = size_of_val(&msg) + msg.size as usize;
     if done != want {
@@ -149,11 +124,7 @@ where
     let mut bufs = [IoSliceMut::new(msg.as_mut_bytes())];
     let size = recv_msg_with_fds(conn, &mut bufs, fds)?;
     if size != size_of::<T>() {
-        error::MsgSize {
-            want: size_of::<T>(),
-            got: size,
-        }
-        .fail()
+        error::MsgSize { want: size_of::<T>(), got: size }.fail()
     } else {
         Ok(msg)
     }
@@ -161,18 +132,11 @@ where
 
 fn recv_config(mut conn: &UnixStream, buf: &mut [u8]) -> Result<DeviceConfig> {
     let mut dev_config = DeviceConfig::new_zeroed();
-    let mut bufs = [
-        IoSliceMut::new(dev_config.as_mut_bytes()),
-        IoSliceMut::new(buf),
-    ];
+    let mut bufs = [IoSliceMut::new(dev_config.as_mut_bytes()), IoSliceMut::new(buf)];
     let got = conn.read_vectored(&mut bufs)?;
     let want = size_of::<DeviceConfig>() + dev_config.size as usize;
     if got != want {
-        return error::PayloadSize {
-            want,
-            got: got as u32,
-        }
-        .fail();
+        return error::PayloadSize { want, got: got as u32 }.fail();
     }
     Ok(dev_config)
 }
@@ -184,9 +148,8 @@ pub struct VuSession {
 
 impl VuSession {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = UnixStream::connect(&path).context(error::AccessSocket {
-            path: path.as_ref(),
-        })?;
+        let conn =
+            UnixStream::connect(&path).context(error::AccessSocket { path: path.as_ref() })?;
         Ok(VuSession { conn })
     }
 

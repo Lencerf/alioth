@@ -18,7 +18,7 @@ use std::io::ErrorKind;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::ptr::null_mut;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
@@ -26,17 +26,17 @@ use snafu::ResultExt;
 
 use crate::arch::reg::{MpidrEl1, SReg};
 use crate::hv::hvf::vcpu::HvfVcpu;
-use crate::hv::hvf::{OsObject, check_ret};
+use crate::hv::hvf::{check_ret, OsObject};
 use crate::hv::{
-    GicV2, GicV2m, GicV3, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, Its, MemMapOption,
-    MsiSender, Result, Vm, VmMemory, error,
+    error, GicV2, GicV2m, GicV3, IoeventFd, IoeventFdRegistry, IrqFd, IrqSender, Its, MemMapOption,
+    MsiSender, Result, Vm, VmMemory,
 };
 use crate::sys::hvf::{
-    HvMemoryFlag, hv_gic_config_create, hv_gic_config_set_distributor_base,
+    hv_gic_config_create, hv_gic_config_set_distributor_base,
     hv_gic_config_set_msi_interrupt_range, hv_gic_config_set_msi_region_base,
     hv_gic_config_set_redistributor_base, hv_gic_create, hv_gic_get_spi_interrupt_range,
     hv_gic_send_msi, hv_gic_set_spi, hv_vcpu_create, hv_vcpu_set_sys_reg, hv_vcpus_exit,
-    hv_vm_destroy, hv_vm_map, hv_vm_unmap,
+    hv_vm_destroy, hv_vm_map, hv_vm_unmap, HvMemoryFlag,
 };
 
 fn encode_mpidr(id: u32) -> MpidrEl1 {
@@ -363,9 +363,7 @@ impl Vm for HvfVm {
         let mut count = 0;
         let ret = unsafe { hv_gic_get_spi_interrupt_range(&mut spi_base, &mut count) };
         check_ret(ret).context(error::CreateDevice)?;
-        Ok(HvfIrqSender {
-            spi: spi_base + pin as u32,
-        })
+        Ok(HvfIrqSender { spi: spi_base + pin as u32 })
     }
 
     fn create_gic_v3(
@@ -376,9 +374,7 @@ impl Vm for HvfVm {
     ) -> Result<Self::GicV3> {
         let (config, _) = &mut *self.gic_config.lock();
         if config.addr == 0 {
-            *config = OsObject {
-                addr: unsafe { hv_gic_config_create() } as usize,
-            };
+            *config = OsObject { addr: unsafe { hv_gic_config_create() } as usize };
         }
         let ptr = config.addr as *mut _;
         let ret = unsafe { hv_gic_config_set_distributor_base(ptr, distributor_base) };
@@ -392,9 +388,7 @@ impl Vm for HvfVm {
     fn create_gic_v2m(&self, base: u64) -> Result<Self::GicV2m> {
         let (config, _) = &mut *self.gic_config.lock();
         if config.addr == 0 {
-            *config = OsObject {
-                addr: unsafe { hv_gic_config_create() } as usize,
-            };
+            *config = OsObject { addr: unsafe { hv_gic_config_create() } as usize };
         }
 
         let ptr = config.addr as *mut _;

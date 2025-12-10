@@ -28,7 +28,7 @@ use crate::{
     ioctl_writeread,
 };
 
-pub const KVMIO: u8 = 0xAE;
+pub const KVMIO: u8 = 0xae;
 pub const KVM_API_VERSION: i32 = 12;
 
 #[cfg(target_arch = "x86_64")]
@@ -450,9 +450,7 @@ pub struct KvmIrqRouting<const N: usize> {
 
 impl<const N: usize> Debug for KvmIrqRouting<N> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        f.debug_list()
-            .entries(self.entries.iter().take(self.nr as usize))
-            .finish()
+        f.debug_list().entries(self.entries.iter().take(self.nr as usize)).finish()
     }
 }
 
@@ -649,22 +647,12 @@ ioctl_none!(kvm_get_vcpu_mmap_size, KVMIO, 0x04, 0);
 ioctl_writeread_buf!(kvm_get_supported_cpuid, KVMIO, 0x05, KvmCpuid2);
 
 ioctl_write_val!(kvm_create_vcpu, ioctl_io(KVMIO, 0x41), u32);
-ioctl_write_ptr!(
-    kvm_set_user_memory_region,
-    KVMIO,
-    0x46,
-    KvmUserspaceMemoryRegion
-);
+ioctl_write_ptr!(kvm_set_user_memory_region, KVMIO, 0x46, KvmUserspaceMemoryRegion);
 #[cfg(target_arch = "x86_64")]
 ioctl_write_val!(kvm_set_tss_addr, ioctl_io(KVMIO, 0x47));
 #[cfg(target_arch = "x86_64")]
 ioctl_write_ptr!(kvm_set_identity_map_addr, KVMIO, 0x48, u64);
-ioctl_write_ptr!(
-    kvm_set_user_memory_region2,
-    KVMIO,
-    0x49,
-    KvmUserspaceMemoryRegion2
-);
+ioctl_write_ptr!(kvm_set_user_memory_region2, KVMIO, 0x49, KvmUserspaceMemoryRegion2);
 
 #[cfg(target_arch = "x86_64")]
 ioctl_none!(kvm_create_irqchip, KVMIO, 0x60, 0);

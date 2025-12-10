@@ -19,15 +19,15 @@ use std::sync::Arc;
 
 use snafu::{ResultExt, Snafu};
 
-use crate::errors::{BoxTrace, DebugTrace, trace_error};
+use crate::errors::{trace_error, BoxTrace, DebugTrace};
 use crate::mem::mapped::Ram;
 use crate::mem::{self, LayoutUpdated};
 use crate::sys::vhost::{
-    MemoryMultipleRegion, MemoryRegion, VhostFeature, VirtqAddr, VirtqFile, VirtqState,
     vhost_get_backend_features, vhost_get_features, vhost_set_backend_features, vhost_set_features,
     vhost_set_mem_table, vhost_set_owner, vhost_set_virtq_addr, vhost_set_virtq_base,
     vhost_set_virtq_call, vhost_set_virtq_err, vhost_set_virtq_kick, vhost_set_virtq_num,
-    vhost_vsock_set_guest_cid, vhost_vsock_set_running,
+    vhost_vsock_set_guest_cid, vhost_vsock_set_running, MemoryMultipleRegion, MemoryRegion,
+    VhostFeature, VirtqAddr, VirtqFile, VirtqState,
 };
 
 #[trace_error]
@@ -37,10 +37,7 @@ pub enum Error {
     #[snafu(display("Error from OS"), context(false))]
     System { error: std::io::Error },
     #[snafu(display("Cannot access device {path:?}"))]
-    AccessDevice {
-        path: Box<Path>,
-        error: std::io::Error,
-    },
+    AccessDevice { path: Box<Path>, error: std::io::Error },
     #[snafu(display("vhost backend is missing device feature {feature:#x}"))]
     VhostMissingDeviceFeature { feature: u128 },
     #[snafu(display("vhost-{dev} signals an error of queue {index:#x}"))]
@@ -56,9 +53,7 @@ pub struct VhostDev {
 
 impl VhostDev {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let fd = File::open(&path).context(error::AccessDevice {
-            path: path.as_ref(),
-        })?;
+        let fd = File::open(&path).context(error::AccessDevice { path: path.as_ref() })?;
         Ok(VhostDev { fd })
     }
 
@@ -140,11 +135,8 @@ pub struct UpdateVsockMem {
 
 impl LayoutUpdated for UpdateVsockMem {
     fn ram_updated(&self, ram: &Ram) -> mem::Result<()> {
-        let mut table = MemoryMultipleRegion {
-            num: 0,
-            _padding: 0,
-            regions: [MemoryRegion::default(); 64],
-        };
+        let mut table =
+            MemoryMultipleRegion { num: 0, _padding: 0, regions: [MemoryRegion::default(); 64] };
         for (index, (gpa, user_mem)) in ram.iter().enumerate() {
             table.num += 1;
             table.regions[index].gpa = gpa;

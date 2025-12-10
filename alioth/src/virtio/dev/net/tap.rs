@@ -20,8 +20,8 @@ use std::num::NonZeroU16;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::prelude::OpenOptionsExt;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use io_uring::cqueue::Entry as Cqe;
@@ -38,19 +38,19 @@ use zerocopy::{FromBytes, IntoBytes};
 use crate::hv::IoeventFd;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
-use crate::sys::if_tun::{TunFeature, tun_set_iff, tun_set_offload, tun_set_vnet_hdr_sz};
+use crate::sys::if_tun::{tun_set_iff, tun_set_offload, tun_set_vnet_hdr_sz, TunFeature};
 use crate::virtio::dev::net::mac_addr::MacAddr;
 use crate::virtio::dev::net::{
     CtrlAck, CtrlClass, CtrlHdr, CtrlMq, CtrlMqParisSet, NetConfig, NetFeature, VirtioNetHdr,
 };
 use crate::virtio::dev::{DevParam, DeviceId, Result, Virtio, WakeEvent};
 use crate::virtio::queue::{
-    DescChain, QueueReg, Status, VirtQueue, copy_from_reader, copy_to_writer,
+    copy_from_reader, copy_to_writer, DescChain, QueueReg, Status, VirtQueue,
 };
-use crate::virtio::worker::WorkerApi;
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{FEATURE_BUILT_IN, IrqSender, error};
+use crate::virtio::worker::WorkerApi;
+use crate::virtio::{error, IrqSender, FEATURE_BUILT_IN};
 
 #[derive(Debug)]
 pub struct Net {
@@ -109,10 +109,7 @@ fn new_socket(dev_tap: Option<&Path>, blocking: bool) -> Result<File> {
 
 impl Net {
     pub fn new(param: NetTapParam, name: impl Into<Arc<str>>) -> Result<Self> {
-        let mut socket = new_socket(
-            param.tap.as_deref(),
-            matches!(param.api, WorkerApi::IoUring),
-        )?;
+        let mut socket = new_socket(param.tap.as_deref(), matches!(param.api, WorkerApi::IoUring))?;
         let max_queue_pairs = param.queue_pairs.map(From::from).unwrap_or(1);
         setup_socket(&mut socket, param.if_name.as_deref(), max_queue_pairs > 1)?;
         let mut dev_feat = NetFeature::MAC
@@ -151,10 +148,7 @@ impl Net {
         desc: &mut DescChain,
         registry: Option<&Registry>,
     ) -> Result<u32> {
-        let Some(header) = desc
-            .readable
-            .first()
-            .and_then(|b| CtrlHdr::read_from_bytes(b).ok())
+        let Some(header) = desc.readable.first().and_then(|b| CtrlHdr::read_from_bytes(b).ok())
         else {
             return error::InvalidBuffer.fail();
         };

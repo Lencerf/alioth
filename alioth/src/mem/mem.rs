@@ -16,7 +16,7 @@ pub mod addressable;
 pub mod emulated;
 pub mod mapped;
 
-use std::any::{Any, type_name};
+use std::any::{type_name, Any};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_aco::Help;
 use snafu::Snafu;
 
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::hv::{MemMapOption, VmEntry, VmMemory};
 
 use self::addressable::{Addressable, SlotBackend};
@@ -43,10 +43,7 @@ pub enum Error {
     #[snafu(display("(addr={addr:#x}, size={size:#x}) exceeds the address limit"))]
     ExceedsLimit { addr: u64, size: u64 },
     #[snafu(display("{new_item:#x?} overlaps with {exist_item:#x?}"))]
-    Overlap {
-        new_item: [u64; 2],
-        exist_item: [u64; 2],
-    },
+    Overlap { new_item: [u64; 2], exist_item: [u64; 2] },
     #[snafu(display("{addr:#x} is not mapped"))]
     NotMapped { addr: u64 },
     #[snafu(display("Sum of backend range sizes {sum:#x} exceeds the region total size"))]
@@ -64,13 +61,9 @@ pub enum Error {
     #[snafu(display("Failed to read data from source"))]
     Read { error: std::io::Error },
     #[snafu(display("Failed to do MMIO"))]
-    Mmio {
-        source: Box<dyn DebugTrace + Send + Sync + 'static>,
-    },
+    Mmio { source: Box<dyn DebugTrace + Send + Sync + 'static> },
     #[snafu(display("Failed to change memory layout"))]
-    ChangeLayout {
-        source: Box<dyn DebugTrace + Send + Sync + 'static>,
-    },
+    ChangeLayout { source: Box<dyn DebugTrace + Send + Sync + 'static> },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -203,11 +196,7 @@ impl MemRegion {
         let entries_size = self.size();
         let ranges_size = self.ranges.iter().fold(0, |accu, r| accu + r.size());
         if ranges_size > entries_size {
-            return error::BackendTooBig {
-                sum: ranges_size,
-                size: entries_size,
-            }
-            .fail();
+            return error::BackendTooBig { sum: ranges_size, size: entries_size }.fail();
         }
         Ok(())
     }
@@ -227,10 +216,7 @@ pub struct IoRegion {
 
 impl IoRegion {
     pub fn new(range: MmioRange) -> IoRegion {
-        IoRegion {
-            range,
-            callbacks: Mutex::new(vec![]),
-        }
+        IoRegion { range, callbacks: Mutex::new(vec![]) }
     }
 }
 
@@ -319,14 +305,8 @@ impl Memory {
     }
 
     fn map_to_vm(&self, gpa: u64, user_mem: &ArcMemPages) -> Result<(), Error> {
-        let mem_options = MemMapOption {
-            read: true,
-            write: true,
-            exec: true,
-            log_dirty: false,
-        };
-        self.vm_memory
-            .mem_map(gpa, user_mem.size(), user_mem.addr(), mem_options)?;
+        let mem_options = MemMapOption { read: true, write: true, exec: true, log_dirty: false };
+        self.vm_memory.mem_map(gpa, user_mem.size(), user_mem.addr(), mem_options)?;
         Ok(())
     }
 
@@ -498,8 +478,7 @@ impl Memory {
     }
 
     pub fn deregister_encrypted_pages(&self, pages: &ArcMemPages) -> Result<()> {
-        self.vm_memory
-            .deregister_encrypted_range(pages.as_slice())?;
+        self.vm_memory.deregister_encrypted_range(pages.as_slice())?;
         Ok(())
     }
 

@@ -20,9 +20,9 @@ use serde::Deserialize;
 use serde_aco::Help;
 
 use crate::fuse::passthrough::Passthrough;
-use crate::virtio::Result;
-use crate::virtio::dev::DevParam;
 use crate::virtio::dev::fs::{Fs, FsConfig};
+use crate::virtio::dev::DevParam;
+use crate::virtio::Result;
 
 #[derive(Debug, Clone, Deserialize, Help)]
 pub struct SharedDirParam {
@@ -41,11 +41,7 @@ impl DevParam for SharedDirParam {
 
     fn build(self, name: impl Into<Arc<str>>) -> Result<Fs<Passthrough>> {
         let passthrough = Passthrough::new(self.path)?;
-        let mut config = FsConfig {
-            tag: [0; 36],
-            num_request_queues: 1,
-            notify_buf_size: 0,
-        };
+        let mut config = FsConfig { tag: [0; 36], num_request_queues: 1, notify_buf_size: 0 };
         let tag_size = min(config.tag.len(), self.tag.len());
         config.tag[0..tag_size].copy_from_slice(&self.tag.as_bytes()[0..tag_size]);
         Fs::new(name, passthrough, config, self.dax_window)

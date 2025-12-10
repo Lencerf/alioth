@@ -23,9 +23,9 @@ pub mod net;
 pub mod vsock;
 
 use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU8};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bitflags::Flags;
@@ -38,10 +38,10 @@ use crate::mem::{LayoutChanged, LayoutUpdated, MemRegion};
 use crate::sync::notifier::Notifier;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
-use crate::virtio::queue::{QUEUE_SIZE_MAX, Queue, QueueReg, VirtQueue};
+use crate::virtio::queue::{Queue, QueueReg, VirtQueue, QUEUE_SIZE_MAX};
 #[cfg(target_os = "linux")]
 use crate::virtio::vu::conn::VuChannel;
-use crate::virtio::{DeviceId, IrqSender, Result, VirtioFeature, error};
+use crate::virtio::{error, DeviceId, IrqSender, Result, VirtioFeature};
 
 pub trait Virtio: Debug + Send + Sync + 'static {
     type Config: Mmio;
@@ -187,10 +187,8 @@ where
             device_feature &= !VirtioFeature::ACCESS_PLATFORM.bits()
         }
         let num_queues = dev.num_queues();
-        let queue_regs = (0..num_queues).map(|_| QueueReg {
-            size: AtomicU16::new(QUEUE_SIZE_MAX),
-            ..Default::default()
-        });
+        let queue_regs = (0..num_queues)
+            .map(|_| QueueReg { size: AtomicU16::new(QUEUE_SIZE_MAX), ..Default::default() });
         let queue_regs = queue_regs.collect::<Arc<_>>();
 
         let shared_mem_regions = dev.shared_mem_regions();
@@ -350,13 +348,7 @@ where
     ) -> Result<(JoinHandle<()>, Arc<Notifier>)> {
         let notifier = backend.register_notifier(TOKEN_WARKER)?;
         let worker = Worker {
-            context: Context {
-                dev,
-                event_rx,
-                memory,
-                queue_regs,
-                state: WorkerState::Pending,
-            },
+            context: Context { dev, event_rx, memory, queue_regs, state: WorkerState::Pending },
             backend,
         };
         let name = worker.context.dev.name();
@@ -383,8 +375,7 @@ where
             VirtioFeature::from_bits_retain(param.feature & !D::Feature::all().bits()),
             D::Feature::from_bits_truncate(param.feature)
         );
-        self.backend
-            .event_loop(ram, &mut self.context, queues, param)
+        self.backend.event_loop(ram, &mut self.context, queues, param)
     }
 
     fn loop_until_reset(&mut self) -> Result<()> {

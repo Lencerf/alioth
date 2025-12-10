@@ -22,7 +22,7 @@ use crate::mem::mapped::RamBus;
 use crate::virtio::queue::packed::{DescEvent, EventFlag, PackedQueue, WrappedIndex};
 use crate::virtio::queue::tests::{GuestQueue, UsedDesc, VirtQueueGuest};
 use crate::virtio::queue::{DescFlag, QueueReg, VirtQueue};
-use crate::virtio::tests::{DATA_ADDR, QUEUE_SIZE, fixture_queues, fixture_ram_bus};
+use crate::virtio::tests::{fixture_queues, fixture_ram_bus, DATA_ADDR, QUEUE_SIZE};
 
 const WRAP_COUNTER: u16 = 1 << 15;
 
@@ -37,10 +37,7 @@ fn index_wrapping_add(
     #[case] delta: u16,
     #[case] expected: u16,
 ) {
-    assert_eq!(
-        WrappedIndex(index).wrapping_add(delta, size),
-        WrappedIndex(expected)
-    );
+    assert_eq!(WrappedIndex(index).wrapping_add(delta, size), WrappedIndex(expected));
 }
 
 #[rstest]
@@ -54,10 +51,7 @@ fn index_wrapping_sub(
     #[case] delta: u16,
     #[case] expected: u16,
 ) {
-    assert_eq!(
-        WrappedIndex(index).wrapping_sub(delta, size),
-        WrappedIndex(expected)
-    );
+    assert_eq!(WrappedIndex(index).wrapping_sub(delta, size), WrappedIndex(expected));
 }
 
 impl<'m> PackedQueue<'m> {
@@ -80,11 +74,7 @@ impl<'m> VirtQueueGuest<'m> for PackedQueue<'m> {
         let id = ids[0];
         for (i, (addr, len)) in readable.iter().chain(writable).rev().enumerate() {
             let index = index.wrapping_add((total_count - 1 - i) as u16, self.size);
-            let mut flag = if index.wrap_counter() {
-                DescFlag::AVAIL
-            } else {
-                DescFlag::USED
-            };
+            let mut flag = if index.wrap_counter() { DescFlag::AVAIL } else { DescFlag::USED };
             if i > 0 {
                 flag |= DescFlag::NEXT;
             }
@@ -110,11 +100,7 @@ impl<'m> VirtQueueGuest<'m> for PackedQueue<'m> {
         if !self.flag_is_used(flag, index.wrap_counter()) {
             return None;
         }
-        Some(UsedDesc {
-            id: desc.id,
-            len: desc.len,
-            delta: chains[&desc.id].len() as u16,
-        })
+        Some(UsedDesc { id: desc.id, len: desc.len, delta: chains[&desc.id].len() as u16 })
     }
 }
 
@@ -146,10 +132,7 @@ fn enabled_queue(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     let mut avail_index = WrappedIndex::INIT;
     let mut used_index = WrappedIndex::INIT;
 
-    let id = guest_q.add_desc(
-        &[(addr_0, str_0.len() as u32), (addr_1, str_1.len() as u32)],
-        &[],
-    );
+    let id = guest_q.add_desc(&[(addr_0, str_0.len() as u32), (addr_1, str_1.len() as u32)], &[]);
     assert!(q.desc_avail(avail_index));
     let chain = q.get_avail(avail_index, &ram).unwrap().unwrap();
     avail_index = q.index_add(avail_index, chain.delta);
@@ -224,17 +207,10 @@ fn is_interrupt_enabled(
 ) {
     let ram = fixture_ram_bus.lock_layout();
     let reg = &fixture_queues[0];
-    let q = PackedQueue::new(reg, &*ram, enable_event_idx)
-        .unwrap()
-        .unwrap();
+    let q = PackedQueue::new(reg, &*ram, enable_event_idx).unwrap().unwrap();
 
-    *unsafe { &mut *q.interrupt } = DescEvent {
-        index: WrappedIndex(event_index),
-        flag: event_flag,
-    };
+    *unsafe { &mut *q.interrupt } =
+        DescEvent { index: WrappedIndex(event_index), flag: event_flag };
 
-    assert_eq!(
-        q.interrupt_enabled(WrappedIndex(used_index), delta),
-        expected
-    );
+    assert_eq!(q.interrupt_enabled(WrappedIndex(used_index), delta), expected);
 }

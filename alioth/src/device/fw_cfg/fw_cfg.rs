@@ -152,10 +152,7 @@ impl FwCfgContent {
     }
 
     fn access(&self, offset: u32) -> FwCfgContentAccess<'_> {
-        FwCfgContentAccess {
-            content: self,
-            offset,
-        }
+        FwCfgContentAccess { content: self, offset }
     }
 
     fn read(&self, offset: u32) -> Option<u8> {
@@ -259,9 +256,7 @@ impl FwCfg {
     }
 
     fn update_count(&mut self) {
-        let header = FwCfgFilesHeader {
-            count: (self.items.len() as u32).into(),
-        };
+        let header = FwCfgFilesHeader { count: (self.items.len() as u32).into() };
         self.get_file_dir_mut()[0..4].copy_from_slice(header.as_bytes());
     }
 
@@ -276,17 +271,10 @@ impl FwCfg {
                 MemRegionType::Pmem => E820_PMEM,
                 MemRegionType::Hidden => continue,
             };
-            let entry = BootE820Entry {
-                addr: *addr,
-                size: region.size,
-                type_,
-            };
+            let entry = BootE820Entry { addr: *addr, size: region.size, type_ };
             bytes.extend_from_slice(entry.as_bytes());
         }
-        let item = FwCfgItem {
-            name: "etc/e820".to_owned(),
-            content: FwCfgContent::Bytes(bytes),
-        };
+        let item = FwCfgItem { name: "etc/e820".to_owned(), content: FwCfgContent::Bytes(bytes) };
         self.add_item(item)
     }
 
@@ -344,8 +332,7 @@ impl FwCfg {
             _reserved: 0,
             name: c_name,
         };
-        self.get_file_dir_mut()
-            .extend_from_slice(cfg_file.as_bytes());
+        self.get_file_dir_mut().extend_from_slice(cfg_file.as_bytes());
         self.items.push(item);
         self.update_count();
         Ok(())
@@ -360,9 +347,7 @@ impl FwCfg {
     ) -> Result<u32> {
         let content_size = content.size()?.saturating_sub(offset);
         let op_size = std::cmp::min(content_size, len);
-        let r = self
-            .memory
-            .write_range(address, op_size as u64, content.access(offset));
+        let r = self.memory.write_range(address, op_size as u64, content.access(offset));
         match r {
             Err(e) => {
                 log::error!("fw_cfg: dam read error: {e:x?}");
@@ -597,15 +582,11 @@ impl FwCfgItemParam {
         match self.content {
             FwCfgContentParam::File(file) => {
                 let f = File::open(file)?;
-                Ok(FwCfgItem {
-                    name: self.name,
-                    content: FwCfgContent::File(0, f),
-                })
+                Ok(FwCfgItem { name: self.name, content: FwCfgContent::File(0, f) })
             }
-            FwCfgContentParam::String(string) => Ok(FwCfgItem {
-                name: self.name,
-                content: FwCfgContent::Bytes(string.into()),
-            }),
+            FwCfgContentParam::String(string) => {
+                Ok(FwCfgItem { name: self.name, content: FwCfgContent::Bytes(string.into()) })
+            }
         }
     }
 }

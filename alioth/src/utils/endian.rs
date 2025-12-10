@@ -43,9 +43,7 @@ macro_rules! endian_impl {
                 }
                 #[cfg(target_endian = $opposite)]
                 {
-                    Self {
-                        v: value.swap_bytes(),
-                    }
+                    Self { v: value.swap_bytes() }
                 }
             }
         }
@@ -87,9 +85,7 @@ macro_rules! endian_impl {
 
         impl From<[u8; ::core::mem::size_of::<$ne_type>()]> for $ed_type {
             fn from(value: [u8; ::core::mem::size_of::<$ne_type>()]) -> Self {
-                Self {
-                    v: $ne_type::from_ne_bytes(value),
-                }
+                Self { v: $ne_type::from_ne_bytes(value) }
             }
         }
     };

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::firmware::acpi::bindings::FadtSleepControlReg;
-use crate::mem::Result;
 use crate::mem::emulated::{Action, Mmio};
+use crate::mem::Result;
 
 pub const FADT_RESET_VAL: u8 = b'r';
 

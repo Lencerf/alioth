@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, OsStr};
 use std::fmt::Debug;
 use std::fs::{
-    File, FileType, Metadata, OpenOptions, ReadDir, read_dir, remove_dir, remove_file, rename,
+    read_dir, remove_dir, remove_file, rename, File, FileType, Metadata, OpenOptions, ReadDir,
 };
 use std::io::{IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::iter::{Enumerate, Peekable};
@@ -30,14 +30,14 @@ use zerocopy::{FromBytes, IntoBytes};
 
 use crate::align_up_ty;
 use crate::fuse::bindings::{
-    FUSE_KERNEL_MINOR_VERSION, FUSE_KERNEL_VERSION, FUSE_ROOT_ID, FuseAttr, FuseAttrOut,
-    FuseCreateIn, FuseCreateOut, FuseDirent, FuseDirentType, FuseEntryOut, FuseFlushIn,
-    FuseForgetIn, FuseGetattrFlag, FuseGetattrIn, FuseInHeader, FuseInitIn, FuseInitOut,
-    FuseOpcode, FuseOpenIn, FuseOpenOut, FuseReadIn, FuseReleaseIn, FuseRemovemappingIn,
-    FuseRemovemappingOne, FuseRename2In, FuseRenameIn, FuseSetupmappingFlag, FuseSetupmappingIn,
-    FuseSyncfsIn, FuseWriteIn, FuseWriteOut, RenameFlag,
+    FuseAttr, FuseAttrOut, FuseCreateIn, FuseCreateOut, FuseDirent, FuseDirentType, FuseEntryOut,
+    FuseFlushIn, FuseForgetIn, FuseGetattrFlag, FuseGetattrIn, FuseInHeader, FuseInitIn,
+    FuseInitOut, FuseOpcode, FuseOpenIn, FuseOpenOut, FuseReadIn, FuseReleaseIn,
+    FuseRemovemappingIn, FuseRemovemappingOne, FuseRename2In, FuseRenameIn, FuseSetupmappingFlag,
+    FuseSetupmappingIn, FuseSyncfsIn, FuseWriteIn, FuseWriteOut, RenameFlag,
+    FUSE_KERNEL_MINOR_VERSION, FUSE_KERNEL_VERSION, FUSE_ROOT_ID,
 };
-use crate::fuse::{DaxRegion, Fuse, Result, error};
+use crate::fuse::{error, DaxRegion, Fuse, Result};
 
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
 
@@ -108,16 +108,9 @@ pub struct Passthrough {
 
 impl Passthrough {
     pub fn new(path: Box<Path>) -> Result<Self> {
-        let node = Node {
-            lookup_count: 1,
-            path,
-            handle: None,
-        };
+        let node = Node { lookup_count: 1, path, handle: None };
         let nodes = HashMap::from([(FUSE_ROOT_ID, node)]);
-        Ok(Passthrough {
-            nodes,
-            dax_region: None,
-        })
+        Ok(Passthrough { nodes, dax_region: None })
     }
 
     fn get_node(&self, id: u64) -> Result<&Node> {
@@ -199,10 +192,7 @@ impl Fuse for Passthrough {
             }
         }
 
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&node.path)?;
+        let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&node.path)?;
         let meta = file.metadata()?;
         Ok(FuseAttrOut {
             attr_valid: 1,
@@ -218,11 +208,7 @@ impl Fuse for Passthrough {
         let handle = Handle::ReadDir(Box::new(read_dir(&node.path)?.enumerate().peekable()));
         let fh = handle.fh();
         node.handle = Some(handle);
-        Ok(FuseOpenOut {
-            fh,
-            open_flags: 0,
-            backing_id: 0,
-        })
+        Ok(FuseOpenOut { fh, open_flags: 0, backing_id: 0 })
     }
 
     fn read_dir(
@@ -294,10 +280,7 @@ impl Fuse for Passthrough {
         let path = self.join_path(hdr.nodeid, in_)?;
 
         log::trace!("lookup: {path:?}");
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)?;
+        let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path)?;
         let meta = file.metadata()?;
         let nodeid =
             if let Some((nodeid, node)) = self.nodes.iter_mut().find(|(_, n)| n.path == path) {
@@ -305,11 +288,7 @@ impl Fuse for Passthrough {
                 *nodeid
             } else {
                 let nodeid = path.as_os_str().as_bytes().as_ptr() as u64;
-                let node = Node {
-                    lookup_count: 1,
-                    path,
-                    handle: None,
-                };
+                let node = Node { lookup_count: 1, path, handle: None };
                 self.nodes.insert(nodeid, node);
                 nodeid
             };
@@ -346,11 +325,7 @@ impl Fuse for Passthrough {
         let handle = Handle::File(opts.open(&node.path)?);
         let fh = handle.fh();
         node.handle = Some(handle);
-        Ok(FuseOpenOut {
-            fh,
-            open_flags: 0,
-            backing_id: 0,
-        })
+        Ok(FuseOpenOut { fh, open_flags: 0, backing_id: 0 })
     }
 
     fn read(
@@ -395,11 +370,7 @@ impl Fuse for Passthrough {
         let meta = f.metadata()?;
         let handle = Handle::File(f);
         let fh = handle.fh();
-        let node = Node {
-            lookup_count: 1,
-            path,
-            handle: Some(handle),
-        };
+        let node = Node { lookup_count: 1, path, handle: Some(handle) };
         self.nodes.insert(nodeid, node);
         Ok(FuseCreateOut {
             entry: FuseEntryOut {
@@ -411,11 +382,7 @@ impl Fuse for Passthrough {
                 attr_valid_nsec: 0,
                 attr: self.convert_meta(&meta),
             },
-            open: FuseOpenOut {
-                fh,
-                open_flags: 0,
-                backing_id: 0,
-            },
+            open: FuseOpenOut { fh, open_flags: 0, backing_id: 0 },
         })
     }
 
@@ -451,11 +418,7 @@ impl Fuse for Passthrough {
     }
 
     fn rename(&mut self, hdr: &FuseInHeader, in_: &FuseRenameIn, buf: &[u8]) -> Result<()> {
-        let in2 = FuseRename2In {
-            newdir: in_.newdir,
-            flags: 0,
-            padding: 0,
-        };
+        let in2 = FuseRename2In { newdir: in_.newdir, flags: 0, padding: 0 };
         self.rename2(hdr, &in2, buf)
     }
 
@@ -471,11 +434,7 @@ impl Fuse for Passthrough {
         };
         let flag = RenameFlag::from_bits_retain(in_.flags);
         if !flag.is_empty() {
-            return error::Unsupported {
-                op: FuseOpcode::RENAME2,
-                flag: flag.bits(),
-            }
-            .fail();
+            return error::Unsupported { op: FuseOpcode::RENAME2, flag: flag.bits() }.fail();
         }
         let src = self.join_path(hdr.nodeid, p1)?;
         let dst = self.join_path(in_.newdir, p2)?;
@@ -496,11 +455,7 @@ impl Fuse for Passthrough {
         let flag = FuseSetupmappingFlag::from_bits_retain(in_.flags);
         dax_region.map(in_.moffset, fd, in_.foffset, in_.len, flag)?;
 
-        log::trace!(
-            "setup_mapping: offset = {:#x}, file = {:?}",
-            in_.moffset,
-            node.path
-        );
+        log::trace!("setup_mapping: offset = {:#x}, file = {:?}", in_.moffset, node.path);
 
         Ok(())
     }
@@ -519,11 +474,7 @@ impl Fuse for Passthrough {
                 return Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
             };
             dax_region.unmap(one.moffset, one.len)?;
-            log::trace!(
-                "remove_mapping: offset = {:#x}, size = {:#x}",
-                one.moffset,
-                one.len
-            );
+            log::trace!("remove_mapping: offset = {:#x}, size = {:#x}", one.moffset, one.len);
 
             remain = r;
         }

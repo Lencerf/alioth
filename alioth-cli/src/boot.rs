@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use alioth::board::BoardConfig;
 #[cfg(target_arch = "x86_64")]
 use alioth::device::fw_cfg::FwCfgItemParam;
-use alioth::errors::{DebugTrace, trace_error};
+use alioth::errors::{trace_error, DebugTrace};
 #[cfg(target_os = "macos")]
 use alioth::hv::Hvf;
 use alioth::hv::{self, Coco};
@@ -29,8 +29,6 @@ use alioth::loader::{Executable, Payload};
 use alioth::mem::{MemBackend, MemConfig};
 #[cfg(target_os = "linux")]
 use alioth::vfio::{CdevParam, ContainerParam, GroupParam, IoasParam};
-#[cfg(target_os = "linux")]
-use alioth::virtio::DeviceId;
 use alioth::virtio::dev::balloon::BalloonParam;
 use alioth::virtio::dev::blk::BlkFileParam;
 use alioth::virtio::dev::entropy::EntropyParam;
@@ -47,23 +45,22 @@ use alioth::virtio::dev::vsock::VhostVsockParam;
 #[cfg(target_os = "linux")]
 use alioth::virtio::vu::frontend::VuFrontendParam;
 use alioth::virtio::worker::WorkerApi;
+#[cfg(target_os = "linux")]
+use alioth::virtio::DeviceId;
 use alioth::vm::Machine;
 use clap::Args;
 use serde::Deserialize;
-use serde_aco::{Help, help_text};
+use serde_aco::{help_text, Help};
 use snafu::{ResultExt, Snafu};
 
-use crate::objects::{DOC_OBJECTS, parse_objects};
+use crate::objects::{parse_objects, DOC_OBJECTS};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
 #[snafu(module, context(suffix(false)))]
 pub enum Error {
     #[snafu(display("Failed to parse {arg}"))]
-    ParseArg {
-        arg: String,
-        error: serde_aco::Error,
-    },
+    ParseArg { arg: String, error: serde_aco::Error },
     #[snafu(display("Failed to parse objects"), context(false))]
     ParseObjects { source: crate::objects::Error },
     #[cfg(target_os = "linux")]
@@ -290,10 +287,7 @@ where
             NetParam::Tap(tap_param) => vm.add_virtio_dev(format!("virtio-net-{index}"), tap_param),
             #[cfg(target_os = "linux")]
             NetParam::Vu(sock) => {
-                let param = VuFrontendParam {
-                    id: DeviceId::Net,
-                    socket: sock.socket,
-                };
+                let param = VuFrontendParam { id: DeviceId::Net, socket: sock.socket };
                 vm.add_virtio_dev(format!("vu-net-{index}"), param)
             }
             #[cfg(target_os = "macos")]
@@ -331,10 +325,7 @@ where
             BlkParam::File(p) => vm.add_virtio_dev(format!("virtio-blk-{index}"), p),
             #[cfg(target_os = "linux")]
             BlkParam::Vu(s) => {
-                let p = VuFrontendParam {
-                    id: DeviceId::Block,
-                    socket: s.socket,
-                };
+                let p = VuFrontendParam { id: DeviceId::Block, socket: s.socket };
                 vm.add_virtio_dev(format!("vu-net-{index}"), p)
             }
         }
@@ -364,10 +355,7 @@ pub fn boot(args: BootArgs) -> Result<(), Error> {
         serde_aco::from_args(&s, &objects).context(error::ParseArg { arg: s })?
     } else {
         #[cfg(target_os = "linux")]
-        eprintln!(
-            "Please update the cmd line to --memory size={},backend=memfd",
-            args.mem_size
-        );
+        eprintln!("Please update the cmd line to --memory size={},backend=memfd", args.mem_size);
         let size = serde_aco::from_args(&args.mem_size, &objects)
             .context(error::ParseArg { arg: args.mem_size })?;
         MemConfig {
@@ -379,11 +367,7 @@ pub fn boot(args: BootArgs) -> Result<(), Error> {
             ..Default::default()
         }
     };
-    let board_config = BoardConfig {
-        mem: mem_config,
-        num_cpu: args.num_cpu,
-        coco,
-    };
+    let board_config = BoardConfig { mem: mem_config, num_cpu: args.num_cpu, coco };
     let vm = Machine::new(hypervisor, board_config).context(error::CreateVm)?;
     #[cfg(target_arch = "x86_64")]
     vm.add_com1().context(error::CreateDevice)?;
@@ -403,8 +387,7 @@ pub fn boot(args: BootArgs) -> Result<(), Error> {
             .into_iter()
             .map(|s| serde_aco::from_args(&s, &objects).context(error::ParseArg { arg: s }))
             .collect::<Result<Vec<_>, _>>()?;
-        vm.add_fw_cfg(params.into_iter())
-            .context(error::CreateDevice)?;
+        vm.add_fw_cfg(params.into_iter()).context(error::CreateDevice)?;
     };
 
     if args.entropy {
@@ -428,19 +411,16 @@ pub fn boot(args: BootArgs) -> Result<(), Error> {
             serde_aco::from_args(&vsock, &objects).context(error::ParseArg { arg: vsock })?;
         match param {
             #[cfg(target_os = "linux")]
-            VsockParam::Vhost(p) => vm
-                .add_virtio_dev("vhost-vsock", p)
-                .context(error::CreateDevice)?,
-            VsockParam::Uds(p) => vm
-                .add_virtio_dev("uds-vsock", p)
-                .context(error::CreateDevice)?,
+            VsockParam::Vhost(p) => {
+                vm.add_virtio_dev("vhost-vsock", p).context(error::CreateDevice)?
+            }
+            VsockParam::Uds(p) => vm.add_virtio_dev("uds-vsock", p).context(error::CreateDevice)?,
         };
     }
     if let Some(balloon) = args.balloon {
         let param: BalloonParam =
             serde_aco::from_args(&balloon, &objects).context(error::ParseArg { arg: balloon })?;
-        vm.add_virtio_dev("virtio-balloon", param)
-            .context(error::CreateDevice)?;
+        vm.add_virtio_dev("virtio-balloon", param).context(error::CreateDevice)?;
     }
 
     #[cfg(target_os = "linux")]
@@ -453,8 +433,7 @@ pub fn boot(args: BootArgs) -> Result<(), Error> {
     for (index, vfio) in args.vfio_cdev.into_iter().enumerate() {
         let param: CdevParam =
             serde_aco::from_args(&vfio, &objects).context(error::ParseArg { arg: vfio })?;
-        vm.add_vfio_cdev(format!("vfio-{index}").into(), param)
-            .context(error::CreateDevice)?;
+        vm.add_vfio_cdev(format!("vfio-{index}").into(), param).context(error::CreateDevice)?;
     }
 
     #[cfg(target_os = "linux")]
@@ -467,8 +446,7 @@ pub fn boot(args: BootArgs) -> Result<(), Error> {
     for (index, group) in args.vfio_group.into_iter().enumerate() {
         let param: GroupParam =
             serde_aco::from_args(&group, &objects).context(error::ParseArg { arg: group })?;
-        vm.add_vfio_devs_in_group(&index.to_string(), param)
-            .context(error::CreateDevice)?;
+        vm.add_vfio_devs_in_group(&index.to_string(), param).context(error::CreateDevice)?;
     }
 
     let mut payload = Payload {

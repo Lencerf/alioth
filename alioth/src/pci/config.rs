@@ -22,9 +22,9 @@ use bitflags::bitflags;
 use parking_lot::RwLock;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::mem::MemRegionCallback;
 use crate::mem::addressable::SlotBackend;
 use crate::mem::emulated::{Action, ChangeLayout, Mmio};
+use crate::mem::MemRegionCallback;
 use crate::pci::cap::PciCapList;
 use crate::pci::{Bdf, PciBar, Result};
 use crate::{assign_bits, c_enum, impl_mmio_for_zerocopy, mask_bits, mem};
@@ -235,12 +235,7 @@ struct MoveBarCallback {
 
 impl ChangeLayout for MoveBarCallback {
     fn change(&self, memory: &mem::Memory) -> mem::Result<()> {
-        log::debug!(
-            "{}: moving bar from {:#x} to {:#x}...",
-            self.bdf,
-            self.src,
-            self.dst
-        );
+        log::debug!("{}: moving bar from {:#x} to {:#x}...", self.bdf, self.src, self.dst);
         if self.src as u32 & BAR_IO == BAR_IO {
             let src_port = self.src & !(BAR_IO_MASK as u64);
             let dst_port = self.dst & !(BAR_IO_MASK as u64);
@@ -272,7 +267,8 @@ impl HeaderData {
                 let masked_val = mask_bits!(old_val, val, mask);
                 header.bars[index] = masked_val;
                 log::info!(
-                    "{}: bar {index}: set to {val:#010x}, update: {old_val:#010x} -> {masked_val:#010x}",
+                    "{}: bar {index}: set to {val:#010x}, update: {old_val:#010x} -> \
+                     {masked_val:#010x}",
                     self.bdf
                 );
                 (old_val, masked_val)
@@ -341,7 +337,8 @@ impl HeaderData {
                         return None;
                     }
                     log::info!(
-                        "{bdf}: updating bar {bar_index}: {old_val:#010x} -> {masked_val:#010x}, mask={mask:#010x}",
+                        "{bdf}: updating bar {bar_index}: {old_val:#010x} -> {masked_val:#010x}, \
+                         mask={mask:#010x}",
                     );
                     let command = header.common.command;
                     match &pci_bars[bar_index] {
@@ -379,7 +376,8 @@ impl HeaderData {
                         _ => {
                             header.bars[bar_index] = masked_val;
                             log::info!(
-                                "{bdf}: bar {bar_index}: write {val:#010x}, update: {old_val:#010x} -> {masked_val:#010x}"
+                                "{bdf}: bar {bar_index}: write {val:#010x}, update: \
+                                 {old_val:#010x} -> {masked_val:#010x}"
                             );
                             None
                         }
@@ -451,11 +449,7 @@ impl EmulatedHeader {
             }
         }
 
-        let data = Arc::new(RwLock::new(HeaderData {
-            header,
-            bar_masks,
-            bdf: Bdf(0),
-        }));
+        let data = Arc::new(RwLock::new(HeaderData { header, bar_masks, bdf: Bdf(0) }));
 
         for (index, bar) in bars.iter().enumerate() {
             let callbacks = match bar {
@@ -463,10 +457,9 @@ impl EmulatedHeader {
                 PciBar::Mem(region) => &region.callbacks,
                 PciBar::Io(region) => &region.callbacks,
             };
-            callbacks.lock().push(Box::new(BarCallback {
-                index: index as u8,
-                header: data.clone(),
-            }));
+            callbacks
+                .lock()
+                .push(Box::new(BarCallback { index: index as u8, header: data.clone() }));
         }
 
         Self { data, bars }
@@ -555,10 +548,7 @@ impl EmulatedConfig {
             header.common.status |= Status::CAP;
             header.capability_pointer = size_of::<DeviceHeader>() as u8;
         }
-        EmulatedConfig {
-            header: EmulatedHeader::new(ConfigHeader::Device(header), bars),
-            caps,
-        }
+        EmulatedConfig { header: EmulatedHeader::new(ConfigHeader::Device(header), bars), caps }
     }
 }
 

@@ -16,7 +16,7 @@ use std::mem::size_of_val;
 use std::ptr::null_mut;
 
 use assert_matches::assert_matches;
-use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_EXEC, PROT_READ, PROT_WRITE, mmap};
+use libc::{mmap, MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_EXEC, PROT_READ, PROT_WRITE};
 
 use crate::arch::msr::Efer;
 use crate::arch::paging::Entry;
@@ -30,8 +30,8 @@ use crate::hv::{
 #[test]
 #[cfg_attr(not(feature = "test-hv"), ignore)]
 fn test_vcpu_regs() {
-    use crate::hv::VmConfig;
     use crate::hv::kvm::KvmConfig;
+    use crate::hv::VmConfig;
 
     let kvm = Kvm::new(KvmConfig::default()).unwrap();
     let vm_config = VmConfig { coco: None };
@@ -74,93 +74,41 @@ fn test_vcpu_regs() {
     let seg_regs = [
         (
             SegReg::Cs,
-            SegRegVal {
-                selector: 0x10,
-                base: 0,
-                limit: 0xffff_ffff,
-                access: SegAccess(0xa09b),
-            },
+            SegRegVal { selector: 0x10, base: 0, limit: 0xffff_ffff, access: SegAccess(0xa09b) },
         ),
         (
             SegReg::Ds,
-            SegRegVal {
-                selector: 0x18,
-                base: 0,
-                limit: 0xffff_ffff,
-                access: SegAccess(0xc093),
-            },
+            SegRegVal { selector: 0x18, base: 0, limit: 0xffff_ffff, access: SegAccess(0xc093) },
         ),
         (
             SegReg::Es,
-            SegRegVal {
-                selector: 0x18,
-                base: 0,
-                limit: 0xffff_ffff,
-                access: SegAccess(0xc093),
-            },
+            SegRegVal { selector: 0x18, base: 0, limit: 0xffff_ffff, access: SegAccess(0xc093) },
         ),
         (
             SegReg::Fs,
-            SegRegVal {
-                selector: 0x18,
-                base: 0,
-                limit: 0xffff_ffff,
-                access: SegAccess(0xc093),
-            },
+            SegRegVal { selector: 0x18, base: 0, limit: 0xffff_ffff, access: SegAccess(0xc093) },
         ),
         (
             SegReg::Gs,
-            SegRegVal {
-                selector: 0x18,
-                base: 0,
-                limit: 0xffff_ffff,
-                access: SegAccess(0xc093),
-            },
+            SegRegVal { selector: 0x18, base: 0, limit: 0xffff_ffff, access: SegAccess(0xc093) },
         ),
         (
             SegReg::Ss,
-            SegRegVal {
-                selector: 0x18,
-                base: 0,
-                limit: 0xffff_ffff,
-                access: SegAccess(0xc093),
-            },
+            SegRegVal { selector: 0x18, base: 0, limit: 0xffff_ffff, access: SegAccess(0xc093) },
         ),
         (
             SegReg::Tr,
-            SegRegVal {
-                selector: 0x20,
-                base: 0,
-                limit: 0xf_ffff,
-                access: SegAccess(0x8b),
-            },
+            SegRegVal { selector: 0x20, base: 0, limit: 0xf_ffff, access: SegAccess(0x8b) },
         ),
         (
             SegReg::Ldtr,
-            SegRegVal {
-                selector: 0x28,
-                base: 0,
-                limit: 0xf_ffff,
-                access: SegAccess(0x82),
-            },
+            SegRegVal { selector: 0x28, base: 0, limit: 0xf_ffff, access: SegAccess(0x82) },
         ),
     ];
 
     let dt_regs = [
-        (
-            DtReg::Gdtr,
-            DtRegVal {
-                base: 0xfffffe2a4aeeb000,
-                limit: 0x7f,
-            },
-        ),
-        (
-            DtReg::Idtr,
-            DtRegVal {
-                base: 0xfffffe0000000000,
-                limit: 0xfff,
-            },
-        ),
+        (DtReg::Gdtr, DtRegVal { base: 0xfffffe2a4aeeb000, limit: 0x7f }),
+        (DtReg::Idtr, DtRegVal { base: 0xfffffe0000000000, limit: 0xfff }),
     ];
     vcpu.set_sregs(&sregs, &seg_regs, &dt_regs).unwrap();
 
@@ -178,8 +126,8 @@ fn test_vcpu_regs() {
 #[test]
 #[cfg_attr(not(feature = "test-hv"), ignore)]
 fn test_kvm_run() {
-    use crate::hv::VmConfig;
     use crate::hv::kvm::KvmConfig;
+    use crate::hv::VmConfig;
 
     let kvm = Kvm::new(KvmConfig::default()).unwrap();
     let vm_config = VmConfig { coco: None };
@@ -188,20 +136,10 @@ fn test_kvm_run() {
 
     let prot = PROT_WRITE | PROT_EXEC | PROT_READ;
     let flag = MAP_ANONYMOUS | MAP_SHARED;
-    let user_mem = ffi!(
-        unsafe { mmap(null_mut(), 0x5000, prot, flag, -1, 0,) },
-        MAP_FAILED
-    )
-    .unwrap();
-    let mmap_option = MemMapOption {
-        read: true,
-        write: true,
-        exec: true,
-        ..Default::default()
-    };
-    memory
-        .mem_map(0, 0x5000, user_mem as usize, mmap_option)
-        .unwrap();
+    let user_mem =
+        ffi!(unsafe { mmap(null_mut(), 0x5000, prot, flag, -1, 0,) }, MAP_FAILED).unwrap();
+    let mmap_option = MemMapOption { read: true, write: true, exec: true, ..Default::default() };
+    memory.mem_map(0, 0x5000, user_mem as usize, mmap_option).unwrap();
 
     // layout
     // 0x1000 - 0x1f00 code
@@ -239,44 +177,14 @@ fn test_kvm_run() {
     unsafe { ((user_mem as usize + 0x4000) as *mut u64).write(pde) }
 
     let mut vcpu = vm.create_vcpu(0).unwrap();
-    let cs = SegRegVal {
-        selector: 0x10,
-        base: 0,
-        limit: 0xffff_ffff,
-        access: SegAccess(0xa09b),
-    };
-    let ds = SegRegVal {
-        selector: 0x18,
-        base: 0,
-        limit: 0xffff_ffff,
-        access: SegAccess(0xc093),
-    };
-    let tr = SegRegVal {
-        selector: 0x20,
-        base: 0,
-        limit: 0,
-        access: SegAccess(0x8b),
-    };
-    let ldtr = SegRegVal {
-        selector: 0x28,
-        base: 0,
-        limit: 0,
-        access: SegAccess(0x82),
-    };
-    let gdt = [
-        0,
-        0,
-        cs.to_desc(),
-        ds.to_desc(),
-        tr.to_desc(),
-        ldtr.to_desc(),
-    ];
+    let cs = SegRegVal { selector: 0x10, base: 0, limit: 0xffff_ffff, access: SegAccess(0xa09b) };
+    let ds = SegRegVal { selector: 0x18, base: 0, limit: 0xffff_ffff, access: SegAccess(0xc093) };
+    let tr = SegRegVal { selector: 0x20, base: 0, limit: 0, access: SegAccess(0x8b) };
+    let ldtr = SegRegVal { selector: 0x28, base: 0, limit: 0, access: SegAccess(0x82) };
+    let gdt = [0, 0, cs.to_desc(), ds.to_desc(), tr.to_desc(), ldtr.to_desc()];
     assert!(size_of_val(&gdt) < 0x100);
     unsafe { ((user_mem as usize + 0x1f00) as *mut [u64; 6]).write(gdt) };
-    let gdtr = DtRegVal {
-        base: 0x1f00,
-        limit: size_of_val(&gdt) as u16 - 1,
-    };
+    let gdtr = DtRegVal { base: 0x1f00, limit: size_of_val(&gdt) as u16 - 1 };
     let idtr = DtRegVal { base: 0, limit: 0 };
     vcpu.set_sregs(
         &[
@@ -307,36 +215,17 @@ fn test_kvm_run() {
         (Reg::Rflags, 0x2),
     ])
     .unwrap();
-    assert_matches!(
-        vcpu.run(VmEntry::None),
-        Ok(VmExit::Io {
-            port: 0x3f8,
-            write: None,
-            size: 1
-        })
-    );
+    assert_matches!(vcpu.run(VmEntry::None), Ok(VmExit::Io { port: 0x3f8, write: None, size: 1 }));
     assert_matches!(
         vcpu.run(VmEntry::Io { data: Some(0x10) }),
-        Ok(VmExit::Io {
-            port: 0x3f8,
-            write: Some(0x11),
-            size: 1
-        })
+        Ok(VmExit::Io { port: 0x3f8, write: Some(0x11), size: 1 })
     );
     assert_matches!(
         vcpu.run(VmEntry::None),
-        Ok(VmExit::Mmio {
-            addr: 0x5000,
-            write: None,
-            size: 8
-        })
+        Ok(VmExit::Mmio { addr: 0x5000, write: None, size: 8 })
     );
     assert_matches!(
         vcpu.run(VmEntry::Mmio { data: 0x0000_ffff }),
-        Ok(VmExit::Mmio {
-            addr: 0x5004,
-            write: Some(0x0001_0010),
-            size: 8
-        })
+        Ok(VmExit::Mmio { addr: 0x5004, write: Some(0x0001_0010), size: 8 })
     );
 }

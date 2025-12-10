@@ -39,7 +39,7 @@ const UART_IBRD: u64 = 0x24;
 /// RW width 6 Fractional Baud Rate Register
 const UART_FBRD: u64 = 0x28;
 /// RW width 8 Line Control Register
-const UART_LCR_H: u64 = 0x2C;
+const UART_LCR_H: u64 = 0x2c;
 /// RW width 16 Control Register
 const UART_CR: u64 = 0x30;
 /// RW width 6 Interrupt FIFO Level Select Register
@@ -47,7 +47,7 @@ const UART_IFLS: u64 = 0x34;
 /// RW width 11 Interrupt Mask Set/Clear Register
 const UART_IMSC: u64 = 0x38;
 /// RO width 11 Raw Interrupt Status Register
-const UART_RIS: u64 = 0x3C;
+const UART_RIS: u64 = 0x3c;
 /// RO width 11 Masked Interrupt Status Register
 const UART_MIS: u64 = 0x40;
 /// WO width 11 Interrupt Clear Register
@@ -55,21 +55,21 @@ const UART_ICR: u64 = 0x44;
 /// RW width 3 DMA Control Register
 const UART_DMACR: u64 = 0x48;
 /// RO width 8 UARTPeriphID0 Register
-const UART_PERIPH_ID0: u64 = 0xFE0;
+const UART_PERIPH_ID0: u64 = 0xfe0;
 /// RO width 8 UARTPeriphID1 Register
-const UART_PERIPH_ID1: u64 = 0xFE4;
+const UART_PERIPH_ID1: u64 = 0xfe4;
 /// RO width 8 UARTPeriphID2 Register
-const UART_PERIPH_ID2: u64 = 0xFE8;
+const UART_PERIPH_ID2: u64 = 0xfe8;
 /// RO width 8 UARTPeriphID3 Register
-const UART_PERIPH_ID3: u64 = 0xFEC;
+const UART_PERIPH_ID3: u64 = 0xfec;
 /// RO width 8 UARTPCellID0 Register
-const UART_PCELL_ID0: u64 = 0xFF0;
+const UART_PCELL_ID0: u64 = 0xff0;
 /// RO width 8 UARTPCellID1 Register
-const UART_PCELL_ID1: u64 = 0xFF4;
+const UART_PCELL_ID1: u64 = 0xff4;
 /// RO width 8 UARTPCellID2 Register
-const UART_PCELL_ID2: u64 = 0xFF8;
+const UART_PCELL_ID2: u64 = 0xff8;
 /// RO width 8 UARTPCellID3 Register
-const UART_PCELL_ID3: u64 = 0xFFC;
+const UART_PCELL_ID3: u64 = 0xffc;
 
 // https://developer.arm.com/documentation/ddi0183/g/programmers-model/register-descriptions/peripheral-identification-registers--uartperiphid0-3
 const PERIPH_ID: [u32; 4] = [0x11, 0x10, 0x14, 0x00];
@@ -157,17 +157,9 @@ where
         let irq_line = Arc::new(irq_line);
         let reg = Arc::new(Mutex::new(Pl011Reg::default()));
         let name: Arc<str> = Arc::from(format!("pl011@{base_addr:#x}"));
-        let pl011_recv = Pl011Recv {
-            irq_line: irq_line.clone(),
-            reg: reg.clone(),
-        };
+        let pl011_recv = Pl011Recv { irq_line: irq_line.clone(), reg: reg.clone() };
         let console = Console::new(name.clone(), pl011_recv)?;
-        let pl011 = Pl011 {
-            name,
-            irq_line,
-            reg,
-            console,
-        };
+        let pl011 = Pl011 { name, irq_line, reg, console };
         Ok(pl011)
     }
 

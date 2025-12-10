@@ -21,8 +21,8 @@ use std::num::Wrapping;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crate::ffi;
@@ -30,13 +30,13 @@ use crate::hv::IoeventFd;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::vsock::{
-    ShutdownFlag, VSOCK_CID_HOST, VsockConfig, VsockFeature, VsockHeader, VsockOp, VsockType,
-    VsockVirtq,
+    ShutdownFlag, VsockConfig, VsockFeature, VsockHeader, VsockOp, VsockType, VsockVirtq,
+    VSOCK_CID_HOST,
 };
 use crate::virtio::dev::{DevParam, Virtio, WakeEvent};
 use crate::virtio::queue::{DescChain, Queue, QueueReg, Status, VirtQueue};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, error};
+use crate::virtio::{error, DeviceId, IrqSender, Result, FEATURE_BUILT_IN};
 
 use mio::event::Event;
 use mio::unix::SourceFd;
@@ -110,11 +110,7 @@ impl UdsVsock {
         let (stream, _) = self.listener.accept()?;
         stream.set_nonblocking(true)?;
         let token = Token(stream.as_raw_fd() as usize);
-        registry.register(
-            &mut SourceFd(&stream.as_raw_fd()),
-            token,
-            Interest::READABLE,
-        )?;
+        registry.register(&mut SourceFd(&stream.as_raw_fd()), token, Interest::READABLE)?;
         self.sockets.insert(token, stream);
         Ok(())
     }
@@ -165,10 +161,7 @@ impl UdsVsock {
         self.connections.insert((host_port, port), conn);
         let count = self.host_ports.entry(host_port).or_default();
         *count += 1;
-        log::trace!(
-            "{}: host:{host_port}: count incremented to {count}",
-            self.name
-        );
+        log::trace!("{}: host:{host_port}: count incremented to {count}", self.name);
         self.ports.insert(token, (host_port, port));
         log::trace!("{}: host:{host_port} -> vm:{port}: requested", self.name);
         Ok(())
@@ -215,11 +208,7 @@ impl UdsVsock {
             Ok(Status::Done { len: c })
         })?;
         if !hdr_buf.is_empty() {
-            log::error!(
-                "{}: queue RX: no enough writable buffers for {:?}",
-                self.name,
-                hdr.op
-            );
+            log::error!("{}: queue RX: no enough writable buffers for {:?}", self.name, hdr.op);
             return error::InvalidBuffer.fail();
         }
         Ok(())
@@ -238,10 +227,7 @@ impl UdsVsock {
         let host_port = hdr.dst_port;
         let guest_port = hdr.src_port;
         let Some(conn) = self.connections.get_mut(&(host_port, guest_port)) else {
-            log::warn!(
-                "{}: vm:{guest_port} -> host:{host_port}: unknown connection",
-                self.name
-            );
+            log::warn!("{}: vm:{guest_port} -> host:{host_port}: unknown connection", self.name);
             return Ok(());
         };
         if conn.state != ConnState::Requested {
@@ -255,22 +241,14 @@ impl UdsVsock {
         };
         writeln!(conn.writer, "OK {host_port}")?;
         conn.writer.flush()?;
-        conn.state = ConnState::Established {
-            fwd_cnt: Wrapping(0),
-        };
-        log::trace!(
-            "{}: host:{host_port} -> vm:{guest_port}: established",
-            self.name
-        );
+        conn.state = ConnState::Established { fwd_cnt: Wrapping(0) };
+        log::trace!("{}: host:{host_port} -> vm:{guest_port}: established", self.name);
         self.transfer_rx_data(host_port, guest_port, rx_q, irq_sender)
     }
 
     fn remove_conn(&mut self, host_port: u32, guest_port: u32, registry: &Registry) -> Result<()> {
         let Some(conn) = self.connections.remove(&(host_port, guest_port)) else {
-            log::warn!(
-                "{}: vm:{guest_port} -> host:{host_port}: unknown connection",
-                self.name
-            );
+            log::warn!("{}: vm:{guest_port} -> host:{host_port}: unknown connection", self.name);
             return Ok(());
         };
         let reader = conn.reader.into_inner();
@@ -282,16 +260,10 @@ impl UdsVsock {
                 log::trace!("{}: host:{host_port}: free port", self.name);
             } else {
                 *count -= 1;
-                log::trace!(
-                    "{}: host:{host_port}: count decremented to {count}",
-                    self.name
-                );
+                log::trace!("{}: host:{host_port}: count decremented to {count}", self.name);
             }
         } else {
-            log::error!(
-                "{}: vm:{guest_port} -> host:{host_port}: unknown host port",
-                self.name
-            );
+            log::error!("{}: vm:{guest_port} -> host:{host_port}: unknown host port", self.name);
         }
         registry.deregister(&mut SourceFd(&reader.as_raw_fd()))?;
         Ok(())
@@ -319,10 +291,7 @@ impl UdsVsock {
         let host_port = hdr.dst_port;
         let guest_port = hdr.src_port;
         let Some(conn) = self.connections.get_mut(&(host_port, guest_port)) else {
-            log::warn!(
-                "{}: vm:{guest_port} -> host:{host_port}: unknown connection",
-                self.name
-            );
+            log::warn!("{}: vm:{guest_port} -> host:{host_port}: unknown connection", self.name);
             return Ok(());
         };
         let mut flags = if let ConnState::Shutdown { flags } = conn.state {
@@ -333,19 +302,13 @@ impl UdsVsock {
         flags |= ShutdownFlag::from_bits_truncate(hdr.flags);
         if flags != ShutdownFlag::all() {
             conn.state = ConnState::Shutdown { flags };
-            log::trace!(
-                "{}: vm:{guest_port} -> host:{host_port}: {flags:?}",
-                self.name
-            );
+            log::trace!("{}: vm:{guest_port} -> host:{host_port}: {flags:?}", self.name);
         } else {
             if let Err(e) = self.respond_rst(hdr, irq_sender, rx_q) {
                 log::error!("{}: failed to respond to shutdown: {e:?}", self.name);
             }
             self.remove_conn(host_port, guest_port, registry)?;
-            log::trace!(
-                "{}: vm:{guest_port} -> host:{host_port}: shutdown",
-                self.name
-            );
+            log::trace!("{}: vm:{guest_port} -> host:{host_port}: shutdown", self.name);
         }
         Ok(())
     }
@@ -373,19 +336,13 @@ impl UdsVsock {
         };
         let writer = reader.try_clone()?;
         let token = Token(reader.as_raw_fd() as usize);
-        registry.register(
-            &mut SourceFd(&reader.as_raw_fd()),
-            token,
-            Interest::READABLE,
-        )?;
+        registry.register(&mut SourceFd(&reader.as_raw_fd()), token, Interest::READABLE)?;
         let buf_size = get_buf_size(&writer)?;
         let conn = Connection {
             reader: BufReader::new(reader),
             writer: BufWriter::new(writer),
             buf_alloc: buf_size as u32,
-            state: ConnState::Established {
-                fwd_cnt: Wrapping(0),
-            },
+            state: ConnState::Established { fwd_cnt: Wrapping(0) },
         };
         let resp = VsockHeader {
             src_cid: VSOCK_CID_HOST,
@@ -402,15 +359,9 @@ impl UdsVsock {
         self.connections.insert((host_port, guest_port), conn);
         let count = self.host_ports.entry(host_port).or_default();
         *count += 1;
-        log::trace!(
-            "{}: host:{host_port}: count incremented to {count}",
-            self.name
-        );
+        log::trace!("{}: host:{host_port}: count incremented to {count}", self.name);
         self.ports.insert(token, (host_port, guest_port));
-        log::trace!(
-            "{}: vm:{guest_port} -> host:{host_port}: established",
-            self.name
-        );
+        log::trace!("{}: vm:{guest_port} -> host:{host_port}: established", self.name);
         Ok(())
     }
 
@@ -436,18 +387,9 @@ impl UdsVsock {
             return error::InvalidBuffer.fail();
         };
         if hdr.src_cid != self.config.guest_cid || hdr.dst_cid != VSOCK_CID_HOST {
-            log::warn!(
-                "{name}: invalid CID pair: {} -> {}",
-                hdr.src_cid,
-                hdr.dst_cid
-            );
+            log::warn!("{name}: invalid CID pair: {} -> {}", hdr.src_cid, hdr.dst_cid);
         }
-        log::trace!(
-            "{name}: vm:{} -> host:{}: {:?}",
-            hdr.src_port,
-            hdr.dst_port,
-            hdr.op
-        );
+        log::trace!("{name}: vm:{} -> host:{}: {:?}", hdr.src_port, hdr.dst_port, hdr.op);
         match hdr.op {
             VsockOp::REQUEST => self.handle_tx_request(hdr, registry, irq_sender, rx_q),
             VsockOp::RESPONSE => self.handle_tx_response(hdr, rx_q, irq_sender),
@@ -541,10 +483,7 @@ impl UdsVsock {
 
         let rx_idx = VsockVirtq::RX.raw();
         let Some(conn) = self.connections.get_mut(&(host_port, guest_port)) else {
-            log::warn!(
-                "{}: vm:{guest_port} -> host:{host_port}: unknown connection",
-                self.name
-            );
+            log::warn!("{}: vm:{guest_port} -> host:{host_port}: unknown connection", self.name);
             return Ok(());
         };
         let ConnState::Established { fwd_cnt } = conn.state else {
@@ -571,9 +510,7 @@ impl UdsVsock {
                 "{}: host:{host_port} -> vm:{guest_port}: transfered {nread} bytes",
                 self.name
             );
-            Ok(Status::Done {
-                len: nread + HEADER_SIZE as u32,
-            })
+            Ok(Status::Done { len: nread + HEADER_SIZE as u32 })
         })?;
         Ok(())
     }
@@ -602,10 +539,7 @@ impl UdsVsock {
         let host_port = hdr.dst_port;
         let guest_port = hdr.src_port;
         let Some(conn) = self.connections.get_mut(&(host_port, guest_port)) else {
-            log::warn!(
-                "{}: vm:{guest_port} -> host:{host_port}: unknown connection",
-                self.name
-            );
+            log::warn!("{}: vm:{guest_port} -> host:{host_port}: unknown connection", self.name);
             return Ok(());
         };
         let ConnState::Established { fwd_cnt } = &mut conn.state else {
@@ -674,10 +608,7 @@ impl UdsVsock {
         let vsock = UdsVsock {
             name,
             path: param.path,
-            config: Arc::new(VsockConfig {
-                guest_cid: param.cid,
-                ..Default::default()
-            }),
+            config: Arc::new(VsockConfig { guest_cid: param.cid, ..Default::default() }),
             listener,
             connections: HashMap::new(),
             sockets: HashMap::new(),

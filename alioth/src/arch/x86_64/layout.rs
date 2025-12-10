@@ -32,7 +32,7 @@ pub const BOOT_PAGING_START: u64 = 0x3000;
 pub const BOOT_PAGING_LIMIT: u64 = 0x4000;
 
 pub const EBDA_START: u64 = 0x8_0000;
-pub const EBDA_END: u64 = 0xA_0000;
+pub const EBDA_END: u64 = 0xa_0000;
 
 pub const KERNEL_IMAGE_START: u64 = 0x100_0000; // 16 MiB
 

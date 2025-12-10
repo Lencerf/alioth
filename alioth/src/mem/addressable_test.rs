@@ -33,16 +33,9 @@ impl SlotBackend for Backend {
 fn test_new_slot() {
     assert_matches!(
         Slot::new(u64::MAX, Backend { size: 0x10 }),
-        Err(Error::ExceedsLimit {
-            size: 0x10,
-            addr: u64::MAX,
-            ..
-        })
+        Err(Error::ExceedsLimit { size: 0x10, addr: u64::MAX, .. })
     );
-    assert_matches!(
-        Slot::new(0, Backend { size: 0 }),
-        Err(Error::ZeroSizedSlot { .. })
-    );
+    assert_matches!(Slot::new(0, Backend { size: 0 }), Err(Error::ZeroSizedSlot { .. }));
 
     let slot = Slot::new(0x1000, Backend { size: 0x1000 }).unwrap();
     assert_eq!(slot.max_addr(), 0x1fff);
@@ -60,19 +53,11 @@ fn test_addressable() {
     // assert_matches!(memory.last_mut(), Some((0x5000, _)));
     assert_matches!(
         memory.add(0x1000, Backend { size: 0x2000 }),
-        Err(Error::Overlap {
-            new_item: [0x1000, 0x2fff],
-            exist_item: [0x1000, 0x1fff],
-            ..
-        })
+        Err(Error::Overlap { new_item: [0x1000, 0x2fff], exist_item: [0x1000, 0x1fff], .. })
     );
     assert_matches!(
         memory.add(0x1, Backend { size: 0x1000 }),
-        Err(Error::Overlap {
-            new_item: [0x1, 0x1000],
-            exist_item: [0x1000, 0x1fff],
-            ..
-        })
+        Err(Error::Overlap { new_item: [0x1, 0x1000], exist_item: [0x1000, 0x1fff], .. })
     );
 
     assert_matches!(memory.add(0x1, Backend { size: 0xfff }), Ok(_));
@@ -80,79 +65,39 @@ fn test_addressable() {
 
     assert_matches!(
         memory.add(0x0, Backend { size: 0x2000 }),
-        Err(Error::Overlap {
-            new_item: [0x0, 0x1fff],
-            exist_item: [0x1000, 0x1fff],
-            ..
-        })
+        Err(Error::Overlap { new_item: [0x0, 0x1fff], exist_item: [0x1000, 0x1fff], .. })
     );
     assert_matches!(
         memory.add(0x3000, Backend { size: 0x1000 }),
-        Err(Error::Overlap {
-            new_item: [0x3000, 0x3fff],
-            exist_item: [0x2000, 0x3fff],
-            ..
-        })
+        Err(Error::Overlap { new_item: [0x3000, 0x3fff], exist_item: [0x2000, 0x3fff], .. })
     );
 
     assert_matches!(
         memory.add(0x4000, Backend { size: 0x1001 }),
-        Err(Error::Overlap {
-            new_item: [0x4000, 0x5000],
-            exist_item: [0x5000, 0x5fff],
-            ..
-        })
+        Err(Error::Overlap { new_item: [0x4000, 0x5000], exist_item: [0x5000, 0x5fff], .. })
     );
     assert_matches!(
         memory.add(0x3fff, Backend { size: 0x1000 }),
-        Err(Error::Overlap {
-            new_item: [0x3fff, 0x4ffe],
-            exist_item: [0x2000, 0x3fff],
-            ..
-        })
+        Err(Error::Overlap { new_item: [0x3fff, 0x4ffe], exist_item: [0x2000, 0x3fff], .. })
     );
     memory.add(0x4000, Backend { size: 0x1000 }).unwrap();
     memory.remove(0x4000).unwrap();
 
-    assert_eq!(
-        memory.search(0x1000),
-        Some((memory.slots[0].addr, &memory.slots[0].backend))
-    );
+    assert_eq!(memory.search(0x1000), Some((memory.slots[0].addr, &memory.slots[0].backend)));
     assert_eq!(memory.search(0x0), None);
-    assert_eq!(
-        memory.search(0x1500),
-        Some((memory.slots[0].addr, &memory.slots[0].backend))
-    );
+    assert_eq!(memory.search(0x1500), Some((memory.slots[0].addr, &memory.slots[0].backend)));
     assert_eq!(memory.search(0x4000), None);
 
     let mut iter = memory.iter();
-    assert_eq!(
-        iter.next(),
-        Some((memory.slots[0].addr, &memory.slots[0].backend))
-    );
-    assert_eq!(
-        iter.next_back(),
-        Some((memory.slots[2].addr, &memory.slots[2].backend))
-    );
-    assert_eq!(
-        iter.next(),
-        Some((memory.slots[1].addr, &memory.slots[1].backend))
-    );
+    assert_eq!(iter.next(), Some((memory.slots[0].addr, &memory.slots[0].backend)));
+    assert_eq!(iter.next_back(), Some((memory.slots[2].addr, &memory.slots[2].backend)));
+    assert_eq!(iter.next(), Some((memory.slots[1].addr, &memory.slots[1].backend)));
     assert_eq!(iter.next(), None);
     drop(iter);
 
     assert_matches!(memory.remove(0x1000), Ok(Backend { size: 0x1000 }));
-    assert_matches!(
-        memory.remove(0x2001),
-        Err(Error::NotMapped { addr: 0x2001, .. })
-    );
+    assert_matches!(memory.remove(0x2001), Err(Error::NotMapped { addr: 0x2001, .. }));
 
-    assert_matches!(
-        memory.add(0u64.wrapping_sub(0x2000), Backend { size: 0x2000 }),
-        Ok(_)
-    );
-    assert_matches!(
-        memory.add(0u64.wrapping_sub(0x1000), Backend { size: 0x1000 }),
-        Err(_)
-    )
+    assert_matches!(memory.add(0u64.wrapping_sub(0x2000), Backend { size: 0x2000 }), Ok(_));
+    assert_matches!(memory.add(0u64.wrapping_sub(0x1000), Backend { size: 0x1000 }), Err(_))
 }

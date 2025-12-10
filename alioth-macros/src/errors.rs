@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, Parser};
-use syn::{DeriveInput, GenericArgument, PathArguments, Type, parse_macro_input, parse_quote};
+use syn::{parse_macro_input, parse_quote, DeriveInput, GenericArgument, PathArguments, Type};
 
 fn extract_type_from_box(ty: &Type) -> Option<&Type> {
     let Type::Path(type_path) = ty else {
@@ -41,17 +41,13 @@ fn extract_type_from_box(ty: &Type) -> Option<&Type> {
 
 pub fn trace_error(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as DeriveInput);
-    let syn::Data::Enum(enum_data) = &mut input.data else {
-        panic!("not an enum")
-    };
+    let syn::Data::Enum(enum_data) = &mut input.data else { panic!("not an enum") };
     for variant in enum_data.variants.iter_mut() {
         if matches!(variant.fields, syn::Fields::Unit) {
             variant.fields =
                 syn::Fields::Named(syn::FieldsNamed::parse.parse2(quote! {{}}).unwrap());
         }
-        let syn::Fields::Named(field) = &mut variant.fields else {
-            panic!("not a named field ")
-        };
+        let syn::Fields::Named(field) = &mut variant.fields else { panic!("not a named field ") };
         field.named.push(
             syn::Field::parse_named
                 .parse2(quote! {#[snafu(implicit)] _location: ::snafu::Location})
@@ -62,9 +58,7 @@ pub fn trace_error(_attr: TokenStream, item: TokenStream) -> TokenStream {
             name == "source" || name == "error"
         }) {
             if let Some(inner_type) = extract_type_from_box(&source.ty) {
-                source
-                    .attrs
-                    .push(parse_quote! {#[snafu(source(from(#inner_type, Box::new)))]})
+                source.attrs.push(parse_quote! {#[snafu(source(from(#inner_type, Box::new)))]})
             } else {
                 source.attrs.push(parse_quote! {#[snafu(source)]})
             }
@@ -77,14 +71,10 @@ pub fn trace_error(_attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn derive_debug_trace(input: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let syn::Data::Enum(enum_data) = &mut input.data else {
-        panic!("not an enum")
-    };
+    let syn::Data::Enum(enum_data) = &mut input.data else { panic!("not an enum") };
     let mut debug_trace_arms = vec![];
     for variant in enum_data.variants.iter_mut() {
-        let syn::Fields::Named(field) = &mut variant.fields else {
-            panic!("not a named field ")
-        };
+        let syn::Fields::Named(field) = &mut variant.fields else { panic!("not a named field ") };
         let mut cfg_attrs = vec![];
         for attr in &variant.attrs {
             if attr.path().is_ident("cfg") {

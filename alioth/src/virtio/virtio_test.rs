@@ -20,7 +20,7 @@ use rstest::fixture;
 
 use crate::hv::IoeventFd;
 use crate::mem::mapped::{ArcMemPages, RamBus};
-use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg};
+use crate::virtio::queue::{QueueReg, QUEUE_SIZE_MAX};
 use crate::virtio::{IrqSender, Result};
 
 pub const QUEUE_SIZE: u16 = QUEUE_SIZE_MAX;

@@ -21,7 +21,7 @@ use std::path::Path;
 
 use snafu::Snafu;
 
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::virtio::vu::bindings::VuFeature;
 
 #[trace_error]
@@ -29,10 +29,7 @@ use crate::virtio::vu::bindings::VuFeature;
 #[snafu(module, visibility(pub(crate)), context(suffix(false)))]
 pub enum Error {
     #[snafu(display("Cannot access socket {path:?}"))]
-    AccessSocket {
-        path: Box<Path>,
-        error: std::io::Error,
-    },
+    AccessSocket { path: Box<Path>, error: std::io::Error },
     #[snafu(display("Error from OS"), context(false))]
     System { error: std::io::Error },
     #[snafu(display("vhost-user message ({req:#x}) missing fd"))]

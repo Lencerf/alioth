@@ -20,8 +20,8 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::c_enum;
 use crate::mem::mapped::Ram;
-use crate::virtio::Result;
 use crate::virtio::queue::{DescChain, DescFlag, QueueReg, VirtQueue};
+use crate::virtio::Result;
 
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
@@ -190,11 +190,8 @@ impl<'m> VirtQueue<'m> for PackedQueue<'m> {
 
     fn enable_notification(&self, enabled: bool) {
         unsafe {
-            (&mut *self.notification).flag = if enabled {
-                EventFlag::ENABLE
-            } else {
-                EventFlag::DISABLE
-            };
+            (&mut *self.notification).flag =
+                if enabled { EventFlag::ENABLE } else { EventFlag::DISABLE };
         }
     }
 

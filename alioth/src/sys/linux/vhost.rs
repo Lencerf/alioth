@@ -16,7 +16,7 @@ use bitflags::bitflags;
 
 use crate::{ioctl_none, ioctl_read, ioctl_write_buf, ioctl_write_ptr};
 
-pub const VHOST_VIRTIO: u8 = 0xAF;
+pub const VHOST_VIRTIO: u8 = 0xaf;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -75,12 +75,7 @@ ioctl_read!(vhost_get_features, VHOST_VIRTIO, 0x00, u64);
 ioctl_write_ptr!(vhost_set_features, VHOST_VIRTIO, 0x00, u64);
 ioctl_none!(vhost_set_owner, VHOST_VIRTIO, 0x01, 0);
 
-ioctl_write_buf!(
-    vhost_set_mem_table,
-    VHOST_VIRTIO,
-    0x03,
-    MemoryMultipleRegion
-);
+ioctl_write_buf!(vhost_set_mem_table, VHOST_VIRTIO, 0x03, MemoryMultipleRegion);
 
 ioctl_write_ptr!(vhost_set_virtq_num, VHOST_VIRTIO, 0x10, VirtqState);
 ioctl_write_ptr!(vhost_set_virtq_addr, VHOST_VIRTIO, 0x11, VirtqAddr);

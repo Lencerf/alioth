@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use bitfield::bitfield;
 
@@ -112,10 +112,7 @@ impl PciBus {
         segment.add(Bdf::new(0, 0, 0), Arc::new(HostBridge::new()));
 
         PciBus {
-            io_bus: Arc::new(PciIoBus {
-                address: AtomicU32::new(0),
-                segment: segment.clone(),
-            }),
+            io_bus: Arc::new(PciIoBus { address: AtomicU32::new(0), segment: segment.clone() }),
             segment,
         }
     }

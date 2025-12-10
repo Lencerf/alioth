@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use std::os::fd::AsRawFd;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use mio::event::Event;
@@ -30,7 +30,7 @@ use crate::virtio::dev::{
     WorkerState,
 };
 use crate::virtio::queue::{Queue, QueueReg, VirtQueue};
-use crate::virtio::{IrqSender, Result, error};
+use crate::virtio::{error, IrqSender, Result};
 
 pub trait VirtioMio: Virtio {
     fn activate<'m, Q, S, E>(
@@ -148,10 +148,7 @@ where
                 .context(error::EventSource)?;
         }
         'out: loop {
-            active_mio
-                .poll
-                .poll(&mut events, None)
-                .context(error::PollEvents)?;
+            active_mio.poll.poll(&mut events, None).context(error::PollEvents)?;
             for event in events.iter() {
                 context.handle_event(event, &mut active_mio)?;
                 if context.state != WorkerState::Running {

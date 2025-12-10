@@ -20,13 +20,13 @@ use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, IoSlice, IoSliceMut, Read};
 use std::os::fd::AsRawFd;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use bitflags::bitflags;
-use mio::Registry;
 use mio::event::Event;
+use mio::Registry;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::fuse::bindings::{FuseInHeader, FuseOpcode, FuseOutHeader, FuseSetupmappingFlag};
@@ -42,7 +42,7 @@ use crate::virtio::queue::{DescChain, QueueReg, Status, VirtQueue};
 #[cfg(target_os = "linux")]
 use crate::virtio::vu::conn::VuChannel;
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender};
+use crate::virtio::{DeviceId, IrqSender, FEATURE_BUILT_IN};
 use crate::{ffi, impl_mmio_for_zerocopy};
 
 impl DaxRegion for ArcMemPages {
@@ -439,10 +439,7 @@ where
 
     fn shared_mem_regions(&self) -> Option<Arc<MemRegion>> {
         let dax_region = self.dax_region.as_ref()?;
-        Some(Arc::new(MemRegion::with_dev_mem(
-            dax_region.clone(),
-            MemRegionType::Hidden,
-        )))
+        Some(Arc::new(MemRegion::with_dev_mem(dax_region.clone(), MemRegionType::Hidden)))
     }
 
     #[cfg(target_os = "linux")]

@@ -19,12 +19,12 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering, fence};
+use std::sync::atomic::{fence, AtomicBool, AtomicU16, AtomicU64, Ordering};
 
 use bitflags::bitflags;
 
 use crate::mem::mapped::Ram;
-use crate::virtio::{IrqSender, Result, error};
+use crate::virtio::{error, IrqSender, Result};
 
 pub const QUEUE_SIZE_MAX: u16 = 256;
 
@@ -97,14 +97,7 @@ where
     Q: VirtQueue<'m>,
 {
     pub fn new(q: Q, reg: &'r QueueReg, ram: &'m Ram) -> Self {
-        Self {
-            q,
-            avail: Q::INIT_INDEX,
-            used: Q::INIT_INDEX,
-            reg,
-            ram,
-            deferred: HashMap::new(),
-        }
+        Self { q, avail: Q::INIT_INDEX, used: Q::INIT_INDEX, reg, ram, deferred: HashMap::new() }
     }
 
     pub fn reg(&self) -> &QueueReg {

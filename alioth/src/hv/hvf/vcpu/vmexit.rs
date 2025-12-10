@@ -14,13 +14,13 @@
 
 use snafu::ResultExt;
 
-use crate::arch::psci::{PSCI_VERSION_1_1, PsciFunc, PsciMigrateInfo};
-use crate::arch::reg::{EsrEl2DataAbort, EsrEl2Ec, EsrEl2SysReg, MpidrEl1, Reg, SReg, encode};
+use crate::arch::psci::{PsciFunc, PsciMigrateInfo, PSCI_VERSION_1_1};
+use crate::arch::reg::{encode, EsrEl2DataAbort, EsrEl2Ec, EsrEl2SysReg, MpidrEl1, Reg, SReg};
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vcpu::HvfVcpu;
 use crate::hv::hvf::vm::VcpuEvent;
-use crate::hv::{Result, Vcpu, VmExit, error};
-use crate::sys::hvf::{HvReg, HvVcpuExitException, hv_vcpu_get_reg};
+use crate::hv::{error, Result, Vcpu, VmExit};
+use crate::sys::hvf::{hv_vcpu_get_reg, HvReg, HvVcpuExitException};
 
 impl HvfVcpu {
     // https://esr.arm64.dev/
@@ -32,19 +32,13 @@ impl HvfVcpu {
             }
             EsrEl2Ec::HVC_64 => self.handle_hvc(),
             EsrEl2Ec::SYS_REG_64 => self.handle_sys_reg(EsrEl2SysReg(esr.iss())),
-            _ => error::VmExit {
-                msg: format!("Unhandled ESR: {esr:x?}"),
-            }
-            .fail(),
+            _ => error::VmExit { msg: format!("Unhandled ESR: {esr:x?}") }.fail(),
         }
     }
 
     pub fn decode_data_abort(&mut self, iss: EsrEl2DataAbort, gpa: u64) -> Result<()> {
         if !iss.isv() {
-            return error::VmExit {
-                msg: format!("Unhandled iss: {iss:x?}"),
-            }
-            .fail();
+            return error::VmExit { msg: format!("Unhandled iss: {iss:x?}") }.fail();
         }
         let reg = HvReg::from(iss.srt());
         let write = if iss.wnr() {
@@ -56,11 +50,7 @@ impl HvfVcpu {
             self.exit_reg = Some(reg);
             None
         };
-        self.vmexit = Some(VmExit::Mmio {
-            addr: gpa as _,
-            write,
-            size: 1 << iss.sas(),
-        });
+        self.vmexit = Some(VmExit::Mmio { addr: gpa as _, write, size: 1 << iss.sas() });
         self.advance_pc()
     }
 
@@ -107,10 +97,7 @@ impl HvfVcpu {
                 return Ok(());
             }
             f => {
-                return error::VmExit {
-                    msg: format!("HVC: {f:x?}"),
-                }
-                .fail();
+                return error::VmExit { msg: format!("HVC: {f:x?}") }.fail();
             }
         };
         self.set_regs(&[(Reg::X0, ret)])
@@ -118,30 +105,18 @@ impl HvfVcpu {
 
     pub fn handle_sys_reg(&mut self, iss: EsrEl2SysReg) -> Result<()> {
         if iss.is_read() {
-            return error::VmExit {
-                msg: format!("Unhandled iss: {iss:x?}"),
-            }
-            .fail();
+            return error::VmExit { msg: format!("Unhandled iss: {iss:x?}") }.fail();
         }
         let rt = HvReg::from(iss.rt());
         let mut val = 0;
         let ret = unsafe { hv_vcpu_get_reg(self.vcpu_id, rt, &mut val) };
         check_ret(ret).context(error::VcpuReg)?;
-        let sreg = SReg::from(encode(
-            iss.op0(),
-            iss.op1(),
-            iss.crn(),
-            iss.crm(),
-            iss.op2(),
-        ));
+        let sreg = SReg::from(encode(iss.op0(), iss.op1(), iss.crn(), iss.crm(), iss.op2()));
         if sreg == SReg::OSDLR_EL1 || sreg == SReg::OSLAR_EL1 {
             log::warn!("vCPU-{} wrote {val:#x} to {sreg:?}", self.vcpu_id);
             self.advance_pc()?;
             return Ok(());
         }
-        error::VmExit {
-            msg: format!("Unhandled iss: {iss:x?}, sreg: {sreg:?}"),
-        }
-        .fail()
+        error::VmExit { msg: format!("Unhandled iss: {iss:x?}, sreg: {sreg:?}") }.fail()
     }
 }

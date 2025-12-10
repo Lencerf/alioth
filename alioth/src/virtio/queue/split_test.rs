@@ -22,7 +22,7 @@ use crate::mem::mapped::RamBus;
 use crate::virtio::queue::split::{Desc, DescFlag, SplitQueue};
 use crate::virtio::queue::tests::{GuestQueue, UsedDesc, VirtQueueGuest};
 use crate::virtio::queue::{QueueReg, VirtQueue};
-use crate::virtio::tests::{DATA_ADDR, fixture_queues, fixture_ram_bus};
+use crate::virtio::tests::{fixture_queues, fixture_ram_bus, DATA_ADDR};
 
 impl<'m> VirtQueueGuest<'m> for SplitQueue<'m> {
     fn add_desc(
@@ -43,12 +43,7 @@ impl<'m> VirtQueueGuest<'m> for SplitQueue<'m> {
             if i < writable_count {
                 flag |= DescFlag::WRITE;
             }
-            let desc = Desc {
-                addr: *addr,
-                len: *len,
-                flag: flag.bits(),
-                next: last_id,
-            };
+            let desc = Desc { addr: *addr, len: *len, flag: flag.bits(), next: last_id };
             *unsafe { &mut *self.desc.offset(*id as isize) } = desc;
             last_id = *id;
         }
@@ -96,10 +91,7 @@ fn enabled_queue(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     ram.write(addr_0, str_0.as_bytes()).unwrap();
     ram.write(addr_1, str_1.as_bytes()).unwrap();
 
-    let id = guest_q.add_desc(
-        &[(addr_0, str_0.len() as u32), (addr_1, str_1.len() as u32)],
-        &[],
-    );
+    let id = guest_q.add_desc(&[(addr_0, str_0.len() as u32), (addr_1, str_1.len() as u32)], &[]);
     assert_eq!(q.avail_index(), 1);
     assert!(q.desc_avail(0));
     let chain = q.get_avail(0, &ram).unwrap().unwrap();

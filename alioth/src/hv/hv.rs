@@ -39,7 +39,7 @@ use crate::arch::reg::{DtReg, DtRegVal, SegReg, SegRegVal};
 use crate::arch::reg::{Reg, SReg};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::sev::{SevPolicy, SnpPageType, SnpPolicy};
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 
 #[cfg(target_os = "macos")]
 pub use self::hvf::Hvf;
@@ -51,18 +51,9 @@ pub use self::kvm::{Kvm, KvmConfig, KvmError};
 #[snafu(module, context(suffix(false)))]
 pub enum Error {
     #[snafu(display("Failed to map hva {hva:#x} to gpa {gpa:#x}, size {size:#x}"))]
-    GuestMap {
-        hva: usize,
-        gpa: u64,
-        size: u64,
-        error: std::io::Error,
-    },
+    GuestMap { hva: usize, gpa: u64, size: u64, error: std::io::Error },
     #[snafu(display("Failed to unmap gpa {gpa:#x}, size {size:#x}"))]
-    GuestUnmap {
-        gpa: u64,
-        size: u64,
-        error: std::io::Error,
-    },
+    GuestUnmap { gpa: u64, size: u64, error: std::io::Error },
     #[snafu(display("Hypervisor is missing capability: {cap}"))]
     Capability { cap: &'static str },
     #[snafu(display("Failed to setup signal handlers"))]
@@ -117,12 +108,7 @@ pub struct MemMapOption {
 
 impl Default for MemMapOption {
     fn default() -> Self {
-        Self {
-            read: true,
-            write: true,
-            exec: true,
-            log_dirty: false,
-        }
+        Self { read: true, write: true, exec: true, log_dirty: false }
     }
 }
 
@@ -361,21 +347,9 @@ pub trait Hypervisor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmExit {
-    Io {
-        port: u16,
-        write: Option<u32>,
-        size: u8,
-    },
-    Mmio {
-        addr: u64,
-        write: Option<u64>,
-        size: u8,
-    },
-    ConvertMemory {
-        gpa: u64,
-        size: u64,
-        private: bool,
-    },
+    Io { port: u16, write: Option<u32>, size: u8 },
+    Mmio { addr: u64, write: Option<u64>, size: u8 },
+    ConvertMemory { gpa: u64, size: u64, private: bool },
     Shutdown,
     Reboot,
     Interrupted,

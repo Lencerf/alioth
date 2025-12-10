@@ -26,7 +26,7 @@ use crate::arch::layout::{
     RAM_32_SIZE, RAM_32_START,
 };
 use crate::arch::reg::SReg;
-use crate::board::{Board, BoardConfig, PCIE_MMIO_64_SIZE, Result, VcpuGuard};
+use crate::board::{Board, BoardConfig, Result, VcpuGuard, PCIE_MMIO_64_SIZE};
 use crate::firmware::dt::{DeviceTree, Node, PropVal};
 use crate::hv::{GicV2, GicV2m, GicV3, Hypervisor, Its, Vcpu, Vm};
 use crate::loader::{Executable, InitState, Payload};
@@ -182,17 +182,10 @@ where
             node.props.insert("bootargs", PropVal::Bytes(bytes));
         }
         if let Some(initramfs_range) = &init_state.initramfs {
-            node.props.insert(
-                "linux,initrd-start",
-                PropVal::U32(initramfs_range.start as u32),
-            );
-            node.props
-                .insert("linux,initrd-end", PropVal::U32(initramfs_range.end as u32));
+            node.props.insert("linux,initrd-start", PropVal::U32(initramfs_range.start as u32));
+            node.props.insert("linux,initrd-end", PropVal::U32(initramfs_range.end as u32));
         }
-        node.props.insert(
-            "stdout-path",
-            PropVal::String(format!("/pl011@{PL011_START:x}")),
-        );
+        node.props.insert("stdout-path", PropVal::String(format!("/pl011@{PL011_START:x}")));
         root.nodes.insert("chosen".to_owned(), node);
     }
 
@@ -258,10 +251,7 @@ where
                     props: HashMap::new(),
                     nodes: HashMap::from([(
                         "cluster0".to_owned(),
-                        Node {
-                            props: HashMap::new(),
-                            nodes: cores,
-                        },
+                        Node { props: HashMap::new(), nodes: cores },
                     )]),
                 },
             )]),
@@ -301,10 +291,7 @@ where
                 ("reg", PropVal::U64List(vec![PL011_START, 0x1000])),
                 ("interrupts", PropVal::U32List(vec![spi, pin, edge_trigger])),
                 ("clock-names", PropVal::Str("uartclk\0apb_pclk")),
-                (
-                    "clocks",
-                    PropVal::U32List(vec![PHANDLE_CLOCK, PHANDLE_CLOCK]),
-                ),
+                ("clocks", PropVal::U32List(vec![PHANDLE_CLOCK, PHANDLE_CLOCK])),
             ]),
             nodes: HashMap::new(),
         };
@@ -497,8 +484,7 @@ where
             ]),
             nodes: HashMap::new(),
         };
-        root.nodes
-            .insert(format!("pci@{PCIE_CONFIG_START:x}"), node);
+        root.nodes.insert(format!("pci@{PCIE_CONFIG_START:x}"), node);
     }
 
     pub fn create_firmware_data(&self, init_state: &InitState) -> Result<()> {
@@ -507,10 +493,8 @@ where
         root.props.insert("#address-cells", PropVal::U32(2));
         root.props.insert("#size-cells", PropVal::U32(2));
         root.props.insert("model", PropVal::Str("linux,dummy-virt"));
-        root.props
-            .insert("compatible", PropVal::Str("linux,dummy-virt"));
-        root.props
-            .insert("interrupt-parent", PropVal::PHandle(PHANDLE_GIC));
+        root.props.insert("compatible", PropVal::Str("linux,dummy-virt"));
+        root.props.insert("interrupt-parent", PropVal::PHandle(PHANDLE_GIC));
 
         self.create_chosen_node(init_state, root);
         self.create_pl011_node(root);

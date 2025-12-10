@@ -24,10 +24,10 @@ use crate::errors::BoxTrace;
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{self, LayoutChanged};
 use crate::sys::vfio::{
-    IommuDestroy, IommuIoasAlloc, IommuIoasMap, IommuIoasMapFlag, IommuIoasUnmap, iommu_destroy,
-    iommu_ioas_alloc, iommu_ioas_map, iommu_ioas_unmap,
+    iommu_destroy, iommu_ioas_alloc, iommu_ioas_map, iommu_ioas_unmap, IommuDestroy,
+    IommuIoasAlloc, IommuIoasMap, IommuIoasMapFlag, IommuIoasUnmap,
 };
-use crate::vfio::{Result, error};
+use crate::vfio::{error, Result};
 
 #[derive(Debug)]
 pub struct Iommu {
@@ -36,9 +36,7 @@ pub struct Iommu {
 
 impl Iommu {
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
-        let fd = File::open(&path).context(error::AccessDevice {
-            path: path.as_ref(),
-        })?;
+        let fd = File::open(&path).context(error::AccessDevice { path: path.as_ref() })?;
         Ok(Iommu { fd })
     }
 }
@@ -54,10 +52,7 @@ impl Drop for Ioas {
         if let Err(e) = self.reset() {
             log::error!("Removing mappings from ioas id {:#x}: {e}", self.id)
         }
-        let destroy = IommuDestroy {
-            size: size_of::<IommuDestroy>() as u32,
-            id: self.id,
-        };
+        let destroy = IommuDestroy { size: size_of::<IommuDestroy>() as u32, id: self.id };
         let ret = unsafe { iommu_destroy(&self.iommu.fd, &destroy) };
         if let Err(e) = ret {
             log::error!("Destroying ioas id {:#x}: {e}", self.id)
@@ -67,15 +62,10 @@ impl Drop for Ioas {
 
 impl Ioas {
     pub fn alloc_on(iommu: Arc<Iommu>) -> Result<Self> {
-        let mut alloc: IommuIoasAlloc = IommuIoasAlloc {
-            size: size_of::<IommuIoasAlloc>() as u32,
-            ..Default::default()
-        };
+        let mut alloc: IommuIoasAlloc =
+            IommuIoasAlloc { size: size_of::<IommuIoasAlloc>() as u32, ..Default::default() };
         unsafe { iommu_ioas_alloc(&iommu.fd, &mut alloc) }?;
-        Ok(Ioas {
-            iommu,
-            id: alloc.out_ioas_id,
-        })
+        Ok(Ioas { iommu, id: alloc.out_ioas_id })
     }
 
     pub fn map(&self, user_va: usize, iova: u64, len: u64) -> Result<()> {

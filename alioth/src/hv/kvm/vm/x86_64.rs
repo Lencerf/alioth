@@ -17,9 +17,9 @@ use std::os::fd::{AsFd, AsRawFd};
 use snafu::ResultExt;
 
 use crate::arch::sev::{SevPolicy, SevStatus, SnpPageType, SnpPolicy};
-use crate::hv::Result;
 use crate::hv::kvm::sev::SevFd;
-use crate::hv::kvm::{KvmError, KvmVm, kvm_error};
+use crate::hv::kvm::{kvm_error, KvmError, KvmVm};
+use crate::hv::Result;
 use crate::sys::kvm::kvm_memory_encrypt_op;
 use crate::sys::sev::{
     KvmSevCmd, KvmSevCmdId, KvmSevLaunchMeasure, KvmSevLaunchStart, KvmSevLaunchUpdateData,
@@ -33,9 +33,7 @@ pub struct VmArch {
 
 impl KvmVm {
     pub fn sev_op<T>(&self, cmd: KvmSevCmdId, data: Option<&mut T>) -> Result<(), KvmError> {
-        let Some(sev_fd) = &self.vm.arch.sev_fd else {
-            unreachable!("SevFd is not initialized")
-        };
+        let Some(sev_fd) = &self.vm.arch.sev_fd else { unreachable!("SevFd is not initialized") };
         let mut req = KvmSevCmd {
             sev_fd: sev_fd.as_fd().as_raw_fd() as u32,
             data: match data {
@@ -50,19 +48,14 @@ impl KvmVm {
     }
 
     pub fn kvm_sev_launch_start(&self, policy: SevPolicy) -> Result<()> {
-        let mut start = KvmSevLaunchStart {
-            policy,
-            ..Default::default()
-        };
+        let mut start = KvmSevLaunchStart { policy, ..Default::default() };
         self.sev_op(KvmSevCmdId::LAUNCH_START, Some(&mut start))?;
         Ok(())
     }
 
     pub fn kvm_sev_launch_update_data(&self, range: &mut [u8]) -> Result<()> {
-        let mut update_data = KvmSevLaunchUpdateData {
-            uaddr: range.as_mut_ptr() as u64,
-            len: range.len() as u32,
-        };
+        let mut update_data =
+            KvmSevLaunchUpdateData { uaddr: range.as_mut_ptr() as u64, len: range.len() as u32 };
         self.sev_op(KvmSevCmdId::LAUNCH_UPDATE_DATA, Some(&mut update_data))?;
         Ok(())
     }
@@ -77,10 +70,8 @@ impl KvmVm {
         let _ = self.sev_op(KvmSevCmdId::LAUNCH_MEASURE, Some(&mut empty));
         assert_ne!(empty.len, 0);
         let mut buf = vec![0u8; empty.len as usize];
-        let mut measure = KvmSevLaunchMeasure {
-            uaddr: buf.as_mut_ptr() as u64,
-            len: buf.len() as u32,
-        };
+        let mut measure =
+            KvmSevLaunchMeasure { uaddr: buf.as_mut_ptr() as u64, len: buf.len() as u32 };
         self.sev_op(KvmSevCmdId::LAUNCH_MEASURE, Some(&mut measure))?;
         Ok(buf)
     }
@@ -91,10 +82,7 @@ impl KvmVm {
     }
 
     pub fn kvm_snp_launch_start(&self, policy: SnpPolicy) -> Result<()> {
-        let mut start = KvmSevSnpLaunchStart {
-            policy,
-            ..Default::default()
-        };
+        let mut start = KvmSevSnpLaunchStart { policy, ..Default::default() };
         self.sev_op(KvmSevCmdId::SNP_LAUNCH_START, Some(&mut start))?;
         Ok(())
     }

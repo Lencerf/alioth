@@ -17,7 +17,7 @@ use std::fmt;
 
 use snafu::{ErrorCompat, IntoError, ResultExt};
 
-pub use alioth_macros::{DebugTrace, trace_error};
+pub use alioth_macros::{trace_error, DebugTrace};
 
 pub trait DebugTrace: Error {
     fn debug_trace(&self, f: &mut fmt::Formatter) -> Result<u32, fmt::Error>;

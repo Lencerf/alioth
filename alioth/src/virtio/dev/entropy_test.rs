@@ -17,7 +17,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::TryRecvError;
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use assert_matches::assert_matches;
@@ -29,13 +29,13 @@ use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::RamBus;
 use crate::virtio::dev::entropy::{EntropyConfig, EntropyParam};
 use crate::virtio::dev::{DevParam, StartParam, Virtio, WakeEvent};
-use crate::virtio::queue::QueueReg;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::tests::GuestQueue;
+use crate::virtio::queue::QueueReg;
 use crate::virtio::tests::{
-    DATA_ADDR, FakeIoeventFd, FakeIrqSender, fixture_queues, fixture_ram_bus,
+    fixture_queues, fixture_ram_bus, FakeIoeventFd, FakeIrqSender, DATA_ADDR,
 };
-use crate::virtio::{DeviceId, FEATURE_BUILT_IN, VirtioFeature};
+use crate::virtio::{DeviceId, VirtioFeature, FEATURE_BUILT_IN};
 
 #[test]
 fn entry_config_test() {
@@ -52,10 +52,8 @@ fn entropy_test(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     let ram = ram_bus.lock_layout();
     let regs: Arc<[QueueReg]> = Arc::from(fixture_queues);
 
-    let mut guest_q = GuestQueue::new(
-        SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(),
-        &regs[0],
-    );
+    let mut guest_q =
+        GuestQueue::new(SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(), &regs[0]);
 
     let buf0_addr = DATA_ADDR;
     let buf1_addr = buf0_addr + (4 << 10);
@@ -67,9 +65,7 @@ fn entropy_test(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     let pipe_path_c = CString::new(pipe_path.as_os_str().as_encoded_bytes()).unwrap();
     ffi!(unsafe { libc::mkfifo(pipe_path_c.as_ptr(), 0o600) }).unwrap();
 
-    let param = EntropyParam {
-        source: Some(pipe_path.clone().into()),
-    };
+    let param = EntropyParam { source: Some(pipe_path.clone().into()) };
     let dev = param.build("entropy").unwrap();
 
     assert_matches!(dev.id(), DeviceId::Entropy);
@@ -90,11 +86,8 @@ fn entropy_test(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();
 
-    let mut writer = OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(&pipe_path)
-        .unwrap();
+    let mut writer =
+        OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(&pipe_path).unwrap();
 
     let id0 = guest_q.add_desc(&[], &[(buf0_addr, 4 << 10)]);
     tx.send(WakeEvent::Notify { q_index: 0 }).unwrap();

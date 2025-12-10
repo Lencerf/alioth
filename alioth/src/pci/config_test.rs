@@ -23,9 +23,9 @@ use crate::mem::emulated::{Action, Mmio};
 use crate::mem::{self, IoRegion, MemRegion, MemRegionEntry, MemRegionType, Memory};
 use crate::pci::cap::{MsixCap, MsixCapMmio, NullCap, PciCap, PciCapHdr, PciCapId, PciCapList};
 use crate::pci::config::{
-    BAR_IO, BAR_MEM32, BAR_MEM64, BarCallback, Command, CommonHeader, ConfigHeader, DeviceHeader,
-    EmulatedConfig, EmulatedHeader, MoveBarCallback, PciConfig, Status, UpdateCommandCallback,
-    offset_bar,
+    offset_bar, BarCallback, Command, CommonHeader, ConfigHeader, DeviceHeader, EmulatedConfig,
+    EmulatedHeader, MoveBarCallback, PciConfig, Status, UpdateCommandCallback, BAR_IO, BAR_MEM32,
+    BAR_MEM64,
 };
 use crate::pci::{Bdf, PciBar};
 
@@ -50,14 +50,7 @@ impl Mmio for TestRange {
 
 fn fixture_emulated_header() -> EmulatedHeader {
     let header = ConfigHeader::Device(DeviceHeader {
-        bars: [
-            0xe000_0000 | BAR_MEM32,
-            0,
-            BAR_MEM64,
-            0x0000_0001,
-            0,
-            0xe000 | BAR_IO,
-        ],
+        bars: [0xe000_0000 | BAR_MEM32, 0, BAR_MEM64, 0x0000_0001, 0, 0xe000 | BAR_IO],
         ..Default::default()
     });
     let bars = [
@@ -82,10 +75,7 @@ fn fixture_emulated_header() -> EmulatedHeader {
 fn test_emulated_header_masks() {
     let header = fixture_emulated_header();
     let data = header.data.read();
-    assert_eq!(
-        data.bar_masks,
-        [0xffff_f000, 0x0, 0xc000_0000, 0xffff_ffff, 0x0, 0xffff_fffc,]
-    );
+    assert_eq!(data.bar_masks, [0xffff_f000, 0x0, 0xc000_0000, 0xffff_ffff, 0x0, 0xffff_fffc,]);
 }
 
 #[test]
@@ -120,11 +110,7 @@ fn test_emulated_header_change_command(
     header.set_command(old);
 
     let got = header
-        .write(
-            CommonHeader::OFFSET_COMMAND as u64,
-            size_of::<Command>() as u8,
-            new.bits() as u64,
-        )
+        .write(CommonHeader::OFFSET_COMMAND as u64, size_of::<Command>() as u8, new.bits() as u64)
         .unwrap();
 
     if let Action::ChangeLayout { callback } = got {
@@ -135,12 +121,7 @@ fn test_emulated_header_change_command(
         assert_eq!(changed, Command::empty());
     }
 
-    let val = header
-        .read(
-            CommonHeader::OFFSET_COMMAND as u64,
-            size_of::<Command>() as u8,
-        )
-        .unwrap();
+    let val = header.read(CommonHeader::OFFSET_COMMAND as u64, size_of::<Command>() as u8).unwrap();
     assert_eq!(val as u16, new.bits());
 }
 
@@ -164,21 +145,15 @@ fn test_emulated_header_write_bar(
     let bdf = Bdf::new(0, 1, 0);
     header.set_bdf(bdf);
 
-    let old_val = header
-        .read(offset_bar(bar) as u64, size_of::<u32>() as u8)
-        .unwrap();
+    let old_val = header.read(offset_bar(bar) as u64, size_of::<u32>() as u8).unwrap();
 
-    let got = header
-        .write(offset_bar(bar) as u64, size_of::<u32>() as u8, value as u64)
-        .unwrap();
+    let got = header.write(offset_bar(bar) as u64, size_of::<u32>() as u8, value as u64).unwrap();
 
     if let Action::ChangeLayout { callback } = got {
         let callback = <dyn Any>::downcast_ref::<MoveBarCallback>(&*callback).unwrap();
         assert_eq!(callback.dst, dst.unwrap());
         assert_eq!(callback.bdf, bdf);
-        let new_val = header
-            .read(offset_bar(bar) as u64, size_of::<u32>() as u8)
-            .unwrap();
+        let new_val = header.read(offset_bar(bar) as u64, size_of::<u32>() as u8).unwrap();
         assert_eq!(new_val, old_val);
     } else {
         assert_matches!(got, Action::None);
@@ -205,19 +180,11 @@ fn test_emulated_header_write_status(
     }
 
     header
-        .write(
-            CommonHeader::OFFSET_STATUS as u64,
-            size_of::<Status>() as u8,
-            new.bits() as u64,
-        )
+        .write(CommonHeader::OFFSET_STATUS as u64, size_of::<Status>() as u8, new.bits() as u64)
         .unwrap();
 
-    let got = header
-        .read(
-            CommonHeader::OFFSET_STATUS as u64,
-            size_of::<Status>() as u8,
-        )
-        .unwrap() as u16;
+    let got =
+        header.read(CommonHeader::OFFSET_STATUS as u64, size_of::<Status>() as u8).unwrap() as u16;
 
     assert_eq!(got, expected.bits())
 }
@@ -229,10 +196,7 @@ fn test_emulated_config() {
 
     let caps: Vec<Box<dyn PciCap>> = vec![
         Box::new(MsixCapMmio::new(MsixCap {
-            header: PciCapHdr {
-                id: PciCapId::MSIX,
-                next: 0,
-            },
+            header: PciCapHdr { id: PciCapId::MSIX, next: 0 },
             ..Default::default()
         })),
         Box::new(NullCap { size: 16, next: 0 }),
@@ -245,15 +209,9 @@ fn test_emulated_config() {
     assert_eq!(config.size(), 4096);
 
     assert_matches!(config.read(CommonHeader::OFFSET_STATUS as u64, 2), Ok(v) if v as u16 & Status::CAP.bits() != 0);
-    assert_matches!(
-        config.read(DeviceHeader::OFFSET_CAPABILITY_POINTER as u64, 1),
-        Ok(0x40)
-    );
+    assert_matches!(config.read(DeviceHeader::OFFSET_CAPABILITY_POINTER as u64, 1), Ok(0x40));
 
-    assert_matches!(
-        config.write(offset_bar(0) as u64, 4, 0xee00_0000),
-        Ok(Action::None)
-    );
+    assert_matches!(config.write(offset_bar(0) as u64, 4, 0xee00_0000), Ok(Action::None));
     assert_matches!(config.read(offset_bar(0) as u64, 4), Ok(0));
 
     assert_matches!(config.read(0x40, 1), Ok(0x11));
@@ -307,13 +265,7 @@ fn test_mem_bar_layout_change() {
         &memory.mem_region_entries()[..],
         [
             (0xe000_0000, MemRegionEntry { size: 0x400, .. }),
-            (
-                0x1_0000_0000,
-                MemRegionEntry {
-                    size: 0x4000_0000,
-                    ..
-                }
-            )
+            (0x1_0000_0000, MemRegionEntry { size: 0x4000_0000, .. })
         ]
     );
 
@@ -331,13 +283,7 @@ fn test_mem_bar_layout_change() {
         &memory.mem_region_entries()[..],
         [
             (0xe001_0000, MemRegionEntry { size: 0x400, .. }),
-            (
-                0x2_0000_0000,
-                MemRegionEntry {
-                    size: 0x4000_0000,
-                    ..
-                }
-            )
+            (0x2_0000_0000, MemRegionEntry { size: 0x4000_0000, .. })
         ]
     );
 

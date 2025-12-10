@@ -141,9 +141,7 @@ where
     R: Debug + SlotBackend + Mmio,
 {
     pub fn new() -> MmioBus<R> {
-        Self {
-            inner: Addressable::new(),
-        }
+        Self { inner: Addressable::new() }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -209,10 +207,7 @@ where
                 action = r
             } else {
                 // TODO: handle multiple side effects caused by a single write
-                log::error!(
-                    "Write {write_val:#x} to {:#x}: dropped: {action:#x?}",
-                    start + offset
-                );
+                log::error!("Write {write_val:#x} to {:#x}: dropped: {action:#x?}", start + offset);
             }
             count += write_size;
         }

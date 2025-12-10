@@ -14,7 +14,7 @@
 
 use std::ops::RangeBounds;
 
-use crate::mem::{Result, error};
+use crate::mem::{error, Result};
 
 pub trait SlotBackend {
     fn size(&self) -> u64;
@@ -38,11 +38,7 @@ where
             return error::ZeroSizedSlot.fail();
         }
         match (backend.size() - 1).checked_add(addr) {
-            None => error::ExceedsLimit {
-                addr,
-                size: backend.size(),
-            }
-            .fail(),
+            None => error::ExceedsLimit { addr, size: backend.size() }.fail(),
             Some(_) => Ok(Self { addr, backend }),
         }
     }

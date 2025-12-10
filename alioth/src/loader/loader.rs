@@ -30,7 +30,7 @@ use snafu::Snafu;
 #[cfg(target_arch = "x86_64")]
 use crate::arch::reg::{DtReg, DtRegVal, SegReg, SegRegVal};
 use crate::arch::reg::{Reg, SReg};
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::mem::{MemRegionEntry, MemRegionType};
 
 #[derive(Debug, Default)]
@@ -64,10 +64,7 @@ pub struct InitState {
 #[snafu(module, context(suffix(false)))]
 pub enum Error {
     #[snafu(display("Cannot access file {path:?}"))]
-    AccessFile {
-        path: Box<Path>,
-        error: std::io::Error,
-    },
+    AccessFile { path: Box<Path>, error: std::io::Error },
     #[snafu(display("Firmware image size is not 4-KiB aligned"))]
     SizeNotAligned { size: u64 },
     #[snafu(display("Failed to add a guest memory slot"))]
@@ -89,11 +86,7 @@ pub enum Error {
     #[snafu(display(
         "{name} is too old, minimum supported version {min:#x}, found version {found:#x}"
     ))]
-    TooOld {
-        name: &'static str,
-        min: u64,
-        found: u64,
-    },
+    TooOld { name: &'static str, min: u64, found: u64 },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

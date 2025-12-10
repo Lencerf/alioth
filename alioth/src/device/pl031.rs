@@ -26,20 +26,20 @@ use crate::mem::emulated::{Action, Mmio};
 const RTC_DR: u64 = 0x000;
 const RTC_MR: u64 = 0x004;
 const RTC_LR: u64 = 0x008;
-const RTC_CR: u64 = 0x00C;
+const RTC_CR: u64 = 0x00c;
 const RTC_IMSC: u64 = 0x010;
 const RTC_RIS: u64 = 0x014;
 const RTC_MIS: u64 = 0x018;
-const RTC_ICR: u64 = 0x01C;
+const RTC_ICR: u64 = 0x01c;
 
-const RTC_PERIPH_ID0: u64 = 0xFE0;
-const RTC_PERIPH_ID1: u64 = 0xFE4;
-const RTC_PERIPH_ID2: u64 = 0xFE8;
-const RTC_PERIPH_ID3: u64 = 0xFEC;
-const RTC_PCELL_ID0: u64 = 0xFF0;
-const RTC_PCELL_ID1: u64 = 0xFF4;
-const RTC_PCELL_ID2: u64 = 0xFF8;
-const RTC_PCELL_ID3: u64 = 0xFFC;
+const RTC_PERIPH_ID0: u64 = 0xfe0;
+const RTC_PERIPH_ID1: u64 = 0xfe4;
+const RTC_PERIPH_ID2: u64 = 0xfe8;
+const RTC_PERIPH_ID3: u64 = 0xfec;
+const RTC_PCELL_ID0: u64 = 0xff0;
+const RTC_PCELL_ID1: u64 = 0xff4;
+const RTC_PCELL_ID2: u64 = 0xff8;
+const RTC_PCELL_ID3: u64 = 0xffc;
 
 const PERIPH_ID: [u8; 4] = [0x31, 0x10, 0x04, 0x00];
 const PCELL_ID: [u8; 4] = [0x0d, 0xf0, 0x05, 0xb1];
@@ -131,10 +131,7 @@ impl Mmio for Pl031 {
             }
             RTC_ICR => {} // Interrupts are not supported
             _ => {
-                log::warn!(
-                    "{}: write {val:#x} to unknown offset {offset:#x}",
-                    self.name,
-                );
+                log::warn!("{}: write {val:#x} to unknown offset {offset:#x}", self.name,);
             }
         };
         log::trace!("{}: write {val:#x} to offset {offset:#x}", self.name);

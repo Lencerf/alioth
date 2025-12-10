@@ -60,14 +60,7 @@ fn fixture_mmio_bus() -> MmioBus {
         (0x4, 4, 0xffff_ffff_89ab_cdef),
         (0xc, 4, 0xffff_ffff_abcd_1234),
     ] {
-        bus.add(
-            offset,
-            Arc::new(TestRange {
-                size,
-                val: Mutex::new(val),
-            }),
-        )
-        .unwrap();
+        bus.add(offset, Arc::new(TestRange { size, val: Mutex::new(val) })).unwrap();
     }
     bus
 }

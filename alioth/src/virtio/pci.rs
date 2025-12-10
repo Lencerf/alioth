@@ -16,9 +16,9 @@ use std::io::ErrorKind;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use alioth_macros::Layout;
 use parking_lot::{Mutex, RwLock};
@@ -32,15 +32,15 @@ use crate::pci::cap::{
     MsixTableMmioEntry, PciCap, PciCapHdr, PciCapId, PciCapList,
 };
 use crate::pci::config::{
-    BAR_MEM32, BAR_MEM64, BAR_PREFETCHABLE, CommonHeader, DeviceHeader, EmulatedConfig, HeaderType,
-    PciConfig, PciConfigArea,
+    CommonHeader, DeviceHeader, EmulatedConfig, HeaderType, PciConfig, PciConfigArea, BAR_MEM32,
+    BAR_MEM64, BAR_PREFETCHABLE,
 };
 use crate::pci::{self, Pci, PciBar};
 use crate::sync::notifier::Notifier;
 use crate::utils::{get_atomic_high32, get_atomic_low32, set_atomic_high32, set_atomic_low32};
 use crate::virtio::dev::{Register, StartParam, VirtioDevice, WakeEvent};
 use crate::virtio::queue::QueueReg;
-use crate::virtio::{DevStatus, DeviceId, IrqSender, Result, error};
+use crate::virtio::{error, DevStatus, DeviceId, IrqSender, Result};
 use crate::{impl_mmio_for_zerocopy, mem};
 
 const VIRTIO_MSI_NO_VECTOR: u16 = 0xffff;
@@ -403,10 +403,7 @@ where
                 let old = config_msix.load(Ordering::Acquire);
                 if self.msix_change_allowed(old) {
                     config_msix.store(val as u16, Ordering::Release);
-                    log::trace!(
-                        "{}: config MSI-X vector update: {old:#x} -> {val:#x}",
-                        self.name
-                    );
+                    log::trace!("{}: config MSI-X vector update: {old:#x} -> {val:#x}", self.name);
                 } else {
                     log::error!(
                         "{}: cannot change config MSI-X vector from {old:#x} to {val:#x}",
@@ -462,7 +459,8 @@ where
                         );
                     } else {
                         log::error!(
-                            "{}: cannot change queue {q_sel} MSI-X vector from {old:#x} to {val:#x}",
+                            "{}: cannot change queue {q_sel} MSI-X vector from {old:#x} to \
+                             {val:#x}",
                             self.name
                         )
                     }
@@ -715,19 +713,13 @@ where
         let msix_msg_ctrl = MsixMsgCtrl::new(table_entries as u16);
 
         let cap_msix = MsixCap {
-            header: PciCapHdr {
-                id: PciCapId::MSIX,
-                ..Default::default()
-            },
+            header: PciCapHdr { id: PciCapId::MSIX, ..Default::default() },
             control: msix_msg_ctrl,
             table_offset: MsixCapOffset::new(msix_table_offset as u32, 0),
             pba_offset: MsixCapOffset::new(msix_pba_offset as u32, 0),
         };
         let cap_common = VirtioPciCap {
-            header: PciCapHdr {
-                id: PciCapId::VENDOR,
-                ..Default::default()
-            },
+            header: PciCapHdr { id: PciCapId::VENDOR, ..Default::default() },
             cap_len: size_of::<VirtioPciCap>() as u8,
             cfg_type: VirtioPciCfg::Common as u8,
             bar: 0,
@@ -737,10 +729,7 @@ where
             ..Default::default()
         };
         let cap_isr = VirtioPciCap {
-            header: PciCapHdr {
-                id: PciCapId::VENDOR,
-                ..Default::default()
-            },
+            header: PciCapHdr { id: PciCapId::VENDOR, ..Default::default() },
             cap_len: size_of::<VirtioPciCap>() as u8,
             cfg_type: VirtioPciCfg::Isr as u8,
             bar: 0,
@@ -751,10 +740,7 @@ where
         };
         let cap_notify = VirtioPciNotifyCap {
             cap: VirtioPciCap {
-                header: PciCapHdr {
-                    id: PciCapId::VENDOR,
-                    ..Default::default()
-                },
+                header: PciCapHdr { id: PciCapId::VENDOR, ..Default::default() },
                 cap_len: size_of::<VirtioPciNotifyCap>() as u8,
                 cfg_type: VirtioPciCfg::Notify as u8,
                 bar: 0,
@@ -766,10 +752,7 @@ where
             multiplier: size_of::<u32>() as u32,
         };
         let cap_device_config = VirtioPciCap {
-            header: PciCapHdr {
-                id: PciCapId::VENDOR,
-                ..Default::default()
-            },
+            header: PciCapHdr { id: PciCapId::VENDOR, ..Default::default() },
             cap_len: size_of::<VirtioPciCap>() as u8,
             cfg_type: VirtioPciCfg::Device as u8,
             bar: 0,
@@ -787,10 +770,7 @@ where
         let bar0_size = 16 << 10;
         let mut bar0 = MemRegion {
             ranges: vec![],
-            entries: vec![MemRegionEntry {
-                size: bar0_size,
-                type_: mem::MemRegionType::Hidden,
-            }],
+            entries: vec![MemRegionEntry { size: bar0_size, type_: mem::MemRegionType::Hidden }],
             callbacks: Mutex::new(vec![]),
         };
 
@@ -808,10 +788,7 @@ where
             for (index, entry) in region.entries.iter().enumerate() {
                 let share_mem_cap = VirtioPciCap64 {
                     cap: VirtioPciCap {
-                        header: PciCapHdr {
-                            id: PciCapId::VENDOR,
-                            ..Default::default()
-                        },
+                        header: PciCapHdr { id: PciCapId::VENDOR, ..Default::default() },
                         cap_len: size_of::<VirtioPciCap64>() as u8,
                         cfg_type: VirtioPciCfg::SharedMemory as u8,
                         bar: 2,
@@ -832,14 +809,11 @@ where
 
         let msix_vector = VirtioPciMsixVector {
             config: AtomicU16::new(VIRTIO_MSI_NO_VECTOR),
-            queues: (0..num_queues)
-                .map(|_| AtomicU16::new(VIRTIO_MSI_NO_VECTOR))
-                .collect(),
+            queues: (0..num_queues).map(|_| AtomicU16::new(VIRTIO_MSI_NO_VECTOR)).collect(),
         };
 
-        let maybe_ioeventfds = (0..num_queues)
-            .map(|_| ioeventfd_reg.create())
-            .collect::<Result<Arc<_>, _>>();
+        let maybe_ioeventfds =
+            (0..num_queues).map(|_| ioeventfd_reg.create()).collect::<Result<Arc<_>, _>>();
         let ioeventfds = match maybe_ioeventfds {
             Ok(fds) => Some(fds),
             Err(hv::Error::IoeventFd { error, .. }) if error.kind() == ErrorKind::Unsupported => {
@@ -857,10 +831,7 @@ where
         }
         let registers = Arc::new(VirtioPciRegisterMmio {
             name: dev.name.clone(),
-            reg: Register {
-                device_feature,
-                ..Default::default()
-            },
+            reg: Register { device_feature, ..Default::default() },
             event_tx: dev.event_tx.clone(),
             notifier: dev.notifier.clone(),
             queues: dev.queue_regs.clone(),
@@ -872,14 +843,12 @@ where
             ioeventfds: ioeventfds.clone(),
         });
         bar0.ranges.push(MemRange::Emulated(msix_table));
-        bar0.ranges
-            .push(MemRange::Span((12 << 10) - msix_table_size as u64));
+        bar0.ranges.push(MemRange::Span((12 << 10) - msix_table_size as u64));
         bar0.ranges.push(MemRange::Emulated(registers.clone()));
         if let Some(ioeventfds) = ioeventfds {
-            bar0.callbacks.lock().push(Box::new(IoeventFdCallback {
-                registry: ioeventfd_reg,
-                ioeventfds,
-            }));
+            bar0.callbacks
+                .lock()
+                .push(Box::new(IoeventFdCallback { registry: ioeventfd_reg, ioeventfds }));
         }
         if device_config.size() > 0 {
             bar0.ranges.push(MemRange::Emulated(device_config))
@@ -906,11 +875,7 @@ where
 
         let config = EmulatedConfig::new_device(header, bars, cap_list);
 
-        Ok(VirtioPciDevice {
-            dev,
-            config,
-            registers,
-        })
+        Ok(VirtioPciDevice { dev, config, registers })
     }
 }
 

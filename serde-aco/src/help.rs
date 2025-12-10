@@ -28,22 +28,14 @@ pub struct FieldHelp {
 
 #[derive(Debug)]
 pub enum TypedHelp {
-    Struct {
-        name: &'static str,
-        fields: &'static [FieldHelp],
-    },
-    Enum {
-        name: &'static str,
-        variants: &'static [FieldHelp],
-    },
+    Struct { name: &'static str, fields: &'static [FieldHelp] },
+    Enum { name: &'static str, variants: &'static [FieldHelp] },
     String,
     Int,
     Float,
     Bool,
     Unit,
-    Custom {
-        desc: &'static str,
-    },
+    Custom { desc: &'static str },
     Array(&'static TypedHelp),
     Option(&'static TypedHelp),
 }
@@ -79,9 +71,7 @@ macro_rules! impl_help_for_array_types {
     };
 }
 
-impl_help_for_num_types!(
-    Int, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
-);
+impl_help_for_num_types!(Int, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
 impl_help_for_types!(Float, f32, f64);
 impl_help_for_types!(Bool, bool);
 impl_help_for_types!(
@@ -134,11 +124,7 @@ fn add_value_type(s: &mut String, v: &TypedHelp) {
 }
 
 fn add_extra_help<'a>(extra: &mut ExtraHelp<'a>, v: &'a TypedHelp) {
-    let (TypedHelp::Enum {
-        name,
-        variants: fields,
-    }
-    | TypedHelp::Struct { name, fields }) = v
+    let (TypedHelp::Enum { name, variants: fields } | TypedHelp::Struct { name, fields }) = v
     else {
         return;
     };
@@ -291,12 +277,7 @@ fn enum_all_unit_help(s: &mut String, variants: &[FieldHelp], indent: usize) -> 
     };
     for variant in variants.iter() {
         next_line(s, indent);
-        s.push_str(&format!(
-            "* {:width$}\t{}",
-            variant.ident,
-            variant.doc,
-            width = width
-        ));
+        s.push_str(&format!("* {:width$}\t{}", variant.ident, variant.doc, width = width));
     }
     true
 }

@@ -17,11 +17,11 @@ use std::sync::Arc;
 use assert_matches::assert_matches;
 use rstest::rstest;
 
-use crate::device::pvpanic::{PVPANIC_DEVICE_ID, PVPANIC_VENDOR_ID, PvPanic};
+use crate::device::pvpanic::{PvPanic, PVPANIC_DEVICE_ID, PVPANIC_VENDOR_ID};
 use crate::mem::emulated::{Action, Mmio};
-use crate::pci::Bdf;
-use crate::pci::config::{BAR_MEM_MASK, CommonHeader, offset_bar};
+use crate::pci::config::{offset_bar, CommonHeader, BAR_MEM_MASK};
 use crate::pci::segment::PciSegment;
+use crate::pci::Bdf;
 
 #[rstest]
 #[case(vec![], None, Some(Bdf::new(0, 0, 0)))]
@@ -68,10 +68,7 @@ fn test_pci_segment_mmio() {
         assert_eq!(got, expected as u64);
     }
 
-    assert_matches!(
-        segment.write(base + offset_bar(0) as u64, 4, 0xee00_0000),
-        Ok(Action::None)
-    );
+    assert_matches!(segment.write(base + offset_bar(0) as u64, 4, 0xee00_0000), Ok(Action::None));
     assert_eq!(
         segment.read(base + offset_bar(0) as u64, 4).unwrap() as u32 & !BAR_MEM_MASK,
         0xee00_0000

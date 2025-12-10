@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::hv::Hypervisor;
 use crate::hv::kvm::{Kvm, KvmConfig};
+use crate::hv::Hypervisor;
 
 #[test]
 #[cfg_attr(not(feature = "test-hv"), ignore)]

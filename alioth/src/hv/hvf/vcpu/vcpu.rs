@@ -17,8 +17,8 @@ mod vmexit;
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use snafu::ResultExt;
@@ -26,10 +26,10 @@ use snafu::ResultExt;
 use crate::arch::reg::{MpidrEl1, Reg, SReg};
 use crate::hv::hvf::check_ret;
 use crate::hv::hvf::vm::VcpuEvent;
-use crate::hv::{Result, Vcpu, VmEntry, VmExit, error};
+use crate::hv::{error, Result, Vcpu, VmEntry, VmExit};
 use crate::sys::hvf::{
-    HvExitReason, HvReg, HvVcpuExit, hv_vcpu_destroy, hv_vcpu_get_reg, hv_vcpu_get_sys_reg,
-    hv_vcpu_run, hv_vcpu_set_reg, hv_vcpu_set_sys_reg,
+    hv_vcpu_destroy, hv_vcpu_get_reg, hv_vcpu_get_sys_reg, hv_vcpu_run, hv_vcpu_set_reg,
+    hv_vcpu_set_sys_reg, HvExitReason, HvReg, HvVcpuExit,
 };
 
 #[derive(Debug)]
@@ -154,10 +154,7 @@ impl Vcpu for HvfVcpu {
                     self.handle_exception(&exit.exception)?;
                 }
                 _ => {
-                    break error::VmExit {
-                        msg: format!("{exit:x?}"),
-                    }
-                    .fail();
+                    break error::VmExit { msg: format!("{exit:x?}") }.fail();
                 }
             }
             if let Some(exit) = self.vmexit.take() {

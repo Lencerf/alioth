@@ -21,8 +21,8 @@ use quote::quote;
 use syn::meta::ParseNestedMeta;
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, ExprLit, Field, Fields, FieldsNamed,
-    FieldsUnnamed, Ident, Lit, Meta, MetaNameValue, Token, parse_macro_input,
+    parse_macro_input, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, ExprLit, Field,
+    Fields, FieldsNamed, FieldsUnnamed, Ident, Lit, Meta, MetaNameValue, Token,
 };
 
 fn get_doc_from_attrs(attrs: &[Attribute]) -> String {
@@ -30,9 +30,7 @@ fn get_doc_from_attrs(attrs: &[Attribute]) -> String {
     for attr in attrs.iter() {
         let Meta::NameValue(MetaNameValue {
             path,
-            value: Expr::Lit(ExprLit {
-                lit: Lit::Str(s), ..
-            }),
+            value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
             ..
         }) = &attr.meta
         else {
@@ -65,10 +63,7 @@ fn get_serde_aliases_from_attrs(ident: &Ident, attrs: &[Attribute]) -> Vec<Strin
         for meta in nested {
             let Meta::NameValue(MetaNameValue {
                 path,
-                value:
-                    Expr::Lit(ExprLit {
-                        lit: Lit::Str(s), ..
-                    }),
+                value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
                 ..
             }) = meta
             else {

@@ -36,30 +36,30 @@ use std::mem::{size_of, transmute};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::Path;
 use std::ptr::null_mut;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 use libc::SIGRTMIN;
-use parking_lot::Mutex;
 use parking_lot::lock_api::RwLock;
+use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_aco::Help;
 use snafu::{ResultExt, Snafu};
 
 #[cfg(target_arch = "x86_64")]
 use crate::arch::cpuid::CpuidIn;
-use crate::errors::{DebugTrace, trace_error};
+use crate::errors::{trace_error, DebugTrace};
 use crate::ffi;
-use crate::hv::{Hypervisor, MemMapOption, Result, VmConfig, error};
-#[cfg(target_arch = "aarch64")]
-use crate::sys::kvm::KvmDevType;
+use crate::hv::{error, Hypervisor, MemMapOption, Result, VmConfig};
 #[cfg(target_arch = "x86_64")]
 use crate::sys::kvm::kvm_get_supported_cpuid;
+#[cfg(target_arch = "aarch64")]
+use crate::sys::kvm::KvmDevType;
 use crate::sys::kvm::{
-    KVM_API_VERSION, kvm_create_vm, kvm_get_api_version, kvm_get_vcpu_mmap_size,
+    kvm_create_vm, kvm_get_api_version, kvm_get_vcpu_mmap_size, KVM_API_VERSION,
 };
 #[cfg(target_arch = "x86_64")]
-use crate::sys::kvm::{KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2};
+use crate::sys::kvm::{KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KVM_MAX_CPUID_ENTRIES};
 
 use self::vm::{KvmVm, VmInner};
 
@@ -80,32 +80,20 @@ pub enum KvmError {
     #[snafu(display("Failed to get KVM API version"))]
     KvmApi { error: std::io::Error },
     #[snafu(display("Failed to open {path:?}"))]
-    OpenFile {
-        path: Box<Path>,
-        error: std::io::Error,
-    },
+    OpenFile { path: Box<Path>, error: std::io::Error },
     #[snafu(display("Invalid memory map option {option:?}"))]
     MmapOption { option: MemMapOption },
     #[snafu(display("Failed to mmap a VCPU fd"))]
     MmapVcpuFd { error: std::io::Error },
     #[snafu(display("Failed to check extension {ext}"))]
-    CheckExtension {
-        ext: &'static str,
-        error: std::io::Error,
-    },
+    CheckExtension { ext: &'static str, error: std::io::Error },
     #[snafu(display("Failed to enable capability {cap}"))]
-    EnableCap {
-        cap: &'static str,
-        error: std::io::Error,
-    },
+    EnableCap { cap: &'static str, error: std::io::Error },
     #[snafu(display("Failed to create guest memfd"))]
     GuestMemfd { error: std::io::Error },
     #[cfg(target_arch = "aarch64")]
     #[snafu(display("Failed to create in-kernel device {type_:?}"))]
-    CreateDevice {
-        type_: KvmDevType,
-        error: std::io::Error,
-    },
+    CreateDevice { type_: KvmDevType, error: std::io::Error },
     #[cfg(target_arch = "aarch64")]
     #[snafu(display("Failed to configure device attributes"))]
     DeviceAttr { error: std::io::Error },
@@ -139,10 +127,7 @@ impl Kvm {
         let kvm_fd = OwnedFd::from(kvm_file);
         let version = unsafe { kvm_get_api_version(&kvm_fd) }.context(kvm_error::KvmApi)?;
         if version != KVM_API_VERSION {
-            return Err(error::Capability {
-                cap: "KVM_API_VERSION (12)",
-            }
-            .build());
+            return Err(error::Capability { cap: "KVM_API_VERSION (12)" }.build());
         }
         let mut action: libc::sigaction = unsafe { transmute([0u8; size_of::<libc::sigaction>()]) };
         action.sa_flags = libc::SA_SIGINFO;
@@ -205,18 +190,10 @@ impl Hypervisor for Kvm {
                     None
                 },
             };
-            let out = CpuidResult {
-                eax: e.eax,
-                ebx: e.ebx,
-                ecx: e.ecx,
-                edx: e.edx,
-            };
+            let out = CpuidResult { eax: e.eax, ebx: e.ebx, ecx: e.ecx, edx: e.edx };
             (in_, out)
         };
-        let cpuids = kvm_cpuid2.entries[0..kvm_cpuid2.nent as usize]
-            .iter()
-            .map(map_f)
-            .collect();
+        let cpuids = kvm_cpuid2.entries[0..kvm_cpuid2.nent as usize].iter().map(map_f).collect();
         Ok(cpuids)
     }
 }

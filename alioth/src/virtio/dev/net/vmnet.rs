@@ -18,7 +18,7 @@ use std::io::{self, ErrorKind, Read};
 use std::ptr::null;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -32,25 +32,25 @@ use zerocopy::IntoBytes;
 use crate::hv::IoeventFd;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
-use crate::sys::block::{_NSConcreteStackBlock, BlockDescriptor, BlockFlag};
-use crate::sys::dispatch::{DispatchQueue, dispatch_queue_create, dispatch_release};
+use crate::sys::block::{BlockDescriptor, BlockFlag, _NSConcreteStackBlock};
+use crate::sys::dispatch::{dispatch_queue_create, dispatch_release, DispatchQueue};
 use crate::sys::vmnet::{
-    InterfaceEvent, OperationMode, VmPktDesc, VmnetInterface, VmnetInterfaceCompletionHandler,
-    VmnetInterfaceEventCallback, VmnetReturn, VmnetStartInterfaceCompletionHandler,
     vmnet_allocate_mac_address_key, vmnet_enable_isolation_key, vmnet_interface_set_event_callback,
     vmnet_mac_address_key, vmnet_mtu_key, vmnet_operation_mode_key, vmnet_read,
-    vmnet_start_interface, vmnet_stop_interface, vmnet_write,
+    vmnet_start_interface, vmnet_stop_interface, vmnet_write, InterfaceEvent, OperationMode,
+    VmPktDesc, VmnetInterface, VmnetInterfaceCompletionHandler, VmnetInterfaceEventCallback,
+    VmnetReturn, VmnetStartInterfaceCompletionHandler,
 };
 use crate::sys::xpc::{
-    XpcObject, xpc_bool_create, xpc_dictionary_create, xpc_dictionary_get_string,
-    xpc_dictionary_get_uint64, xpc_uint64_create,
+    xpc_bool_create, xpc_dictionary_create, xpc_dictionary_get_string, xpc_dictionary_get_uint64,
+    xpc_uint64_create, XpcObject,
 };
 use crate::virtio::dev::net::mac_addr::MacAddr;
 use crate::virtio::dev::net::{NetConfig, NetFeature, VirtioNetHdr};
 use crate::virtio::dev::{DevParam, DeviceId, Result, Virtio, WakeEvent};
 use crate::virtio::queue::{DescChain, QueueReg, Status, VirtQueue};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{FEATURE_BUILT_IN, IrqSender};
+use crate::virtio::{IrqSender, FEATURE_BUILT_IN};
 
 #[derive(Debug)]
 pub struct Net {
@@ -79,11 +79,7 @@ impl Net {
     pub fn new(param: NetVmnetParam, name: impl Into<Arc<str>>) -> Result<Self> {
         let allocate_mac = param.mac.is_none();
         let keys = unsafe {
-            [
-                vmnet_operation_mode_key,
-                vmnet_allocate_mac_address_key,
-                vmnet_enable_isolation_key,
-            ]
+            [vmnet_operation_mode_key, vmnet_allocate_mac_address_key, vmnet_enable_isolation_key]
         };
         let vals = [
             unsafe { xpc_uint64_create(OperationMode::SHARED.raw() as u64) } as *const _,
@@ -105,23 +101,14 @@ impl Net {
             let mtu = unsafe { xpc_dictionary_get_uint64(obj, vmnet_mtu_key) } as u16;
             let mac_addr = unsafe { xpc_dictionary_get_string(obj, vmnet_mac_address_key) };
             if mac_addr.is_null() {
-                return Ok(NetConfig {
-                    mtu,
-                    max_queue_pairs: 1,
-                    ..Default::default()
-                });
+                return Ok(NetConfig { mtu, max_queue_pairs: 1, ..Default::default() });
             }
             let Ok(mac_addr) = unsafe { CStr::from_ptr(mac_addr) }.to_str() else {
                 let e = io::Error::new(ErrorKind::InvalidData, "Invalid mac address string");
                 return Err(e.into());
             };
             match mac_addr.parse() {
-                Ok(mac) => Ok(NetConfig {
-                    mtu,
-                    max_queue_pairs: 1,
-                    mac,
-                    ..Default::default()
-                }),
+                Ok(mac) => Ok(NetConfig { mtu, max_queue_pairs: 1, mac, ..Default::default() }),
                 Err(e) => {
                     let msg = format!("Invalid mac address: {e:?}");
                     Err(io::Error::new(ErrorKind::InvalidData, msg).into())
@@ -139,10 +126,8 @@ impl Net {
             }
         }
 
-        static BLOCK_DESC: BlockDescriptor = BlockDescriptor {
-            reserved: 0,
-            size: size_of::<HandlerBlock>() as _,
-        };
+        static BLOCK_DESC: BlockDescriptor =
+            BlockDescriptor { reserved: 0, size: size_of::<HandlerBlock>() as _ };
         let handler = HandlerBlock {
             block: VmnetStartInterfaceCompletionHandler {
                 isa: unsafe { _NSConcreteStackBlock },
@@ -197,10 +182,8 @@ impl Drop for Net {
             }
         }
 
-        static BLOCK_DESC: BlockDescriptor = BlockDescriptor {
-            reserved: 0,
-            size: size_of::<HandlerBlock>() as _,
-        };
+        static BLOCK_DESC: BlockDescriptor =
+            BlockDescriptor { reserved: 0, size: size_of::<HandlerBlock>() as _ };
         let handler = HandlerBlock {
             block: VmnetInterfaceCompletionHandler {
                 isa: unsafe { _NSConcreteStackBlock },
@@ -222,10 +205,9 @@ impl Drop for Net {
                     log::error!("{}: failed to stop interface: {e:?}", self.name);
                 }
             }
-            Err(e) => log::error!(
-                "{}: failed to receive stop interface response: {e:?}",
-                self.name
-            ),
+            Err(e) => {
+                log::error!("{}: failed to receive stop interface response: {e:?}", self.name)
+            }
         }
         unsafe { dispatch_release(dispatch_queue) };
     }
@@ -324,10 +306,8 @@ impl VirtioMio for Net {
             }
         }
 
-        static BLOCK_DESC: BlockDescriptor = BlockDescriptor {
-            reserved: 0,
-            size: size_of::<CallbackBlock>() as _,
-        };
+        static BLOCK_DESC: BlockDescriptor =
+            BlockDescriptor { reserved: 0, size: size_of::<CallbackBlock>() as _ };
         let callback = CallbackBlock {
             block: VmnetInterfaceEventCallback {
                 isa: unsafe { _NSConcreteStackBlock },
@@ -419,10 +399,7 @@ fn read_from_vmnet(interface: *mut VmnetInterface) -> impl FnMut(&mut DescChain)
                     trim_len -= buf.len();
                 }
             } else {
-                iov.push(libc::iovec {
-                    iov_base: buf.as_ptr() as *mut c_void,
-                    iov_len: buf.len(),
-                });
+                iov.push(libc::iovec { iov_base: buf.as_ptr() as *mut c_void, iov_len: buf.len() });
             }
         }
 
@@ -441,15 +418,10 @@ fn read_from_vmnet(interface: *mut VmnetInterface) -> impl FnMut(&mut DescChain)
             return Ok(Status::Break);
         }
 
-        let hdr = VirtioNetHdr {
-            num_buffers: 1,
-            ..Default::default()
-        };
+        let hdr = VirtioNetHdr { num_buffers: 1, ..Default::default() };
         let _ = hdr.as_bytes().read_vectored(&mut chain.writable);
 
-        Ok(Status::Done {
-            len: (packets.vm_pkt_size + size_of::<VirtioNetHdr>()) as u32,
-        })
+        Ok(Status::Done { len: (packets.vm_pkt_size + size_of::<VirtioNetHdr>()) as u32 })
     }
 }
 
@@ -470,10 +442,7 @@ fn write_to_vmnet(interface: *mut VmnetInterface) -> impl FnMut(&mut DescChain) 
                     trim_len -= buf.len();
                 }
             } else {
-                iov.push(libc::iovec {
-                    iov_base: buf.as_ptr() as *mut c_void,
-                    iov_len: buf.len(),
-                });
+                iov.push(libc::iovec { iov_base: buf.as_ptr() as *mut c_void, iov_len: buf.len() });
             }
         }
 

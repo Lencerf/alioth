@@ -15,9 +15,9 @@
 use assert_matches::assert_matches;
 
 use crate::mem::emulated::Mmio;
-use crate::pci::Pci;
 use crate::pci::config::{CommonHeader, HeaderType};
 use crate::pci::host_bridge::HostBridge;
+use crate::pci::Pci;
 
 #[test]
 fn test_host_bridge() {
@@ -30,10 +30,7 @@ fn test_host_bridge() {
     let header = config.get_header();
 
     assert_matches!(header.read(CommonHeader::OFFSET_CLASS as u64, 1), Ok(0x06));
-    assert_matches!(
-        header.read(CommonHeader::OFFSET_SUBCLASS as u64, 1),
-        Ok(0x00)
-    );
+    assert_matches!(header.read(CommonHeader::OFFSET_SUBCLASS as u64, 1), Ok(0x00));
     assert_matches!(
         header.read(CommonHeader::OFFSET_HEADER_TYPE as u64, 1),
         Ok(t) if t as u8 == HeaderType::DEVICE.raw()

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::hv::VmExit;
 use crate::hv::kvm::vcpu::KvmVcpu;
+use crate::hv::VmExit;
 use crate::sys::kvm::{KvmExit, KvmRunExitIo};
 
 impl KvmVcpu {

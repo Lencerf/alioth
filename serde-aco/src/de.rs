@@ -14,8 +14,8 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
 use serde::de::{self, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
+use serde::Deserialize;
 
 use crate::error::{Error, Result};
 
@@ -275,21 +275,11 @@ impl<'s> de::Deserializer<'s> for &mut Deserializer<'s, '_> {
 
 impl<'s, 'o> Deserializer<'s, 'o> {
     pub fn from_args(input: &'s str, objects: &'o HashMap<&'s str, &'s str>) -> Self {
-        Deserializer {
-            input,
-            objects: Some(objects),
-            top_level: true,
-            key: "",
-        }
+        Deserializer { input, objects: Some(objects), top_level: true, key: "" }
     }
 
     pub fn from_arg(input: &'s str) -> Self {
-        Deserializer {
-            input,
-            objects: None,
-            top_level: true,
-            key: "",
-        }
+        Deserializer { input, objects: None, top_level: true, key: "" }
     }
 
     fn end(&self) -> Result<()> {
@@ -308,10 +298,7 @@ impl<'s, 'o> Deserializer<'s, 'o> {
         let de = if !self.top_level {
             let id = self.consume_input();
             let sub_input = self.deref_id(id)?;
-            sub_de = Deserializer {
-                input: sub_input,
-                ..*self
-            };
+            sub_de = Deserializer { input: sub_input, ..*self };
             &mut sub_de
         } else {
             self.top_level = false;
@@ -462,11 +449,7 @@ impl<'s> MapAccess<'s> for CommaSeparated<'_, 's, '_> {
             return Err(Error::ExpectedMapEq);
         }
         self.de.key = key;
-        let mut sub_de = Deserializer {
-            input: key,
-            key: "",
-            ..*self.de
-        };
+        let mut sub_de = Deserializer { input: key, key: "", ..*self.de };
         seed.deserialize(&mut sub_de).map(Some)
     }
 
@@ -540,7 +523,7 @@ mod test {
     use serde::Deserialize;
     use serde_bytes::{ByteArray, ByteBuf};
 
-    use crate::{Error, from_arg, from_args};
+    use crate::{from_arg, from_args, Error};
 
     #[test]
     fn test_option() {
@@ -564,15 +547,9 @@ mod test {
 
         let map_none = HashMap::from([("id_none", "")]);
         assert_eq!(from_arg::<Vec<Option<u32>>>("").unwrap(), vec![]);
-        assert_eq!(
-            from_args::<Vec<Option<u32>>>("id_none,", &map_none).unwrap(),
-            vec![None]
-        );
+        assert_eq!(from_args::<Vec<Option<u32>>>("id_none,", &map_none).unwrap(), vec![None]);
         assert_eq!(from_arg::<Vec<Option<u32>>>("1,").unwrap(), vec![Some(1)]);
-        assert_eq!(
-            from_arg::<Vec<Option<u32>>>("1,2,").unwrap(),
-            vec![Some(1), Some(2)]
-        );
+        assert_eq!(from_arg::<Vec<Option<u32>>>("1,2,").unwrap(), vec![Some(1), Some(2)]);
         assert_eq!(
             from_args::<Vec<Option<u32>>>("1,2,id_none,", &map_none).unwrap(),
             vec![Some(1), Some(2), None]
@@ -662,18 +639,13 @@ mod test {
                 &HashMap::from([("id_addr", "0xea,0xd7,0xa8,0xe8,0xc6,0x2f")])
             )
             .unwrap(),
-            MacAddr {
-                addr: ByteArray::new([0xea, 0xd7, 0xa8, 0xe8, 0xc6, 0x2f])
-            }
+            MacAddr { addr: ByteArray::new([0xea, 0xd7, 0xa8, 0xe8, 0xc6, 0x2f]) }
         )
     }
 
     #[test]
     fn test_string() {
-        assert_eq!(
-            from_arg::<String>("test,s=1,c").unwrap(),
-            "test,s=1,c".to_owned()
-        );
+        assert_eq!(from_arg::<String>("test,s=1,c").unwrap(), "test,s=1,c".to_owned());
         assert_eq!(
             from_args::<HashMap<String, String>>(
                 "cmd=id_1",
@@ -736,29 +708,15 @@ mod test {
             .unwrap(),
             Numa {
                 nodes: vec![
-                    Node {
-                        name: "a".to_owned(),
-                        start: 0,
-                        size: 2 << 30
-                    },
-                    Node {
-                        name: "b".to_owned(),
-                        start: 4 << 30,
-                        size: 2 << 30
-                    }
+                    Node { name: "a".to_owned(), start: 0, size: 2 << 30 },
+                    Node { name: "b".to_owned(), start: 4 << 30, size: 2 << 30 }
                 ]
             }
         );
 
         assert_eq!(
             from_arg::<Numa>("nodes=size=2g,").unwrap(),
-            Numa {
-                nodes: vec![Node {
-                    name: "".to_owned(),
-                    start: 0,
-                    size: 2 << 30
-                }]
-            }
+            Numa { nodes: vec![Node { name: "".to_owned(), start: 0, size: 2 << 30 }] }
         );
 
         #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -806,10 +764,7 @@ mod test {
             .unwrap(),
             HashMap::from([
                 (
-                    MapKey {
-                        name: "gic".to_owned(),
-                        id: 1
-                    },
+                    MapKey { name: "gic".to_owned(), id: 1 },
                     MapVal {
                         addr: "0xff".to_owned(),
                         info: HashMap::from([
@@ -820,10 +775,7 @@ mod test {
                     }
                 ),
                 (
-                    MapKey {
-                        name: "pci".to_owned(),
-                        id: 2
-                    },
+                    MapKey { name: "pci".to_owned(), id: 2 },
                     MapVal {
                         addr: "0xcc".to_owned(),
                         info: HashMap::from([(
@@ -876,23 +828,12 @@ mod test {
                 enable_1: true,
                 enable_2: false,
                 enable_3: None,
-                sub: SubParam {
-                    b: 1,
-                    w: 2,
-                    enable: Some(true),
-                    s: "s1".to_owned(),
-                },
+                sub: SubParam { b: 1, w: 2, enable: Some(true), s: "s1".to_owned() },
                 addr: Addr(1 << 30)
             }
         );
-        assert_matches!(
-            from_arg::<SubParam>("b=1,w=2,enable,s=s1"),
-            Err(Error::ExpectedMapEq)
-        );
-        assert_matches!(
-            from_arg::<SubParam>("b=1,w=2,s=s1,enable"),
-            Err(Error::ExpectedMapEq)
-        );
+        assert_matches!(from_arg::<SubParam>("b=1,w=2,enable,s=s1"), Err(Error::ExpectedMapEq));
+        assert_matches!(from_arg::<SubParam>("b=1,w=2,s=s1,enable"), Err(Error::ExpectedMapEq));
     }
 
     #[test]
@@ -907,22 +848,10 @@ mod test {
         struct BoolStruct {
             val: bool,
         }
-        assert_eq!(
-            from_arg::<BoolStruct>("val=on").unwrap(),
-            BoolStruct { val: true }
-        );
-        assert_eq!(
-            from_arg::<BoolStruct>("val=off").unwrap(),
-            BoolStruct { val: false }
-        );
-        assert_eq!(
-            from_arg::<BoolStruct>("val=true").unwrap(),
-            BoolStruct { val: true }
-        );
-        assert_eq!(
-            from_arg::<BoolStruct>("val=false").unwrap(),
-            BoolStruct { val: false }
-        );
+        assert_eq!(from_arg::<BoolStruct>("val=on").unwrap(), BoolStruct { val: true });
+        assert_eq!(from_arg::<BoolStruct>("val=off").unwrap(), BoolStruct { val: false });
+        assert_eq!(from_arg::<BoolStruct>("val=true").unwrap(), BoolStruct { val: true });
+        assert_eq!(from_arg::<BoolStruct>("val=false").unwrap(), BoolStruct { val: false });
         assert_matches!(from_arg::<BoolStruct>("val=a"), Err(Error::ExpectedBool));
 
         assert_matches!(
@@ -962,45 +891,27 @@ mod test {
 
         assert_eq!(
             from_args::<TestStruct>("num=3,e=id_a", &[("id_a", "A,val=1")].into()).unwrap(),
-            TestStruct {
-                num: 3,
-                e: TestEnum::A { val: 1 }
-            }
+            TestStruct { num: 3, e: TestEnum::A { val: 1 } }
         );
         assert_eq!(
             from_arg::<TestStruct>("num=4,e=A").unwrap(),
-            TestStruct {
-                num: 4,
-                e: TestEnum::A { val: 0 },
-            }
+            TestStruct { num: 4, e: TestEnum::A { val: 0 } }
         );
         assert_eq!(
             from_args::<TestStruct>("num=4,e=id_a", &[("id_a", "A")].into()).unwrap(),
-            TestStruct {
-                num: 4,
-                e: TestEnum::A { val: 0 },
-            }
+            TestStruct { num: 4, e: TestEnum::A { val: 0 } }
         );
         assert_eq!(
             from_arg::<TestStruct>("num=4,e=D").unwrap(),
-            TestStruct {
-                num: 4,
-                e: TestEnum::D,
-            }
+            TestStruct { num: 4, e: TestEnum::D }
         );
         assert_eq!(
             from_args::<TestStruct>("num=4,e=id_d", &[("id_d", "D")].into()).unwrap(),
-            TestStruct {
-                num: 4,
-                e: TestEnum::D,
-            }
+            TestStruct { num: 4, e: TestEnum::D }
         );
         assert_eq!(
             from_arg::<TestStruct>("num=3,e=e").unwrap(),
-            TestStruct {
-                num: 3,
-                e: TestEnum::E
-            }
+            TestStruct { num: 3, e: TestEnum::E }
         );
         assert_matches!(
             from_arg::<TestStruct>("num=4,e=id_d"),
