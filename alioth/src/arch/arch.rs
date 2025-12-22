@@ -15,6 +15,9 @@
 #[cfg(target_arch = "aarch64")]
 #[path = "aarch64/aarch64.rs"]
 mod aarch64;
+#[cfg(target_arch = "loongarch64")]
+#[path = "loongarch64/loongarch64.rs"]
+mod loongarch64;
 #[cfg(target_arch = "x86_64")]
 #[path = "x86_64/x86_64.rs"]
 mod x86_64;
@@ -23,3 +26,6 @@ mod x86_64;
 pub use self::aarch64::*;
 #[cfg(target_arch = "x86_64")]
 pub use self::x86_64::*;
+
+#[cfg(target_arch = "loongarch64")]
+pub use self::loongarch64::*;

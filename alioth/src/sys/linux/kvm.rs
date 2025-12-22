@@ -43,8 +43,8 @@ constants! {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub struct KvmVmType(#[allow(dead_code)] pub u64);
+#[cfg(not(target_arch = "x86_64"))]
+pub type KvmVmType = u64;
 
 #[cfg(target_arch = "x86_64")]
 pub const KVM_MAX_CPUID_ENTRIES: usize = 256;

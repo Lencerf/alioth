@@ -15,6 +15,9 @@
 #[cfg(target_arch = "aarch64")]
 #[path = "vcpu_aarch64.rs"]
 mod aarch64;
+#[cfg(target_arch = "loongarch64")]
+#[path = "vcpu_loongarch64.rs"]
+mod loongarch64;
 #[cfg(target_arch = "x86_64")]
 #[path = "vcpu_x86_64.rs"]
 mod x86_64;
@@ -48,6 +51,8 @@ use crate::sys::kvm::{KvmExit, KvmRun, kvm_run};
 
 #[cfg(target_arch = "aarch64")]
 use self::aarch64::VcpuArch;
+#[cfg(target_arch = "loongarch64")]
+use self::loongarch64::VcpuArch;
 #[cfg(target_arch = "x86_64")]
 use self::x86_64::VcpuArch;
 
@@ -163,7 +168,7 @@ impl Vcpu for KvmVcpu {
         self.kvm_set_sregs(sregs, seg_regs, dt_regs)
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(not(target_arch = "x86_64"))]
     fn set_sregs(&mut self, sregs: &[(SReg, u64)]) -> Result<(), Error> {
         self.kvm_set_sregs(sregs)
     }

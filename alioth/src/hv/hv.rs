@@ -149,7 +149,7 @@ pub trait Vcpu {
         dt_regs: &[(DtReg, DtRegVal)],
     ) -> Result<(), Error>;
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(not(target_arch = "x86_64"))]
     fn set_sregs(&mut self, sregs: &[(SReg, u64)]) -> Result<(), Error>;
 
     fn run(&mut self, entry: VmEntry) -> Result<VmExit, Error>;

@@ -15,6 +15,9 @@
 #[cfg(target_arch = "aarch64")]
 #[path = "board_aarch64.rs"]
 mod aarch64;
+#[cfg(target_arch = "loongarch64")]
+#[path = "board_loongarch64.rs"]
+mod loongarch64;
 #[cfg(target_arch = "x86_64")]
 #[path = "board_x86_64.rs"]
 mod x86_64;
@@ -57,6 +60,8 @@ use crate::vfio::iommu::Ioas;
 
 #[cfg(target_arch = "aarch64")]
 pub(crate) use self::aarch64::ArchBoard;
+#[cfg(target_arch = "loongarch64")]
+pub(crate) use self::loongarch64::ArchBoard;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use self::x86_64::ArchBoard;
 

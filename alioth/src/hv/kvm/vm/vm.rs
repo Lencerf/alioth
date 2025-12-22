@@ -15,6 +15,9 @@
 #[cfg(target_arch = "aarch64")]
 #[path = "vm_aarch64.rs"]
 mod aarch64;
+#[cfg(target_arch = "loongarch64")]
+#[path = "vm_loongarch64.rs"]
+mod loongarch64;
 #[cfg(target_arch = "x86_64")]
 #[path = "vm_x86_64.rs"]
 mod x86_64;
@@ -58,6 +61,8 @@ use crate::sys::kvm::{
 
 #[cfg(target_arch = "aarch64")]
 use self::aarch64::{VmArch, translate_msi_addr};
+#[cfg(target_arch = "loongarch64")]
+use self::loongarch64::{VmArch, translate_msi_addr};
 #[cfg(target_arch = "x86_64")]
 use self::x86_64::{VmArch, translate_msi_addr};
 
@@ -82,6 +87,8 @@ impl VmInner {
         #[cfg(target_arch = "x86_64")]
         let (irqchip, max_pin) = (KVM_IRQCHIP_IOAPIC, 24);
         #[cfg(target_arch = "aarch64")]
+        let (irqchip, max_pin) = (0, 32);
+        #[cfg(target_arch = "loongarch64")]
         let (irqchip, max_pin) = (0, 32);
         for pin in 0..max_pin {
             if pin_map & (1 << pin) == 0 {

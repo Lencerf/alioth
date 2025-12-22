@@ -17,11 +17,17 @@
 mod aarch64;
 #[cfg(target_arch = "x86_64")]
 pub mod bootparams;
+#[cfg(target_arch = "loongarch64")]
+#[path = "linux_loongarch64.rs"]
+mod loongarch64;
 #[cfg(target_arch = "x86_64")]
 #[path = "linux_x86_64.rs"]
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
 pub use self::aarch64::load;
+#[cfg(target_arch = "loongarch64")]
+pub use self::loongarch64::load;
 #[cfg(target_arch = "x86_64")]
 pub use self::x86_64::load;
+
