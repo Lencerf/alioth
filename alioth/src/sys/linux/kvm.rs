@@ -24,7 +24,7 @@ use crate::ioctl_writeread_buf;
 use crate::sys::ioctl::ioctl_iowr;
 use crate::sys::ioctl::{ioctl_io, ioctl_ior};
 use crate::{
-    c_enum, ioctl_none, ioctl_read, ioctl_write_buf, ioctl_write_ptr, ioctl_write_val,
+    constants, ioctl_none, ioctl_read, ioctl_write_buf, ioctl_write_ptr, ioctl_write_val,
     ioctl_writeread,
 };
 
@@ -32,7 +32,7 @@ pub const KVMIO: u8 = 0xAE;
 pub const KVM_API_VERSION: i32 = 12;
 
 #[cfg(target_arch = "x86_64")]
-c_enum! {
+constants! {
     pub struct KvmVmType(u64);
     {
         DEFAULT = 0;
@@ -285,7 +285,7 @@ pub struct KvmSregs2 {
     pub pdptrs: [u64; 4],
 }
 
-c_enum! {
+constants! {
     pub struct KvmExit(u32);
     {
         IO = 2;
@@ -296,7 +296,7 @@ c_enum! {
     }
 }
 
-c_enum! {
+constants! {
     pub struct KvmSystemEvent(u32);
     {
         SHUTDOWN = 1;
@@ -347,7 +347,7 @@ pub struct KvmRunExitMmio {
     pub is_write: u8,
 }
 
-c_enum! {
+constants! {
     pub struct KvmExitIo(u8);
     {
         IN = 0;
@@ -502,7 +502,7 @@ pub struct KvmMsi {
     pub pad: [u8; 12usize],
 }
 
-c_enum! {
+constants! {
     pub struct KvmCap(u32);
     {
         IRQFD = 32;
@@ -598,7 +598,7 @@ pub struct KvmDeviceAttr {
 }
 
 #[cfg(target_arch = "aarch64")]
-c_enum! {
+constants! {
     pub struct KvmDevType(u32);
     {
         ARM_VGIC_V2 = 5;
@@ -608,7 +608,7 @@ c_enum! {
 }
 
 #[cfg(target_arch = "aarch64")]
-c_enum! {
+constants! {
     pub struct KvmDevArmVgicGrp(u32);
     {
         ADDR = 0;
@@ -622,7 +622,7 @@ c_enum! {
 }
 
 #[cfg(target_arch = "aarch64")]
-c_enum! {
+constants! {
     pub struct KvmVgicAddrType(u64);
     {
         DIST_V2 = 0;
@@ -635,7 +635,7 @@ c_enum! {
 }
 
 #[cfg(target_arch = "aarch64")]
-c_enum! {
+constants! {
     pub struct KvmDevArmVgicCtrl(u64);
     {
         INIT = 0;

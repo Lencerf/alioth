@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use bitflags::bitflags;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{c_enum, impl_mmio_for_zerocopy};
+use crate::{constants, impl_mmio_for_zerocopy};
 
 use self::mac_addr::MacAddr;
 
@@ -43,7 +43,7 @@ pub struct NetConfig {
 
 impl_mmio_for_zerocopy!(NetConfig);
 
-c_enum! {
+constants! {
     #[derive(Default, FromBytes, Immutable, IntoBytes)]
     pub struct CtrlAck(u8);
     {
@@ -52,7 +52,7 @@ c_enum! {
     }
 }
 
-c_enum! {
+constants! {
     #[derive(Default, FromBytes, Immutable, IntoBytes)]
     pub struct CtrlClass(u8);
     {
@@ -60,7 +60,7 @@ c_enum! {
     }
 }
 
-c_enum! {
+constants! {
     #[derive(Default, FromBytes, Immutable, IntoBytes)]
     pub struct CtrlMq(u8);
     {

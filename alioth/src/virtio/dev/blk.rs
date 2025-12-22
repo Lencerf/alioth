@@ -46,9 +46,9 @@ use crate::virtio::worker::WorkerApi;
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, error};
-use crate::{c_enum, impl_mmio_for_zerocopy};
+use crate::{constants, impl_mmio_for_zerocopy};
 
-c_enum! {
+constants! {
     #[derive(FromBytes)]
     pub struct RequestType(u32);
     {
@@ -63,7 +63,7 @@ c_enum! {
     }
 }
 
-c_enum! {
+constants! {
     #[derive(FromBytes)]
     pub struct Status(u8);
     {

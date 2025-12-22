@@ -18,7 +18,7 @@ use std::sync::atomic::Ordering;
 use bitfield::bitfield;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-use crate::c_enum;
+use crate::constants;
 use crate::mem::mapped::Ram;
 use crate::virtio::Result;
 use crate::virtio::queue::{DescChain, DescFlag, QueueReg, VirtQueue};
@@ -70,7 +70,7 @@ impl WrappedIndex {
     }
 }
 
-c_enum! {
+constants! {
     struct EventFlag(u16);
     {
         ENABLE = 0;

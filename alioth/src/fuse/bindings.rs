@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use bitflags::bitflags;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::c_enum;
+use crate::constants;
 
 pub const FUSE_KERNEL_VERSION: u32 = 7;
 pub const FUSE_KERNEL_MINOR_VERSION: u32 = 43;
@@ -290,7 +290,7 @@ pub struct FuseFileLock {
     pub pid: u32,
 }
 
-c_enum! {
+constants! {
     #[derive(FromBytes, Immutable, IntoBytes)]
     pub struct FuseOpcode(u32);
     {
@@ -755,7 +755,7 @@ pub struct FuseOutHeader {
     pub unique: u64,
 }
 
-c_enum! {
+constants! {
     #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
     pub struct FuseDirentType(u32);
     {
@@ -937,7 +937,7 @@ pub struct FuseSecctxHeader {
     pub nr_secctx: u32,
 }
 
-c_enum! {
+constants! {
     #[derive(Default, FromBytes, KnownLayout, Immutable, IntoBytes)]
     pub struct FuseExtType(u32);
     {
@@ -978,7 +978,7 @@ pub struct FuseUringReqHeader {
     pub ring_ent_in_out: FuseUringEntInOut,
 }
 
-c_enum! {
+constants! {
     pub struct FuseUringCmd(u32);
     {
         INVALID = 0;
