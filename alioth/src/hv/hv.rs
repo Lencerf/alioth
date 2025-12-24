@@ -371,7 +371,7 @@ pub trait Vm {
     fn create_its(&self, base: u64) -> Result<Self::Its>;
 }
 
-pub trait Hypervisor {
+pub trait Hypervisor: 'static {
     type Vm: Vm + Sync + Send + 'static;
 
     fn create_vm(&self, config: &VmConfig) -> Result<Self::Vm, Error>;

@@ -16,6 +16,8 @@ snafu.workspace = true
 alioth.workspace = true
 serde.workspace = true
 serde-aco.workspace = true
+tokio = "1.48.0"
+axum = { path = "../../axum/axum" }
 
 [[bin]]
 path = "src/main.rs"

@@ -41,6 +41,7 @@ use serde_aco::help_text;
 use snafu::{ResultExt, Snafu};
 
 use crate::objects::{DOC_OBJECTS, parse_objects};
+use crate::server::Server;
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -333,6 +334,8 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
     let vm = Machine::new(hypervisor, config).context(error::CreateVm)?;
 
     vm.boot().context(error::BootVm)?;
-    vm.wait().context(error::WaitVm)?;
+
+    let server = Server::new(vm);
+    server.run();
     Ok(())
 }
