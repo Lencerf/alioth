@@ -159,6 +159,7 @@ impl CpuConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BoardState {
     Created,
+    Paused,
     Running,
     Shutdown,
     RebootPending,
@@ -321,7 +322,7 @@ where
         Ok(())
     }
 
-    fn vcpu_loop(&self, vcpu: &mut <V as Vm>::Vcpu, index: u16) -> Result<bool, Error> {
+    fn vcpu_loop(&self, vcpu: &mut <V as Vm>::Vcpu, index: u16) -> Result<BoardState, Error> {
         let mut vm_entry = VmEntry::None;
         loop {
             let vm_exit = vcpu.run(vm_entry).context(error::RunVcpu { index })?;
@@ -331,16 +332,17 @@ where
                 VmExit::Mmio { addr, write, size } => self.memory.handle_mmio(addr, write, size)?,
                 VmExit::Shutdown => {
                     log::info!("VCPU-{index} requested shutdown");
-                    break Ok(false);
+                    break Ok(BoardState::Shutdown);
                 }
                 VmExit::Reboot => {
-                    break Ok(true);
+                    break Ok(BoardState::RebootPending);
                 }
                 VmExit::Interrupted => {
                     let mp_sync = self.mp_sync.lock();
                     match mp_sync.state {
                         BoardState::Shutdown => VmEntry::Shutdown,
                         BoardState::RebootPending => VmEntry::Reboot,
+                        BoardState::Paused => break Ok(BoardState::Paused),
                         _ => VmEntry::None,
                     }
                 }
@@ -378,6 +380,7 @@ where
         index: u16,
         vcpu: &mut V::Vcpu,
         boot_rx: &Receiver<()>,
+        event_tx: &Sender<u16>,
     ) -> Result<(), Error> {
         self.init_vcpu(index, vcpu)?;
         boot_rx.recv().unwrap();
@@ -406,30 +409,46 @@ where
             self.sync_vcpus(&vcpus)?;
             drop(vcpus);
 
-            let maybe_reboot = self.vcpu_loop(vcpu, index);
+            let mut maybe_state;
+            loop {
+                maybe_state = self.vcpu_loop(vcpu, index);
 
-            let vcpus = self.vcpus.read();
-            let mut mp_sync = self.mp_sync.lock();
-            if mp_sync.state == BoardState::Running {
-                mp_sync.state = if matches!(maybe_reboot, Ok(true)) {
-                    BoardState::RebootPending
-                } else {
-                    BoardState::Shutdown
-                };
-                for (another, (handle, _)) in vcpus.iter().enumerate() {
-                    if index == another as u16 {
-                        continue;
+                let vcpus = self.vcpus.read();
+                let mut mp_sync = self.mp_sync.lock();
+                if mp_sync.state == BoardState::Running {
+                    mp_sync.state = match maybe_state {
+                        Ok(BoardState::RebootPending) => BoardState::RebootPending,
+                        Ok(BoardState::Paused) => BoardState::Paused,
+                        _ => BoardState::Shutdown,
+                    };
+                    for (another, (handle, _)) in vcpus.iter().enumerate() {
+                        if index == another as u16 {
+                            continue;
+                        }
+                        log::info!("VCPU-{index}: stopping VCPU-{another}");
+                        self.vm
+                            .stop_vcpu(self.encode_cpu_identity(another as u16), handle)
+                            .context(error::StopVcpu {
+                                index: another as u16,
+                            })?;
                     }
-                    log::info!("VCPU-{index}: stopping VCPU-{another}");
-                    self.vm
-                        .stop_vcpu(self.encode_cpu_identity(another as u16), handle)
-                        .context(error::StopVcpu {
-                            index: another as u16,
-                        })?;
+                }
+                drop(mp_sync);
+                self.sync_vcpus(&vcpus)?;
+
+                if !matches!(maybe_state, Ok(BoardState::Paused)) {
+                    break;
+                }
+
+                event_tx.send(index).unwrap();
+                let mut mp_sync = self.mp_sync.lock();
+                while mp_sync.state == BoardState::Paused {
+                    self.cond_var.wait(&mut mp_sync);
+                }
+                if mp_sync.state != BoardState::Running {
+                    break;
                 }
             }
-            drop(mp_sync);
-            self.sync_vcpus(&vcpus)?;
 
             if index == 0 {
                 self.pci_bus.segment.reset().context(error::ResetPci)?;
@@ -437,7 +456,7 @@ where
             }
             self.reset_vcpu(index, vcpu)?;
 
-            if let Err(e) = maybe_reboot {
+            if let Err(e) = maybe_state {
                 break Err(e);
             }
 
@@ -470,7 +489,7 @@ where
     ) -> Result<(), Error> {
         let mut vcpu = self.create_vcpu(index, &event_tx)?;
 
-        let ret = self.run_vcpu_inner(index, &mut vcpu, &boot_rx);
+        let ret = self.run_vcpu_inner(index, &mut vcpu, &boot_rx, &event_tx);
         event_tx.send(index).unwrap();
 
         if matches!(ret, Ok(_) | Err(Error::PeerFailure { .. })) {
