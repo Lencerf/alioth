@@ -39,9 +39,12 @@ name = "alioth-cli"
 version = "0.10.0"
 dependencies = [
  "alioth",
+ "assert_matches",
  "clap",
+ "ctor",
  "flexi_logger",
  "log",
+ "rstest",
  "serde",
  "serde-aco",
  "snafu",
