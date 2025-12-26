@@ -36,7 +36,7 @@ use alioth::virtio::dev::entropy::EntropyParam;
 use alioth::virtio::worker::WorkerApi;
 use alioth::vm::Machine;
 use alioth::vm::config::{BlkParam, Config, FsParam, NetParam, VsockParam};
-use clap::Args;
+use clap::Parser;
 use serde_aco::help_text;
 use snafu::{ResultExt, Snafu};
 
@@ -64,7 +64,7 @@ pub enum Error {
     WaitVm { source: alioth::vm::Error },
 }
 
-#[derive(Args, Debug, Clone, Default)]
+#[derive(Parser, Debug, Clone, Default)]
 #[command(arg_required_else_help = true, alias("run"))]
 pub struct BootArgs {
     #[arg(long, help(
@@ -246,7 +246,7 @@ fn parse_cpu_arg(
     Ok(config)
 }
 
-fn parse_payload_arg(args: &mut BootArgs) -> Result<Payload, Error> {
+fn parse_payload_arg(args: &mut BootArgs) -> Payload {
     let mut payload = Payload {
         firmware: args.firmware.take(),
         initramfs: args.initramfs.take(),
@@ -258,11 +258,11 @@ fn parse_payload_arg(args: &mut BootArgs) -> Result<Payload, Error> {
     if payload.executable.is_none() {
         payload.executable = args.pvh.take().map(Executable::Pvh);
     }
-    Ok(payload)
+    payload
 }
 
 fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<Config, Error> {
-    let payload = parse_payload_arg(&mut args)?;
+    let payload = parse_payload_arg(&mut args);
 
     let mut board_config = BoardConfig::default();
     if let Some(arg) = args.coco {

@@ -29,6 +29,7 @@ use serde::Deserialize;
 use serde_aco::Help;
 use zerocopy::IntoBytes;
 
+use crate::device::net::MacAddr;
 use crate::hv::IoeventFd;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
@@ -45,7 +46,6 @@ use crate::sys::xpc::{
     XpcObject, xpc_bool_create, xpc_dictionary_create, xpc_dictionary_get_string,
     xpc_dictionary_get_uint64, xpc_uint64_create,
 };
-use crate::virtio::dev::net::mac_addr::MacAddr;
 use crate::virtio::dev::net::{NetConfig, NetFeature, VirtioNetHdr};
 use crate::virtio::dev::{DevParam, DeviceId, Result, Virtio, WakeEvent};
 use crate::virtio::queue::{DescChain, QueueReg, Status, VirtQueue};
@@ -495,7 +495,7 @@ fn write_to_vmnet(interface: *mut VmnetInterface) -> impl FnMut(&mut DescChain) 
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
 pub struct NetVmnetParam {
     /// MAC address of the virtual NIC, e.g. 06:3a:76:53:da:3d.
     pub mac: Option<MacAddr>,

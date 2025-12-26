@@ -25,3 +25,4 @@ name = "alioth"
 assert_matches.workspace = true
 ctor.workspace = true
 rstest.workspace = true
+pretty_assertions.workspace = true
