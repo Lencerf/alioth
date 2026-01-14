@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::u64;
+
 use snafu::ResultExt;
 
 use crate::arch::psci::{PSCI_VERSION_1_1, PsciFunc, PsciMigrateInfo};
@@ -108,6 +110,7 @@ impl HvfVcpu {
                 self.vmexit = Some(VmExit::Reboot);
                 return Ok(());
             }
+            PsciFunc::AFFINITY_INFO_64 => self.psci_affinity_info_64()?,
             f => {
                 return error::VmExit {
                     msg: format!("HVC: {f:x?}"),
@@ -145,5 +148,26 @@ impl HvfVcpu {
             msg: format!("Unhandled iss: {iss:x?}, sreg: {sreg:?}"),
         }
         .fail()
+    }
+
+    fn psci_affinity_info_64(&mut self) -> Result<u64> {
+        let lowest_affinity_level = self.get_reg(Reg::X2)?;
+        let mask = match lowest_affinity_level {
+            0 => 0xff_00ff_ffff,
+            1 => 0xff_00ff_ff00,
+            2 => 0xff_00ff_0000,
+            3 => 0xff_0000_0000,
+            _ => return Ok(u64::MAX),
+        };
+        let target_affinity = self.get_reg(Reg::X1)? & mask;
+        log::debug!(
+            "vcpu-{}: target_affinity: {target_affinity:#x}, mask {mask:#x}",
+            self.vcpu_id
+        );
+        // let vcpus = self.vcpus.lock();
+        // for (mpidr, vcpu) in vcpus.iter() {
+        //     vcpu.vcpu_id
+        // }
+        Ok(0)
     }
 }
