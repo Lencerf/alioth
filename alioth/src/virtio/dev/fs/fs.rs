@@ -248,6 +248,7 @@ where
         match opcode {
             FuseOpcode::INIT => opcode_branch!(init, &_, _),
             FuseOpcode::GETATTR => opcode_branch!(get_attr, &_, _),
+            FuseOpcode::SETATTR => opcode_branch!(set_attr, &_, _),
             FuseOpcode::OPEN => opcode_branch!(open, &_, _),
             FuseOpcode::OPENDIR => opcode_branch!(open_dir, &_, _),
             FuseOpcode::READDIR => opcode_branch!(read_dir, &_, &mut [u8]),

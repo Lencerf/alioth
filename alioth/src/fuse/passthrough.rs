@@ -34,10 +34,10 @@ use crate::fuse::bindings::{
     FuseCreateIn, FuseCreateOut, FuseDirent, FuseDirentType, FuseEntryOut, FuseFlushIn,
     FuseForgetIn, FuseGetattrFlag, FuseGetattrIn, FuseInHeader, FuseInitIn, FuseInitOut,
     FuseOpcode, FuseOpenIn, FuseOpenOut, FuseReadIn, FuseReleaseIn, FuseRemovemappingIn,
-    FuseRemovemappingOne, FuseRename2In, FuseRenameIn, FuseSetupmappingFlag, FuseSetupmappingIn,
-    FuseSyncfsIn, FuseWriteIn, FuseWriteOut, RenameFlag,
+    FuseRemovemappingOne, FuseRename2In, FuseRenameIn, FuseSetattrFlag, FuseSetattrIn,
+    FuseSetupmappingFlag, FuseSetupmappingIn, FuseSyncfsIn, FuseWriteIn, FuseWriteOut, RenameFlag,
 };
-use crate::fuse::{DaxRegion, Fuse, Result, error};
+use crate::fuse::{DaxRegion, Error, Fuse, Result, error};
 
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
 
@@ -204,6 +204,35 @@ impl Fuse for Passthrough {
             .custom_flags(libc::O_NOFOLLOW)
             .open(&node.path)?;
         let meta = file.metadata()?;
+        Ok(FuseAttrOut {
+            attr_valid: 1,
+            attr_valid_nsec: 0,
+            attr: self.convert_meta(&meta),
+            dummy: 0,
+        })
+    }
+
+    fn set_attr(&mut self, hdr: &FuseInHeader, in_: &FuseSetattrIn) -> Result<FuseAttrOut> {
+        let node = self.get_node_mut(hdr.nodeid)?;
+
+        let mut valid = FuseSetattrFlag::from_bits_retain(in_.valid);
+
+        log::trace!("set_attr: {in_:?} {:?} {valid:?}", node);
+
+        let Some(Handle::File(f)) = &mut node.handle else {
+            return error::InvalidFileHandle.fail();
+        };
+
+        if valid.contains(FuseSetattrFlag::SIZE) {
+            valid.remove(FuseSetattrFlag::SIZE | FuseSetattrFlag::LOCKOWNER);
+            f.set_len(in_.size)?;
+        }
+
+        if !valid.is_empty() {
+            let err: std::io::Error = std::io::Error::from_raw_os_error(libc::ENOSYS);
+            return Err(Error::from(err));
+        }
+        let meta = f.metadata()?;
         Ok(FuseAttrOut {
             attr_valid: 1,
             attr_valid_nsec: 0,

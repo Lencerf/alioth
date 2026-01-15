@@ -26,7 +26,7 @@ pub const FUSE_UNIQUE_RESEND: u64 = 1 << 63;
 
 bitflags! {
     #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct FAttrFlag: u32 {
+    pub struct FuseSetattrFlag: u32 {
         const MODE = 1 << 0;
         const UID = 1 << 1;
         const GID = 1 << 2;
@@ -206,7 +206,7 @@ bitflags! {
 bitflags! {
     #[repr(transparent)]
     #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct FuseSetattrFlag: u32 {
+    pub struct FuseSetxattrFlag: u32 {
         const ACL_KILL_SGID = 1;
     }
 }

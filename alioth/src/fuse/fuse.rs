@@ -29,8 +29,8 @@ use self::bindings::{
     FuseAttrOut, FuseCreateIn, FuseCreateOut, FuseEntryOut, FuseFlushIn, FuseForgetIn,
     FuseGetattrIn, FuseInHeader, FuseInitIn, FuseInitOut, FuseIoctlIn, FuseIoctlOut, FuseOpcode,
     FuseOpenIn, FuseOpenOut, FusePollIn, FusePollOut, FuseReadIn, FuseReleaseIn, FuseRename2In,
-    FuseRenameIn, FuseSetupmappingFlag, FuseSetupmappingIn, FuseSyncfsIn, FuseWriteIn,
-    FuseWriteOut,
+    FuseRenameIn, FuseSetattrIn, FuseSetupmappingFlag, FuseSetupmappingIn, FuseSyncfsIn,
+    FuseWriteIn, FuseWriteOut,
 };
 
 #[trace_error]
@@ -131,6 +131,7 @@ pub trait DaxRegion: Debug + Send + Sync + 'static {
 pub trait Fuse {
     fuse_method!(init, &FuseInitIn, FuseInitOut);
     fuse_method!(get_attr, &FuseGetattrIn, FuseAttrOut);
+    fuse_method!(set_attr, &FuseSetattrIn, FuseAttrOut);
     fuse_method!(open, &FuseOpenIn, FuseOpenOut);
     fuse_method!(open_dir, &FuseOpenIn, FuseOpenOut);
     fuse_method!(read_dir, &FuseReadIn, &mut [u8]);
