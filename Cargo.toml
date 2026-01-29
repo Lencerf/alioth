@@ -3,6 +3,7 @@ members = [
     "alioth",
     "alioth-cli",
     "alioth-macros",
+    "lsvirtio",
     "serde-aco",
     "serde-aco-derive",
 ]

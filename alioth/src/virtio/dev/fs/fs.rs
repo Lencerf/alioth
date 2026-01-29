@@ -401,7 +401,7 @@ where
     type Feature = FsFeature;
 
     fn id(&self) -> DeviceId {
-        DeviceId::FileSystem
+        DeviceId::FILE_SYSTEM
     }
 
     fn name(&self) -> &str {

@@ -1,0 +1,9 @@
+[package]
+name = "lsvirtio"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alioth = { path = "../alioth" }
+anyhow = "1.0.86"
+glob = "0.3.1"
