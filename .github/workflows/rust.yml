@@ -47,14 +47,14 @@ jobs:
             target/
             target/tarpaulin/
           key: ${{ matrix.target.name }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Install nightly Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt,llvm-tools
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install nightly \
+            --component rustfmt --component llvm-tools \
+            --profile minimal
+          rustup toolchain install stable \
+            --component clippy \
+            --profile minimal
       - name: Install tools
         uses: taiki-e/install-action@cc33365ec7e3350bc47bf935f247582cc6f68344 # v2.65.12
         with:
