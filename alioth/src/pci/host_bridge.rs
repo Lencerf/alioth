@@ -33,8 +33,8 @@ impl HostBridge {
     pub fn new() -> Self {
         let header = DeviceHeader {
             common: CommonHeader {
-                vendor: 0x8086,
-                device: 0x0d57,
+                vendor: 0x1022,
+                device: 0x1480,
                 class: 0x06,
                 subclass: 0x00,
                 header_type: HeaderType::DEVICE,
