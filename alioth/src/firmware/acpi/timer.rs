@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::device::{MmioDev, Pause};
 use crate::mem::Result;
 use crate::mem::emulated::{Action, Mmio};
 
@@ -45,3 +46,16 @@ impl Mmio for AcpiPmTimerDevice {
         4
     }
 }
+
+impl Pause for AcpiPmTimerDevice {
+    fn pause(&self) -> crate::device::Result<()> {
+        Ok(())
+    }
+
+    fn resume(&self) -> crate::device::Result<()> {
+        Ok(())
+    }
+}
+
+impl MmioDev for AcpiPmTimerDevice {}
+

@@ -164,6 +164,7 @@ where
         while count < size {
             let base_addr = addr + count;
             let Some((start, dev)) = self.inner.search_next(base_addr) else {
+                log::error!("read: cannot find {base_addr:#x}, {addr:#x}, {size:#x}");
                 break;
             };
             count += start.saturating_sub(base_addr);
@@ -189,6 +190,7 @@ where
         while count < size {
             let base_addr = addr + count;
             let Some((start, dev)) = self.inner.search_next(base_addr) else {
+                log::error!("write: cannot find {base_addr:#x}, {addr:#x}, {size:#x}, {val:#x}");
                 break;
             };
             count += start.saturating_sub(base_addr);

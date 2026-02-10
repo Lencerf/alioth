@@ -29,9 +29,10 @@ use zerocopy::{FromZeros, IntoBytes};
 use crate::arch::cpuid::CpuidIn;
 use crate::arch::layout::{
     BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
-    PORT_ACPI_SLEEP_CONTROL, RAM_32_SIZE,
+    PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
 };
 use crate::arch::msr::{IA32_MISC_ENABLE, MiscEnable};
+use crate::assign_bits;
 use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_SIZE, Result, VcpuGuard, error};
 use crate::device::cmos::{Cmos, PORT_CMOS_REG};
 use crate::device::fw_dbg::{FwDbg, PORT_FWDBG};
@@ -41,6 +42,7 @@ use crate::firmware::acpi::bindings::{
     AcpiTableFadt, AcpiTableHeader, AcpiTableRsdp, AcpiTableXsdt3,
 };
 use crate::firmware::acpi::reg::{FadtReset, FadtSleepControl};
+use crate::firmware::acpi::timer::AcpiPmTimerDevice;
 use crate::firmware::acpi::{
     AcpiTable, create_fadt, create_madt, create_mcfg, create_rsdp, create_xsdt,
 };
@@ -143,6 +145,18 @@ impl<V: Vm> ArchBoard<V> {
             let host_cpuid = unsafe { __cpuid(func) };
             cpuids.insert(CpuidIn { func, index: None }, host_cpuid);
         }
+
+        let leaf_8000_8008 = CpuidIn {
+            func: 0x8000_0008,
+            index: None,
+        };
+        let Some(out) = cpuids.get_mut(&leaf_8000_8008) else {
+            return error::MissingCpuid {
+                leaf: leaf_8000_8008,
+            }
+            .fail();
+        };
+        assign_bits!(out.eax, 43, 0xff);
 
         if matches!(
             &config.coco,
@@ -464,6 +478,7 @@ where
         io_devs.push((0x60, Arc::new(I8042)));
         io_devs.push((PORT_FWDBG, Arc::new(FwDbg)));
         io_devs.push((PORT_CMOS_REG, Arc::new(Cmos::default())));
+        io_devs.push((PORT_ACPI_TIMER, Arc::new(AcpiPmTimerDevice::new())));
         Ok(())
     }
 }

@@ -30,8 +30,8 @@ impl Mmio for FwDbg {
         Ok(0xe9)
     }
 
-    fn write(&self, _offset: u64, _size: u8, _val: u64) -> Result<Action> {
-        // print!("{}", val as u8 as char);
+    fn write(&self, _offset: u64, _size: u8, val: u64) -> Result<Action> {
+        print!("{}", val as u8 as char);
         Ok(Action::None)
     }
 }
