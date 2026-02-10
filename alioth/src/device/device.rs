@@ -18,14 +18,18 @@ use snafu::Snafu;
 use crate::errors::DebugTrace;
 use crate::mem::emulated::Mmio;
 
+#[cfg(target_arch = "x86_64")]
+pub mod cmos;
 pub mod console;
 #[cfg(target_arch = "x86_64")]
 #[path = "fw_cfg/fw_cfg.rs"]
 pub mod fw_cfg;
 #[cfg(target_arch = "x86_64")]
+pub mod fw_dbg;
+pub mod i8042;
+#[cfg(target_arch = "x86_64")]
 pub mod ioapic;
 pub mod net;
-pub mod i8042;
 #[cfg(target_arch = "aarch64")]
 pub mod pl011;
 #[cfg(target_arch = "aarch64")]

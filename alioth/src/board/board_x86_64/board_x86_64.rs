@@ -33,6 +33,8 @@ use crate::arch::layout::{
 };
 use crate::arch::msr::{IA32_MISC_ENABLE, MiscEnable};
 use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_SIZE, Result, VcpuGuard, error};
+use crate::device::cmos::{Cmos, PORT_CMOS_REG};
+use crate::device::fw_dbg::{FwDbg, PORT_FWDBG};
 use crate::device::i8042::I8042;
 use crate::device::ioapic::IoApic;
 use crate::firmware::acpi::bindings::{
@@ -460,6 +462,8 @@ where
         self.mmio_devs.write().push((IOAPIC_START, io_apic));
         let mut io_devs = self.io_devs.write();
         io_devs.push((0x60, Arc::new(I8042)));
+        io_devs.push((PORT_FWDBG, Arc::new(FwDbg)));
+        io_devs.push((PORT_CMOS_REG, Arc::new(Cmos::default())));
         Ok(())
     }
 }
