@@ -43,24 +43,27 @@ pub fn translate_msi_addr(addr_lo: u32, addr_hi: u32) -> (u32, u32) {
     (addr_lo.0, addr_hi.0)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct VmArch {
     pub sev_fd: Option<SevFd>,
 }
 
 impl VmArch {
-    pub fn new(kvm: &Kvm, config: &VmConfig) -> Result<Self> {
-        let sev_fd = if let Some(cv) = &config.coco {
-            match cv {
-                Coco::AmdSev { .. } | Coco::AmdSnp { .. } => Some(match &kvm.config.dev_sev {
+    pub fn new(_kvm: &Kvm, config: &VmConfig) -> Result<Self> {
+        let Some(coco) = &config.coco else {
+            return Ok(VmArch::default());
+        };
+        match coco {
+            Coco::AmdSev { dev, .. } | Coco::AmdSnp { dev, .. } => {
+                let sev_fd = match dev {
                     Some(dev_sev) => SevFd::new(dev_sev),
                     None => SevFd::new("/dev/sev"),
-                }?),
+                }?;
+                Ok(VmArch {
+                    sev_fd: Some(sev_fd),
+                })
             }
-        } else {
-            None
-        };
-        Ok(VmArch { sev_fd })
+        }
     }
 }
 
@@ -90,7 +93,7 @@ impl KvmVm {
     pub fn init(&self, config: &VmConfig) -> Result<()> {
         if self.vm.arch.sev_fd.is_some() {
             match config.coco.as_ref() {
-                Some(Coco::AmdSev { policy }) => {
+                Some(Coco::AmdSev { policy, .. }) => {
                     if policy.es() {
                         self.sev_op::<()>(KvmSevCmdId::ES_INIT, None)?;
                     } else {

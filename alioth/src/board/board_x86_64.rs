@@ -162,7 +162,7 @@ impl<V: Vm> ArchBoard<V> {
             out.ebx = (1 << 6) | (host_ebx & 0x3f);
             out.ecx = 0;
             out.edx = 0;
-            if let Some(Coco::AmdSev { policy }) = &config.coco {
+            if let Some(Coco::AmdSev { policy, .. }) = &config.coco {
                 out.eax = if policy.es() { 0x2 | 0x8 } else { 0x2 };
             } else if let Some(Coco::AmdSnp { .. }) = &config.coco {
                 out.eax = 0x2 | 0x8 | 0x10;
@@ -215,7 +215,7 @@ where
 
     fn parse_sev_es_ap(&self, coco: &Coco, fw: &ArcMemPages) {
         match coco {
-            Coco::AmdSev { policy } if policy.es() => {}
+            Coco::AmdSev { policy, .. } if policy.es() => {}
             Coco::AmdSnp { .. } => {}
             _ => return,
         }
@@ -325,7 +325,7 @@ where
 
     pub fn init_ap(&self, index: u16, vcpu: &mut V::Vcpu, vcpus: &VcpuGuard) -> Result<()> {
         match &self.config.coco {
-            Some(Coco::AmdSev { policy }) if policy.es() => {}
+            Some(Coco::AmdSev { policy, .. }) if policy.es() => {}
             Some(Coco::AmdSnp { .. }) => {}
             _ => return Ok(()),
         }
@@ -433,8 +433,8 @@ where
         }
         if let Some(coco) = &self.config.coco {
             match coco {
-                Coco::AmdSev { policy } => self.vm.sev_launch_start(*policy)?,
-                Coco::AmdSnp { policy } => self.vm.snp_launch_start(*policy)?,
+                Coco::AmdSev { policy, .. } => self.vm.sev_launch_start(*policy)?,
+                Coco::AmdSnp { policy, .. } => self.vm.snp_launch_start(*policy)?,
             }
         }
         Ok(())
@@ -445,7 +445,7 @@ where
             self.sync_vcpus(vcpus)?;
             if index == 0 {
                 match coco {
-                    Coco::AmdSev { policy } => {
+                    Coco::AmdSev { policy, .. } => {
                         if policy.es() {
                             self.vm.sev_launch_update_vmsa()?;
                         }

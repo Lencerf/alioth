@@ -25,7 +25,7 @@ use crate::hv::{Hypervisor, Kvm, MemMapOption, VmConfig};
 #[test]
 #[cfg_attr(not(feature = "test-hv"), ignore)]
 fn test_mem_map() {
-    let kvm = Kvm::new(KvmConfig::default()).unwrap();
+    let kvm = Kvm::new(&KvmConfig::default()).unwrap();
     let vm_config = VmConfig { coco: None };
     let mut vm = kvm.create_vm(&vm_config).unwrap();
     let vm_memory = vm.create_vm_memory().unwrap();

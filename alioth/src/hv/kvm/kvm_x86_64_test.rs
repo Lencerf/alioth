@@ -18,7 +18,7 @@ use crate::sys::kvm::KVM_CPUID_SIGNATURE;
 #[test]
 #[cfg_attr(not(feature = "test-hv"), ignore)]
 fn test_get_supported_cpuid() {
-    let kvm = Kvm::new(KvmConfig::default()).unwrap();
+    let kvm = Kvm::new(&KvmConfig::default()).unwrap();
     let mut kvm_cpuid_exist = false;
     let supported_cpuids = kvm.get_supported_cpuids().unwrap();
     for (in_, out) in &supported_cpuids {

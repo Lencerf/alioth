@@ -95,23 +95,23 @@ pub enum KvmError {
 #[derive(Debug)]
 pub struct Kvm {
     fd: OwnedFd,
-    #[cfg(target_arch = "x86_64")]
-    config: KvmConfig,
 }
 
 #[derive(Debug, Deserialize, Default, Clone, Help)]
 pub struct KvmConfig {
     /// Path to the KVM device. [default: /dev/kvm]
     pub dev_kvm: Option<Box<Path>>,
+    /// DEPRECATED: specify the device path in Coco
     /// Path to the AMD SEV device. [default: /dev/sev]
     #[cfg(target_arch = "x86_64")]
+    #[serde_aco(hide)]
     pub dev_sev: Option<Box<Path>>,
 }
 
 extern "C" fn sigrtmin_handler(_: libc::c_int, _: *mut libc::siginfo_t, _: *mut libc::c_void) {}
 
 impl Kvm {
-    pub fn new(config: KvmConfig) -> Result<Self> {
+    pub fn new(config: &KvmConfig) -> Result<Self> {
         let path = match &config.dev_kvm {
             Some(dev_kvm) => dev_kvm,
             None => Path::new("/dev/kvm"),
@@ -131,11 +131,7 @@ impl Kvm {
         ffi!(unsafe { libc::sigfillset(&mut action.sa_mask) }).context(error::SetupSignal)?;
         ffi!(unsafe { libc::sigaction(SIGRTMIN(), &action, null_mut()) })
             .context(error::SetupSignal)?;
-        Ok(Kvm {
-            fd: kvm_fd,
-            #[cfg(target_arch = "x86_64")]
-            config,
-        })
+        Ok(Kvm { fd: kvm_fd })
     }
 
     pub fn check_extension(&self, id: KvmCap) -> Result<NonZero<i32>> {

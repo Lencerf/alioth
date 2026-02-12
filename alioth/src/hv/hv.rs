@@ -25,6 +25,9 @@ use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::os::fd::AsFd;
+#[cfg(target_arch = "x86_64")]
+#[cfg(target_os = "linux")]
+use std::path::Path;
 #[cfg(not(target_arch = "x86_64"))]
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -315,6 +318,9 @@ pub enum Coco {
         /// SEV policy, 0x1 for SEV, 0x5 for SEV-ES.
         /// SEV API Ver 0.24, Rev 3.24, Ch.2, Table 2.
         policy: SevPolicy,
+        /// Path to the AMD SEV device. [default: /dev/sev]
+        #[cfg(target_os = "linux")]
+        dev: Option<Box<Path>>,
     },
     /// Enable AMD SEV-SNP.
     #[cfg(target_arch = "x86_64")]
@@ -323,6 +329,9 @@ pub enum Coco {
         /// SEV-SNP policy, e.g. 0x30000.
         /// SNP Firmware ABI Spec, Rev 1.55, Sec.4.3, Table 9.
         policy: SnpPolicy,
+        /// Path to the AMD SEV device. [default: /dev/sev]
+        #[cfg(target_os = "linux")]
+        dev: Option<Box<Path>>,
     },
 }
 

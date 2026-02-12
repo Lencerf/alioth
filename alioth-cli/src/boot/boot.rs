@@ -450,6 +450,25 @@ fn create<H: Hypervisor>(hypervisor: &H, config: Config) -> Result<Machine<H>, a
     Ok(vm)
 }
 
+#[cfg(target_os = "linux")]
+fn dev_sev_fixup(mut config: Config, mut hv_config: HvConfig) -> (Config, HvConfig) {
+    let HvConfig::Kvm(cfg) = &mut hv_config;
+    let Some(dev_sev) = cfg.dev_sev.take() else {
+        return (config, hv_config);
+    };
+    let Some(coco) = &mut config.board.coco else {
+        return (config, hv_config);
+    };
+    match coco {
+        Coco::AmdSev { dev, .. } | Coco::AmdSnp { dev, .. } => {
+            if dev.is_none() {
+                *dev = Some(dev_sev);
+            }
+        }
+    }
+    (config, hv_config)
+}
+
 pub fn boot(mut args: BootArgs) -> Result<(), Error> {
     let object_args = mem::take(&mut args.objects);
     let objects = parse_objects(&object_args)?;
@@ -459,14 +478,17 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
     } else {
         HvConfig::default()
     };
+    let config = parse_args(args, objects)?;
+
+    #[cfg(target_os = "linux")]
+    let (config, hv_config) = dev_sev_fixup(config, hv_config);
+
     let hypervisor = match hv_config {
         #[cfg(target_os = "linux")]
-        HvConfig::Kvm(kvm_config) => Kvm::new(kvm_config).context(error::Hypervisor)?,
+        HvConfig::Kvm(kvm_config) => Kvm::new(&kvm_config).context(error::Hypervisor)?,
         #[cfg(target_os = "macos")]
         HvConfig::Hvf => Hvf {},
     };
-
-    let config = parse_args(args, objects)?;
 
     let vm = create(&hypervisor, config).context(error::CreateVm)?;
 
