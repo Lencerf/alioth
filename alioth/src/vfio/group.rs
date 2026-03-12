@@ -59,21 +59,10 @@ impl Group {
     }
 }
 
-impl Drop for Group {
-    fn drop(&mut self) {
-        if let Err(e) = self.detach() {
-            log::error!(
-                "Group-{}: detaching from container: {e:?}",
-                self.fd.as_raw_fd()
-            );
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct DevFd {
     fd: File,
-    _group: Arc<Group>,
+    group: Arc<Group>,
 }
 
 impl DevFd {
@@ -82,13 +71,16 @@ impl DevFd {
         let fd = unsafe { vfio_group_get_device_fd(&group.fd, id_c.as_ptr()) }?;
         Ok(DevFd {
             fd: unsafe { File::from_raw_fd(fd) },
-            _group: group,
+            group,
         })
     }
 }
 
-impl Device for DevFd {
-    fn fd(&self) -> &File {
-        &self.fd
+impl From<DevFd> for Device {
+    fn from(value: DevFd) -> Self {
+        Device {
+            file: value.fd,
+            _private: Box::new(value.group),
+        }
     }
 }

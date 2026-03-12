@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Debug;
+use std::any::Any;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::fd::AsRawFd;
@@ -26,10 +26,18 @@ use crate::sys::vfio::{
 };
 use crate::vfio::Result;
 
-pub trait Device: Debug + Send + Sync + 'static {
-    fn fd(&self) -> &File;
+#[derive(Debug)]
+pub struct Device {
+    pub(crate) file: File,
+    pub(crate) _private: Box<dyn Any + Send + Sync + 'static>,
+}
 
-    fn get_info(&self) -> Result<VfioDeviceInfo> {
+impl Device {
+    pub fn fd(&self) -> &File {
+        &self.file
+    }
+
+    pub fn get_info(&self) -> Result<VfioDeviceInfo> {
         let mut device_info = VfioDeviceInfo {
             argsz: size_of::<VfioDeviceInfo>() as u32,
             ..Default::default()
@@ -38,7 +46,7 @@ pub trait Device: Debug + Send + Sync + 'static {
         Ok(device_info)
     }
 
-    fn get_region_info(&self, index: u32) -> Result<VfioRegionInfo> {
+    pub fn get_region_info(&self, index: u32) -> Result<VfioRegionInfo> {
         let mut region_config = VfioRegionInfo {
             argsz: size_of::<VfioRegionInfo>() as u32,
             index,
@@ -48,7 +56,7 @@ pub trait Device: Debug + Send + Sync + 'static {
         Ok(region_config)
     }
 
-    fn get_irq_info(&self, index: u32) -> Result<VfioIrqInfo> {
+    pub fn get_irq_info(&self, index: u32) -> Result<VfioIrqInfo> {
         let mut irq_info = VfioIrqInfo {
             argsz: size_of::<VfioIrqInfo>() as u32,
             index,
@@ -58,12 +66,12 @@ pub trait Device: Debug + Send + Sync + 'static {
         Ok(irq_info)
     }
 
-    fn set_irqs<const N: usize>(&self, irq: &VfioIrqSet<N>) -> Result<()> {
+    pub fn set_irqs<const N: usize>(&self, irq: &VfioIrqSet<N>) -> Result<()> {
         unsafe { vfio_device_set_irqs(self.fd(), irq) }?;
         Ok(())
     }
 
-    fn disable_all_irqs(&self, index: VfioPciIrq) -> Result<()> {
+    pub fn disable_all_irqs(&self, index: VfioPciIrq) -> Result<()> {
         let vfio_irq_disable_all = VfioIrqSet {
             argsz: size_of::<VfioIrqSet<0>>() as u32,
             flags: VfioIrqSetFlag::DATA_NONE | VfioIrqSetFlag::ACTION_TRIGGER,
@@ -75,12 +83,12 @@ pub trait Device: Debug + Send + Sync + 'static {
         self.set_irqs(&vfio_irq_disable_all)
     }
 
-    fn reset(&self) -> Result<()> {
-        unsafe { vfio_device_reset(self.fd()) }?;
+    pub fn reset(&self) -> Result<()> {
+        let _ = unsafe { vfio_device_reset(self.fd()) };
         Ok(())
     }
 
-    fn read(&self, offset: u64, size: u8) -> mem::Result<u64> {
+    pub fn read(&self, offset: u64, size: u8) -> mem::Result<u64> {
         let mut bytes = [0u8; 8];
         let Some(buf) = bytes.get_mut(0..size as usize) else {
             log::error!(
@@ -93,7 +101,7 @@ pub trait Device: Debug + Send + Sync + 'static {
         Ok(u64::from_ne_bytes(bytes))
     }
 
-    fn write(&self, offset: u64, size: u8, val: u64) -> mem::Result<()> {
+    pub fn write(&self, offset: u64, size: u8, val: u64) -> mem::Result<()> {
         let bytes = val.to_ne_bytes();
         let Some(buf) = bytes.get(..size as usize) else {
             log::error!(

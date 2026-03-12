@@ -80,16 +80,11 @@ impl Cdev {
     }
 }
 
-impl Device for Cdev {
-    fn fd(&self) -> &File {
-        &self.fd
-    }
-}
-
-impl Drop for Cdev {
-    fn drop(&mut self) {
-        if let Err(e) = self.detach_iommu_ioas() {
-            log::error!("Cdev-{}: detaching ioas: {e:?}", self.fd.as_raw_fd())
+impl From<Cdev> for Device {
+    fn from(value: Cdev) -> Self {
+        Device {
+            file: value.fd,
+            _private: Box::new(value.ioas),
         }
     }
 }

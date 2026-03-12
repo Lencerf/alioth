@@ -358,7 +358,7 @@ where
             #[cfg(target_arch = "aarch64")]
             u32::from(bdf.0),
         )?;
-        let dev = VfioPciDev::new(name.clone(), cdev, msi_sender)?;
+        let dev = VfioPciDev::new(name.clone(), cdev.into(), msi_sender)?;
         self.add_pci_dev(Some(bdf), Arc::new(dev))?;
         Ok(())
     }
@@ -421,7 +421,7 @@ where
             #[cfg(target_arch = "aarch64")]
             u32::from(bdf.0),
         )?;
-        let dev = VfioPciDev::new(name.clone(), devfd, msi_sender)?;
+        let dev = VfioPciDev::new(name.clone(), devfd.into(), msi_sender)?;
         self.add_pci_dev(Some(bdf), Arc::new(dev))
     }
 }
