@@ -46,4 +46,7 @@ pub const PCIE_MMIO_32_NON_PREFETCHABLE_START: u64 = 0xe000_0000; // 3.5 GiB
 pub const PCIE_MMIO_32_NON_PREFETCHABLE_END: u64 = 0x1_0000_0000; // 4 GiB, size = 512 MiB
 
 pub const MEM_64_START: u64 = 0x1_0000_0000; // 4GiB
+
+pub const PCIE_MMIO_64_END: u64 = 8 << 40; // 8 TiB
+
 pub const PAGE_SIZE: u64 = 0x1000; // 4KiB

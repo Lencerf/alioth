@@ -28,11 +28,11 @@ use zerocopy::{FromZeros, IntoBytes};
 
 use crate::arch::cpuid::{Cpuid1Ecx, CpuidIn};
 use crate::arch::layout::{
-    BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
-    PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
+    BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PCIE_MMIO_64_END,
+    PORT_ACPI_RESET, PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
 };
 use crate::arch::msr::{IA32_MISC_ENABLE, MiscEnable};
-use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_SIZE, Result, VcpuGuard, error};
+use crate::board::{Board, BoardConfig, CpuTopology, Result, VcpuGuard, error};
 use crate::device::ioapic::IoApic;
 use crate::firmware::acpi::bindings::{
     AcpiTableFadt, AcpiTableHeader, AcpiTableRsdp, AcpiTableXsdt3,
@@ -340,7 +340,7 @@ where
 
     fn patch_dsdt(&self, data: &mut [u8; 352]) {
         let pcie_mmio_64_start = self.config.pcie_mmio_64_start();
-        let pcei_mmio_64_max = pcie_mmio_64_start - 1 + PCIE_MMIO_64_SIZE;
+        let pcei_mmio_64_max = PCIE_MMIO_64_END - 1;
         data[DSDT_OFFSET_PCI_QWORD_MEM..(DSDT_OFFSET_PCI_QWORD_MEM + 8)]
             .copy_from_slice(&pcie_mmio_64_start.to_le_bytes());
         data[(DSDT_OFFSET_PCI_QWORD_MEM + 8)..(DSDT_OFFSET_PCI_QWORD_MEM + 16)]

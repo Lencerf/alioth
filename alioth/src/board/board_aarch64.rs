@@ -24,7 +24,7 @@ use crate::arch::layout::{
     RAM_32_SIZE, RAM_32_START,
 };
 use crate::arch::reg::MpidrEl1;
-use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_SIZE, Result, VcpuGuard};
+use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_END, Result, VcpuGuard};
 use crate::firmware::dt::{DeviceTree, Node, PropVal};
 use crate::hv::{GicV2, GicV2m, GicV3, Hypervisor, Its, Vcpu, Vm};
 use crate::loader::{Executable, InitState, Payload};
@@ -464,6 +464,7 @@ where
             return;
         };
         let pcie_mmio_64_start = self.config.pcie_mmio_64_start();
+        let pcie_mmio_64_size = PCIE_MMIO_64_END - pcie_mmio_64_start;
         let prefetchable = 1 << 30;
         let io = 0b01 << 24;
         let mem_32 = 0b10 << 24;
@@ -506,8 +507,8 @@ where
                         pcie_mmio_64_start as u32,
                         (pcie_mmio_64_start >> 32) as u32,
                         pcie_mmio_64_start as u32,
-                        (PCIE_MMIO_64_SIZE >> 32) as u32,
-                        PCIE_MMIO_64_SIZE as u32,
+                        (pcie_mmio_64_size >> 32) as u32,
+                        pcie_mmio_64_size as u32,
                     ]),
                 ),
                 (

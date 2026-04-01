@@ -39,7 +39,7 @@ use crate::arch::layout::PORT_PCI_ADDRESS;
 use crate::arch::layout::{
     MEM_64_START, PCIE_CONFIG_START, PCIE_MMIO_32_NON_PREFETCHABLE_END,
     PCIE_MMIO_32_NON_PREFETCHABLE_START, PCIE_MMIO_32_PREFETCHABLE_END,
-    PCIE_MMIO_32_PREFETCHABLE_START, RAM_32_SIZE,
+    PCIE_MMIO_32_PREFETCHABLE_START, PCIE_MMIO_64_END, RAM_32_SIZE,
 };
 use crate::device::MmioDev;
 #[cfg(target_arch = "x86_64")]
@@ -186,8 +186,6 @@ struct MpSync {
     fatal: bool,
     count: u16,
 }
-
-pub const PCIE_MMIO_64_SIZE: u64 = 1 << 40;
 
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct BoardConfig {
@@ -370,7 +368,7 @@ where
                 PCIE_MMIO_32_PREFETCHABLE_START,
                 PCIE_MMIO_32_PREFETCHABLE_END,
             ),
-            (pcie_mmio_64_start, pcie_mmio_64_start + PCIE_MMIO_64_SIZE),
+            (pcie_mmio_64_start, PCIE_MMIO_64_END),
         ]);
         Ok(())
     }

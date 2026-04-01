@@ -58,6 +58,8 @@ pub const APIC_START: u64 = 0xfee0_0000;
 
 pub const MEM_64_START: u64 = 0x1_0000_0000; // 4GiB
 
+pub const PCIE_MMIO_64_END: u64 = 8 << 40; // 8 TiB
+
 pub const PAGE_SIZE: u64 = 0x1000; // 4KiB
 
 pub const PORT_CMOS_REG: u16 = 0x70;
