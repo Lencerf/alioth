@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod config;
+mod server;
 
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -48,6 +49,7 @@ use snafu::{ResultExt, Snafu};
 use crate::objects::{DOC_OBJECTS, parse_objects};
 
 use self::config::{BlkParam, Config, FsParam, NetParam, VsockParam};
+use self::server::Server;
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -70,6 +72,8 @@ pub enum Error {
     #[snafu(display("VM did not shutdown peacefully"))]
     WaitVm { source: alioth::vm::Error },
 }
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Args, Debug, Clone, Default)]
 #[command(arg_required_else_help = true, alias("run"))]
@@ -477,8 +481,9 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
     let vm = create(&hypervisor, config).context(error::CreateVm)?;
 
     vm.boot().context(error::BootVm)?;
-    vm.wait().context(error::WaitVm)?;
-    Ok(())
+
+    let server = Server::new(vm);
+    server.run()
 }
 
 #[cfg(test)]
