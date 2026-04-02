@@ -24,10 +24,10 @@ use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use flume::{Receiver, Sender};
 use parking_lot::{Condvar, Mutex, RwLock};
 use snafu::{ResultExt, Snafu};
 
@@ -152,7 +152,7 @@ where
     pub fn new(hv: &H, config: BoardConfig) -> Result<Self> {
         let board = Arc::new(Board::new(hv, config)?);
 
-        let (event_tx, event_rx) = mpsc::channel();
+        let (event_tx, event_rx) = flume::unbounded();
 
         let sync = Arc::new(MpSync::new());
         let vcpus = Arc::new(RwLock::new(Vec::new()));

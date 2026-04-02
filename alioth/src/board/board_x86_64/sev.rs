@@ -16,7 +16,6 @@ use std::arch::x86_64::{__cpuid, CpuidResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-
 use crate::arch::cpuid::{
     Cpuid1Ecx, Cpuid7Index0Ebx, Cpuid7Index0Edx, CpuidExt1fEAx, CpuidExt1fEbx, CpuidExt8Ebx,
     CpuidExt21EAx, CpuidIn,
