@@ -339,7 +339,7 @@ pub struct VmConfig {
     pub coco: Option<Coco>,
 }
 
-pub trait Vm {
+pub trait Vm: Sync + Send + 'static {
     type Vcpu: Vcpu;
     type Memory: VmMemory;
     type IrqSender: IrqSender + Send + Sync;
@@ -411,8 +411,8 @@ pub trait Vm {
     fn create_its(&self, base: u64) -> Result<Self::Its>;
 }
 
-pub trait Hypervisor {
-    type Vm: Vm + Sync + Send + 'static;
+pub trait Hypervisor: Sync + Send + 'static {
+    type Vm: Vm;
 
     fn create_vm(&self, config: &VmConfig) -> Result<Self::Vm, Error>;
 
