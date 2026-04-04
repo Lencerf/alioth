@@ -23,7 +23,9 @@ use snafu::ResultExt;
 
 use crate::arch::cpuid::CpuidIn;
 use crate::arch::msr::{Efer, Msr};
-use crate::arch::reg::{Cr0, Cr3, Cr4, DtReg, DtRegVal, Reg, SReg, SegAccess, SegReg, SegRegVal};
+use crate::arch::reg::{
+    Cr0, Cr3, Cr4, DtReg, DtRegVal, Reg, Registers, SReg, SegAccess, SegReg, SegRegVal,
+};
 use crate::hv::kvm::kvm_error;
 use crate::hv::kvm::vcpu::KvmVcpu;
 use crate::hv::kvm::vm::KvmVm;
@@ -310,6 +312,39 @@ impl KvmVcpu {
         let kvm_sregs = unsafe { kvm_get_sregs(&self.fd) }.context(error::VcpuReg)?;
         let val = get_kvm_sreg!(kvm_sregs, reg);
         Ok(val)
+    }
+
+    pub fn kvm_get_regs(&self) -> Result<Registers> {
+        let kvm_regs = unsafe { kvm_get_regs(&self.fd) }.context(error::VcpuReg)?;
+        let kvm_sregs2 = unsafe { kvm_get_sregs2(&self.fd) }.context(error::VcpuReg)?;
+
+        let registers = Registers {
+            rax: kvm_regs.rax,
+            rbx: kvm_regs.rbx,
+            rcx: kvm_regs.rcx,
+            rdx: kvm_regs.rdx,
+            rsi: kvm_regs.rsi,
+            rdi: kvm_regs.rdi,
+            rbp: kvm_regs.rbp,
+            r8: kvm_regs.r8,
+            r9: kvm_regs.r9,
+            r10: kvm_regs.r10,
+            r11: kvm_regs.r11,
+            r12: kvm_regs.r12,
+            r13: kvm_regs.r13,
+            r14: kvm_regs.r14,
+            r15: kvm_regs.r15,
+            rip: kvm_regs.rip,
+            rflags: kvm_regs.rflags,
+
+            cr0: kvm_sregs2.cr0,
+            cr2: kvm_sregs2.cr2,
+            cr3: kvm_sregs2.cr3,
+            cr4: kvm_sregs2.cr4,
+
+            ..Default::default()
+        };
+        Ok(registers)
     }
 
     pub fn kvm_set_cpuids(&mut self, cpuids: &HashMap<CpuidIn, CpuidResult>) -> Result<(), Error> {

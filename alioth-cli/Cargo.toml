@@ -23,6 +23,8 @@ serde-aco.workspace = true
 snafu.workspace = true
 tokio = "1.48.0"
 zerocopy.workspace = true
+parking_lot.workspace = true
+
 
 [dev-dependencies]
 assert_matches.workspace = true

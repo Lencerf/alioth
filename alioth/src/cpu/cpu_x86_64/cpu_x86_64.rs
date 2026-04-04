@@ -15,13 +15,18 @@
 mod sev;
 mod tdx;
 
+use std::arch::x86_64::CpuidResult;
+use std::collections::HashMap;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 use crate::arch::msr::{MiscEnable, Msr};
+use crate::cpu::{Result, VcpuHandle, VcpuThread};
 use crate::hv::{Coco, Vcpu, Vm};
 use crate::loader::{InitState, Payload, firmware};
 use crate::mem::mapped::ArcMemPages;
-use crate::vm::{Result, VcpuHandle, VcpuThread};
 
 impl<V: Vm> VcpuThread<V> {
     pub(crate) fn init_vcpu(&mut self) -> Result<()> {
@@ -48,7 +53,6 @@ impl<V: Vm> VcpuThread<V> {
         }
         self.vcpu
             .set_sregs(&init.sregs, &init.seg_regs, &init.dt_regs)?;
-        self.vcpu.set_msrs(&init.msrs)?;
         self.vcpu.set_regs(&init.regs)?;
         Ok(())
     }
@@ -111,4 +115,8 @@ impl<V: Vm> VcpuThread<V> {
     }
 }
 
-pub struct CpuSnapshot {}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub cpuids: Vec<(CpuidIn, CpuidOut)>,
+    pub msrs: Vec<(u32, u64)>,
+}

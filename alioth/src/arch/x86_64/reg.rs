@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bitfield::bitfield;
+use serde::Serialize;
 
 use crate::bitflags;
 
@@ -240,4 +241,44 @@ impl SegRegVal {
 pub struct DtRegVal {
     pub base: u64,
     pub limit: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Registers {
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rsp: u64,
+    pub rbp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rip: u64,
+    pub rflags: u64,
+
+    pub cr0: Cr0,
+    pub cr2: u64,
+    pub cr3: Cr3,
+    pub cr4: Cr4,
+    pub cr8: u64,
+
+    pub cs: SegRegVal,
+    pub ds: SegRegVal,
+    pub es: SegRegVal,
+    pub fs: SegRegVal,
+    pub gs: SegRegVal,
+    pub ss: SegRegVal,
+    pub tr: SegRegVal,
+    pub ldtr: SegRegVal,
+
+    pub gdtr: DtRegVal,
+    pub idtr: DtRegVal,
 }

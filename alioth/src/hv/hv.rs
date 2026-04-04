@@ -38,7 +38,7 @@ use crate::arch::cpuid::CpuidIn;
 use crate::arch::msr::Msr;
 #[cfg(target_arch = "x86_64")]
 use crate::arch::reg::{DtReg, DtRegVal, SegReg, SegRegVal};
-use crate::arch::reg::{Reg, SReg};
+use crate::arch::reg::{Reg, Registers, SReg};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::sev::{SevPolicy, SevStatus, SnpPageType, SnpPolicy};
 #[cfg(target_arch = "x86_64")]
@@ -202,6 +202,8 @@ pub trait Vcpu {
 
     #[cfg(target_arch = "aarch64")]
     fn set_sregs(&mut self, sregs: &[(SReg, u64)]) -> Result<(), Error>;
+
+    fn get_regs(&self) -> Result<Registers>;
 
     fn run(&mut self, entry: VmEntry) -> Result<VmExit, Error>;
 

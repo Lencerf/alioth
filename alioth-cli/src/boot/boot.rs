@@ -482,8 +482,9 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
 
     vm.boot().context(error::BootVm)?;
 
-    let server = Server::new(vm);
-    server.run()
+    let server = Server::with(vm);
+    server.run();
+    Ok(())
 }
 
 #[cfg(test)]

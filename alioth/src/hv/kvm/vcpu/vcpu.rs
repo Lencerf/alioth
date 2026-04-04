@@ -40,7 +40,7 @@ use crate::arch::cpuid::CpuidIn;
 use crate::arch::msr::Msr;
 #[cfg(target_arch = "x86_64")]
 use crate::arch::reg::{DtReg, DtRegVal, SegReg, SegRegVal};
-use crate::arch::reg::{Reg, SReg};
+use crate::arch::reg::{Reg, Registers, SReg};
 use crate::ffi;
 use crate::hv::kvm::vm::{KvmVm, VmInner};
 use crate::hv::kvm::{KvmError, kvm_error};
@@ -167,6 +167,10 @@ impl Vcpu for KvmVcpu {
     #[cfg(target_arch = "aarch64")]
     fn set_sregs(&mut self, sregs: &[(SReg, u64)]) -> Result<(), Error> {
         self.kvm_set_sregs(sregs)
+    }
+
+    fn get_regs(&self) -> Result<Registers> {
+        self.kvm_get_regs()
     }
 
     fn run(&mut self, entry: VmEntry) -> Result<VmExit, Error> {

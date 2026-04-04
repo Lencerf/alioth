@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::iter::zip;
 use std::sync::Arc;
@@ -73,9 +74,13 @@ impl PciSegment {
     }
 
     pub fn add(&self, bdf: Bdf, dev: Arc<dyn Pci>) -> Option<Arc<dyn Pci>> {
+        if Arc::ptr_eq(&dev, &self.placeholder) {
+            log::info!("Adding place holder from {bdf}");
+        }
         let mut configs = self.devices.write();
         if let Some(exist_dev) = configs.insert(bdf, dev) {
             if Arc::ptr_eq(&exist_dev, &self.placeholder) {
+                log::info!("Remove place holder from {bdf}");
                 None
             } else {
                 configs.insert(bdf, exist_dev)
@@ -90,6 +95,7 @@ impl PciSegment {
         match bdf {
             Some(bdf) => {
                 if self.add(bdf, empty_dev).is_none() {
+                    // log::info!("Add place holder from {bdf:x?}");
                     Some(bdf)
                 } else {
                     None
@@ -102,7 +108,10 @@ impl PciSegment {
                     let bdf = *next_bdf;
                     *next_bdf = Bdf(next_bdf.0.wrapping_add(8));
                     match self.add(bdf, empty_dev) {
-                        None => break Some(bdf),
+                        None => {
+                            // log::info!("Add place holder from {bdf:x?}");
+                            break Some(bdf);
+                        }
                         Some(d) => empty_dev = d,
                     }
                     if *next_bdf == init {
@@ -127,6 +136,7 @@ impl PciSegment {
         let mut bar_lists = [const { vec![] }; 4];
         let devices = self.devices.read();
         for (bdf, dev) in devices.iter() {
+            log::info!("dev = {bdf}: {:?}", dev.type_id());
             let config = dev.config();
             let header = config.get_header().data.read();
             let mut index = 0;

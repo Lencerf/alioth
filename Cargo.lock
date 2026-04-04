@@ -54,6 +54,7 @@ dependencies = [
  "flexi_logger",
  "log",
  "miniz_oxide",
+ "parking_lot",
  "pretty_assertions",
  "rstest",
  "serde",

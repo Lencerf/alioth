@@ -13,13 +13,22 @@
 // limitations under the License.
 
 use bitfield::bitfield;
+use serde::{Deserialize, Serialize};
 
 use crate::bitflags;
 
-#[derive(Debug, Default, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CpuidIn {
     pub func: u32,
     pub index: Option<u32>,
+}
+
+#[derive(Debug, Default, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CpuidOut {
+    pub eax: u32,
+    pub ebx: u32,
+    pub ecx: u32,
+    pub edx: u32,
 }
 
 bitflags! {

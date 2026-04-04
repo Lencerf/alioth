@@ -105,7 +105,6 @@ pub fn load<P: AsRef<Path>>(memory: &Memory, path: P) -> Result<(InitState, ArcM
             (SReg::Cr4, 0),
             (SReg::Cr8, 0),
         ],
-        msrs: vec![(Msr::EFER, 0)],
         seg_regs: vec![
             (SegReg::Cs, boot_cs),
             (SegReg::Ds, boot_ds),
@@ -132,6 +131,7 @@ pub fn load<P: AsRef<Path>>(memory: &Memory, path: P) -> Result<(InitState, ArcM
                 },
             ),
         ],
+        msrs: vec![(Msr::EFER, 0)],
         initramfs: None,
     };
     Ok((init, rom))
