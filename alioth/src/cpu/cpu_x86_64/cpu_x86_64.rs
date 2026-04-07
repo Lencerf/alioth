@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arch::cpuid::{CpuidIn, CpuidOut};
 use crate::arch::msr::{MiscEnable, Msr};
+use crate::arch::reg::Registers;
 use crate::cpu::{Result, VcpuHandle, VcpuThread};
 use crate::hv::{Coco, Vcpu, Vm};
 use crate::loader::{InitState, Payload, firmware};
@@ -113,10 +114,20 @@ impl<V: Vm> VcpuThread<V> {
     pub(crate) fn reset_vcpu(&self) -> Result<()> {
         Ok(())
     }
+
+    pub(crate) fn snapshot(&self) -> Result<Snapshot> {
+        let regs = self.vcpu.get_regs()?;
+        let snapshot = Snapshot {
+            regs,
+            ..Default::default()
+        };
+        Ok(snapshot)
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub cpuids: Vec<(CpuidIn, CpuidOut)>,
     pub msrs: Vec<(u32, u64)>,
+    pub regs: Registers,
 }

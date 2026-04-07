@@ -77,6 +77,9 @@ use crate::vfio::{CdevParam, ContainerParam, GroupParam, IoasParam};
 use crate::virtio::dev::{DevParam, Virtio, VirtioDevice};
 use crate::virtio::pci::VirtioPciDevice;
 
+#[cfg(target_arch = "x86_64")]
+pub use self::x86_64::Snapshot;
+
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
 #[snafu(module, context(suffix(false)))]
@@ -140,24 +143,30 @@ pub(crate) struct MpSync {
     count: u16,
 }
 
-pub enum VcpuCmd {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
     Snapshot,
 }
 
-pub enum VcpuMessage {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
     Created,
     Finished,
-    Snapshot,
 }
 
-pub struct VcpuResp {
+#[derive(Debug, Clone)]
+pub enum Response {
+    Snapshot { snapshot: Box<Snapshot> },
+}
+
+pub struct Message<T> {
     pub index: u16,
-    pub msg: VcpuMessage,
+    pub msg: T,
 }
 
 pub struct VcpuHandle {
     pub thread: JoinHandle<Result<()>>,
-    pub cmd_tx: Sender<VcpuCmd>,
+    pub cmd_tx: Sender<Request>,
 }
 
 pub struct Context<V: Vm> {
@@ -186,13 +195,14 @@ impl<V: Vm> Context<V> {
 struct VcpuThread<V: Vm> {
     ctx: Arc<Context<V>>,
     index: u16,
-    event_tx: Sender<VcpuResp>,
-    cmd_rx: Receiver<VcpuCmd>,
+    event_tx: Sender<Message<Event>>,
+    resp_tx: Sender<Message<Response>>,
+    cmd_rx: Receiver<Request>,
     vcpu: <V as Vm>::Vcpu,
 }
 
-fn notify_vmm(event_tx: &Sender<VcpuResp>, index: u16, msg: VcpuMessage) -> Result<()> {
-    if event_tx.send(VcpuResp { index, msg }).is_err() {
+fn notify_vmm<T>(event_tx: &Sender<Message<T>>, index: u16, msg: T) -> Result<()> {
+    if event_tx.send(Message { index, msg }).is_err() {
         error::NotifyVmm.fail()
     } else {
         Ok(())
@@ -203,8 +213,9 @@ impl<V: Vm> VcpuThread<V> {
     pub fn new(
         index: u16,
         ctx: Arc<Context<V>>,
-        event_tx: Sender<VcpuResp>,
-        cmd_rx: Receiver<VcpuCmd>,
+        event_tx: Sender<Message<Event>>,
+        resp_tx: Sender<Message<Response>>,
+        cmd_rx: Receiver<Request>,
     ) -> Result<Self> {
         let identity = ctx.board.encode_cpu_identity(index);
         let vcpu = ctx.board.vm.create_vcpu(index, identity)?;
@@ -213,19 +224,27 @@ impl<V: Vm> VcpuThread<V> {
             ctx,
             index,
             event_tx,
+            resp_tx,
             cmd_rx,
             vcpu,
         })
     }
 
-    fn notify_vmm(&self, msg: VcpuMessage) -> Result<()> {
+    fn notify_vmm(&self, msg: Event) -> Result<()> {
         notify_vmm(&self.event_tx, self.index, msg)
+    }
+
+    fn resp(&self, msg: Response) -> Result<()> {
+        notify_vmm(&self.resp_tx, self.index, msg)
     }
 
     fn park(&self, sync: RwLockReadGuard<'_, MpSync>) -> RwLockReadGuard<'_, MpSync> {
         drop(sync);
         thread::park();
-        self.ctx.sync.read()
+        log::info!("VCPU-{}: wake", self.index);
+        let sync = self.ctx.sync.read();
+        log::info!("VCPU-{}: obtined lock", self.index);
+        sync
     }
 
     fn unpark(&self, vcpus: &[VcpuHandle]) {
@@ -369,11 +388,15 @@ impl<V: Vm> VcpuThread<V> {
     }
 
     fn handle_cmds(&self) -> Result<()> {
+        log::info!("VCPU-{}: handle_cmds", self.index);
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
-                VcpuCmd::Snapshot => {
+                Request::Snapshot => {
                     log::info!("VCPU-{}: Snapshot command received", self.index);
-
+                    let snapshot = Box::new(self.snapshot()?);
+                    log::info!("VCPU-{}: Snapshot completed", self.index);
+                    self.resp(Response::Snapshot { snapshot })?;
+                    log::info!("VCPU-{}: Snapshot sent to VMM", self.index);
                     // Handle snapshot command
                 }
             }
@@ -453,23 +476,25 @@ impl<V: Vm> VcpuThread<V> {
 fn vcpu_thread_<V: Vm>(
     index: u16,
     ctx: Arc<Context<V>>,
-    event_tx: Sender<VcpuResp>,
-    cmd_rx: Receiver<VcpuCmd>,
+    event_tx: Sender<Message<Event>>,
+    resp_tx: Sender<Message<Response>>,
+    cmd_rx: Receiver<Request>,
 ) -> Result<()> {
-    let mut thread = VcpuThread::new(index, ctx, event_tx, cmd_rx)?;
-    thread.notify_vmm(VcpuMessage::Created)?;
+    let mut thread = VcpuThread::new(index, ctx, event_tx, resp_tx, cmd_rx)?;
+    thread.notify_vmm(Event::Created)?;
     thread.run()
 }
 
 pub fn vcpu_thread<V: Vm>(
     index: u16,
     ctx: Arc<Context<V>>,
-    event_tx: Sender<VcpuResp>,
-    cmd_rx: Receiver<VcpuCmd>,
+    event_tx: Sender<Message<Event>>,
+    resp_tx: Sender<Message<Response>>,
+    cmd_rx: Receiver<Request>,
 ) -> Result<()> {
-    let ret = vcpu_thread_(index, ctx.clone(), event_tx.clone(), cmd_rx);
+    let ret = vcpu_thread_(index, ctx.clone(), event_tx.clone(), resp_tx, cmd_rx);
 
-    let _ = notify_vmm(&event_tx, index, VcpuMessage::Finished);
+    let _ = notify_vmm(&event_tx, index, Event::Finished);
 
     if matches!(ret, Ok(_) | Err(Error::PeerFailure { .. })) {
         return Ok(());

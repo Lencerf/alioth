@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bitfield::bitfield;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bitflags;
 
@@ -59,7 +59,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Serialize, Deserialize)]
     pub struct Cr0(u64) {
         /// CarryProtected Mode Enable
         PE = 1 << 0;
@@ -87,7 +87,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Serialize, Deserialize)]
     pub struct Cr3(u64) {
         /// CarryPage-level write-through
         PWT = 1 << 3;
@@ -97,7 +97,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Default, Serialize, Deserialize)]
     pub struct Cr4(u64) {
         /// CarryVirtual 8086 Mode Extensions
         VME = 1 << 0;
@@ -156,7 +156,7 @@ bitfield! {
     /// Guest segment register access right.
     ///
     /// See Intel Architecture Software Developer's Manual, Vol.3, Table 24-2.
-    #[derive(Copy, Clone, Default, PartialEq, Eq, Hash)]
+    #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct SegAccess(u32);
     impl Debug;
     pub seg_type, _ : 3, 0;
@@ -219,7 +219,7 @@ pub enum DtReg {
     Idtr,
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SegRegVal {
     pub selector: u16,
     pub base: u64,
@@ -237,13 +237,13 @@ impl SegRegVal {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DtRegVal {
     pub base: u64,
     pub limit: u16,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registers {
     pub rax: u64,
     pub rbx: u64,

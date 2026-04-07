@@ -32,6 +32,7 @@ use std::time::Duration;
 use flume::{Receiver, Sender};
 use libc::SCHED_BATCH;
 use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use serde::{Deserialize, Serialize, de};
 use snafu::{ResultExt, Snafu};
 
 #[cfg(target_arch = "aarch64")]
@@ -40,7 +41,7 @@ use crate::arch::layout::{PL011_START, PL031_START};
 use crate::arch::layout::{PORT_CMOS_REG, PORT_COM1, PORT_FW_CFG_SELECTOR, PORT_FWDBG};
 use crate::board::{Board, BoardConfig};
 use crate::cpu::{
-    Context, State, VcpuCmd, VcpuHandle, VcpuMessage, VcpuResp, stop_vcpus, unpark_vcpus,
+    self, Context, Event, Message, Request, Response, State, VcpuHandle, stop_vcpus, unpark_vcpus,
     vcpu_thread,
 };
 use crate::device::clock::SystemClock;
@@ -194,8 +195,10 @@ where
     H: Hypervisor,
 {
     ctx: Arc<Context<H::Vm>>,
-    event_rx: Receiver<VcpuResp>,
-    _event_tx: Sender<VcpuResp>,
+    event_rx: Receiver<Message<Event>>,
+    _event_tx: Sender<Message<Event>>,
+    resp_rx: Receiver<Message<Response>>,
+    _resp_tx: Sender<Message<Response>>,
     #[cfg(target_os = "linux")]
     iommu: Mutex<Option<Arc<Iommu>>>,
     #[cfg(target_os = "linux")]
@@ -217,22 +220,24 @@ where
         let board = Board::new(hv, config)?;
 
         let (event_tx, event_rx) = flume::unbounded();
+        let (resp_tx, resp_rx) = flume::unbounded();
 
         let ctx = Arc::new(Context::new(board));
         let mut handles = ctx.vcpus.write();
         for index in 0..ctx.board.config.cpu.count {
             let event_tx = event_tx.clone();
+            let resp_tx = resp_tx.clone();
             let (cmd_tx, cmd_rx) = flume::unbounded();
             let ctx = ctx.clone();
             let handle = thread::Builder::new()
                 .name(format!("vcpu_{index}"))
-                .spawn(move || vcpu_thread(index, ctx, event_tx, cmd_rx))
+                .spawn(move || vcpu_thread(index, ctx, event_tx, resp_tx, cmd_rx))
                 .context(error::CreateVcpu { index })?;
             if !matches!(
                 event_rx.recv_timeout(Duration::from_secs(2)),
-                Ok(VcpuResp {
+                Ok(Message {
                     index: i,
-                    msg: VcpuMessage::Created
+                    msg: Event::Created
                 }) if i == index
             ) {
                 let err = std::io::ErrorKind::TimedOut.into();
@@ -268,6 +273,8 @@ where
             ctx,
             event_rx,
             _event_tx: event_tx,
+            resp_rx,
+            _resp_tx: resp_tx,
             #[cfg(target_os = "linux")]
             iommu: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -854,8 +861,14 @@ where
 //     }
 // }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SnapshotParam {
-    dest: Box<Path>,
+    pub dest: Box<Path>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub cpus: Vec<Box<cpu::Snapshot>>,
 }
 
 impl<H> Machine<H>
@@ -896,12 +909,12 @@ where
         Ok(())
     }
 
-    pub fn snapshot(&self) -> Result<()> {
+    pub fn snapshot(&self) -> Result<Snapshot> {
         let vcpus = self.ctx.vcpus.read();
-        let state = self.ctx.sync.write();
-        if !matches!(state.state, State::Paused) {
+        let sync = self.ctx.sync.read();
+        if !matches!(sync.state, State::Paused) {
             return error::UnexpectedState {
-                state: state.state,
+                state: sync.state,
                 want: State::Paused,
             }
             .fail();
@@ -909,14 +922,26 @@ where
 
         // Send Snapshot command to all VCPUs
         for (index, handle) in vcpus.iter().enumerate() {
-            if handle.cmd_tx.try_send(VcpuCmd::Snapshot).is_err() {
+            if handle.cmd_tx.try_send(Request::Snapshot).is_err() {
                 todo!("")
             }
             log::info!("sent Snapshot to VCPU-{index}")
         }
         unpark_vcpus(None, &vcpus);
 
-        Ok(())
+        let mut cpus = vec![None; vcpus.len()];
+        for i in 0..vcpus.len() {
+            let Ok(resp) = self.resp_rx.recv() else {
+                todo!("handle snapshot timeout of index {i}")
+            };
+            let Response::Snapshot { snapshot } = resp.msg else {
+                todo!("handle snapshot failure of index {i}: {:?}", resp.msg)
+            };
+            cpus[resp.index as usize] = Some(snapshot);
+        }
+        let cpus: Vec<Box<cpu::Snapshot>> = cpus.into_iter().flat_map(|a| a).collect();
+
+        Ok(Snapshot { cpus })
     }
 
     pub fn wait(&self) -> Result<()> {

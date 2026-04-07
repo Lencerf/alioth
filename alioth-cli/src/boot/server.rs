@@ -13,76 +13,107 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use alioth::hv::Hypervisor;
-use alioth::vm::{self, Machine};
-use axum::Router;
+use alioth::vm::{self, Machine, SnapshotParam};
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::routing::post;
+use axum::{Json, Router};
 use parking_lot::RwLock;
+use serde::Serialize;
 use snafu::ResultExt;
+use tokio::fs::{self, File};
 
 use crate::boot::{Result, error};
 
-trait Serve: Send + Sync + 'static {
-    fn pause(&self, name: &str) -> Response;
-    fn resume(&self, name: &str) -> Response;
-    fn snapshot(&self, name: &str) -> Response;
+// trait Serve: Send + Sync + 'static {
+//     fn pause(&self, name: &str) -> Response;
+//     fn resume(&self, name: &str) -> Response;
+//     fn snapshot(&self, name: &str, param: &SnapshotParam) -> Response;
+// }
+
+trait Instance: Send + Sync + 'static {
+    fn pause(&self) -> vm::Result<()>;
+    fn resume(&self) -> vm::Result<()>;
+    fn snapshot(&self) -> vm::Result<vm::Snapshot>;
+    fn wait(&self) -> vm::Result<()>;
+}
+
+impl<H> Instance for Machine<H>
+where
+    H: Hypervisor,
+{
+    fn pause(&self) -> vm::Result<()> {
+        Machine::pause(self)
+    }
+
+    fn resume(&self) -> vm::Result<()> {
+        Machine::resume(self)
+    }
+
+    fn snapshot(&self) -> vm::Result<vm::Snapshot> {
+        Machine::snapshot(self)
+    }
+
+    fn wait(&self) -> vm::Result<()> {
+        Machine::wait(&self)
+    }
 }
 
 #[axum::debug_handler]
-async fn vm_pause(state: State<Arc<dyn Serve>>, path: Path<String>, bytes: Bytes) -> Response {
+async fn vm_pause(state: State<Arc<Vmm>>, path: Path<String>) -> Response {
     let Path(name) = path;
     let State(server) = state;
-    log::info!("Pausing VM: {}", name);
-    log::info!("received data: {:?}", bytes);
+    log::info!("Pausing VM: {name}");
     server.pause(&name)
 }
 
 #[axum::debug_handler]
-async fn vm_resume(state: State<Arc<dyn Serve>>, path: Path<String>, bytes: Bytes) -> Response {
+async fn vm_resume(state: State<Arc<Vmm>>, path: Path<String>) -> Response {
     let Path(name) = path;
     let State(server) = state;
-    log::info!("Resuming VM: {}", name);
-    log::info!("received data: {:?}", bytes);
+    log::info!("Resuming VM: {name}");
     server.resume(&name)
 }
 
 #[axum::debug_handler]
-async fn vm_snapshot(state: State<Arc<dyn Serve>>, path: Path<String>, bytes: Bytes) -> Response {
+async fn vm_snapshot(
+    state: State<Arc<Vmm>>,
+    path: Path<String>,
+    param: Json<SnapshotParam>,
+) -> Response {
     let Path(name) = path;
     let State(server) = state;
-    log::info!("Snapshotting VM: {}", name);
-    log::info!("received data: {:?}", bytes);
-    server.snapshot(&name)
+    log::info!("Snapshotting VM: {name}");
+    log::info!("received data: {param:?}");
+    let param = param.0;
+    server.snapshot(&name, &param).await
 }
 
-struct Vmm<H>
-where
-    H: Hypervisor,
-{
-    pub vms: RwLock<HashMap<Arc<str>, Arc<Machine<H>>>>,
+struct Vmm {
+    pub vms: RwLock<HashMap<Arc<str>, Arc<dyn Instance>>>,
 }
 
-impl<H> Vmm<H>
-where
-    H: Hypervisor,
-{
-    pub fn with(vm: Machine<H>) -> Self {
+impl Vmm {
+    pub fn with<H>(vm: Machine<H>) -> Self
+    where
+        H: Hypervisor,
+    {
         Self {
-            vms: RwLock::new(HashMap::from([("vm0".into(), Arc::new(vm))])),
+            vms: RwLock::new(HashMap::from([(
+                "vm0".into(),
+                Arc::new(vm) as Arc<dyn Instance>,
+            )])),
         }
     }
 }
 
-pub struct Server<H>
-where
-    H: Hypervisor,
-{
-    vmm: Arc<Vmm<H>>,
+pub struct Server {
+    vmm: Arc<Vmm>,
 }
 
 fn not_found(name: &str) -> Response {
@@ -92,20 +123,28 @@ fn not_found(name: &str) -> Response {
         .unwrap()
 }
 
-fn into_response<T>(result: vm::Result<T>) -> Response {
+fn internal_server_error<E>(e: E) -> Response
+where
+    E: Debug,
+{
+    Response::builder()
+        .status(500)
+        .body(Body::from(format!("Internal server error:\n{e:?}")))
+        .unwrap()
+}
+
+fn into_response<T, E>(result: Result<T, E>) -> Response
+where
+    T: Serialize,
+    E: Debug,
+{
     match result {
-        Ok(_) => Response::new(Body::empty()),
-        Err(e) => Response::builder()
-            .status(500)
-            .body(Body::from(format!("{e:?}")))
-            .unwrap(),
+        Ok(t) => Response::new(Body::from(serde_yaml::to_string(&t).unwrap())),
+        Err(e) => internal_server_error(e),
     }
 }
 
-impl<H> Serve for Vmm<H>
-where
-    H: Hypervisor,
-{
+impl Vmm {
     fn pause(&self, name: &str) -> Response {
         let vms = self.vms.read();
         let Some(vm) = vms.get(name) else {
@@ -122,16 +161,32 @@ where
         into_response(vm.resume())
     }
 
-    fn snapshot(&self, name: &str) -> Response {
-        todo!()
+    async fn snapshot(&self, name: &str, param: &SnapshotParam) -> Response {
+        let vm = {
+            let vms = self.vms.read();
+            let Some(vm) = vms.get(name) else {
+                return not_found(name);
+            };
+            vm.clone()
+        };
+        let snapthot = match tokio::task::spawn_blocking(move || vm.snapshot()).await {
+            Ok(Ok(snapshot)) => snapshot,
+            Ok(Err(e)) => return internal_server_error(e),
+            Err(e) => return internal_server_error(e),
+        };
+        let data = match serde_json::to_string_pretty(&snapthot) {
+            Ok(data) => data,
+            Err(e) => return internal_server_error(e),
+        };
+        into_response(fs::write(&param.dest, data).await)
     }
 }
 
-impl<H> Server<H>
-where
-    H: Hypervisor,
-{
-    pub fn with(vm: Machine<H>) -> Self {
+impl Server {
+    pub fn with<H>(vm: Machine<H>) -> Self
+    where
+        H: Hypervisor,
+    {
         Self {
             vmm: Arc::new(Vmm::with(vm)),
         }
