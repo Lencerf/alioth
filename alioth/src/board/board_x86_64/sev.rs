@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::arch::x86_64::{__cpuid, CpuidResult};
+use std::arch::x86_64::__cpuid;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arch::cpuid::{
     Cpuid1Ecx, Cpuid7Index0Ebx, Cpuid7Index0Edx, CpuidExt1fEAx, CpuidExt1fEbx, CpuidExt8Ebx,
-    CpuidExt21EAx, CpuidIn,
+    CpuidExt21EAx, CpuidIn, CpuidOut,
 };
 use crate::arch::sev::{SevPolicy, SnpPolicy};
 use crate::board::{Board, Result, error};
@@ -26,7 +26,7 @@ use crate::hv::{Coco, Vm, VmMemory};
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{self, LayoutChanged, MarkPrivateMemory};
 
-pub fn adjust_cpuid(coco: &Coco, cpuids: &mut HashMap<CpuidIn, CpuidResult>) -> Result<()> {
+pub fn adjust_cpuid(coco: &Coco, cpuids: &mut HashMap<CpuidIn, CpuidOut>) -> Result<()> {
     // AMD Volume 3, section E.4.17.
     let in_ = CpuidIn {
         func: 0x8000_001f,
@@ -56,7 +56,7 @@ pub fn adjust_cpuid(coco: &Coco, cpuids: &mut HashMap<CpuidIn, CpuidResult>) -> 
     Ok(())
 }
 
-fn snp_adjust_cpuids(cpuids: &mut HashMap<CpuidIn, CpuidResult>) {
+fn snp_adjust_cpuids(cpuids: &mut HashMap<CpuidIn, CpuidOut>) {
     let in_ = CpuidIn {
         func: 0x1,
         index: None,

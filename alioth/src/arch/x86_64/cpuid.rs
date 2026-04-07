@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::arch::x86_64::CpuidResult;
+
 use bitfield::bitfield;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,17 @@ pub struct CpuidOut {
     pub ebx: u32,
     pub ecx: u32,
     pub edx: u32,
+}
+
+impl From<CpuidResult> for CpuidOut {
+    fn from(value: CpuidResult) -> Self {
+        Self {
+            eax: value.eax,
+            ebx: value.ebx,
+            ecx: value.ecx,
+            edx: value.edx,
+        }
+    }
 }
 
 bitflags! {

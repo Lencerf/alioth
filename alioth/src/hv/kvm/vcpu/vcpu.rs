@@ -23,7 +23,6 @@ mod vmentry;
 mod vmexit;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::CpuidResult;
 #[cfg(target_arch = "x86_64")]
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -35,7 +34,7 @@ use libc::{MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
 use snafu::ResultExt;
 
 #[cfg(target_arch = "x86_64")]
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::msr::Msr;
 #[cfg(target_arch = "x86_64")]
@@ -228,7 +227,7 @@ impl Vcpu for KvmVcpu {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn set_cpuids(&mut self, cpuids: HashMap<CpuidIn, CpuidResult>) -> Result<(), Error> {
+    fn set_cpuids(&mut self, cpuids: HashMap<CpuidIn, CpuidOut>) -> Result<(), Error> {
         self.kvm_set_cpuids(&cpuids)
     }
 

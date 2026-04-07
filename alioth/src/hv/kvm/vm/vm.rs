@@ -20,7 +20,6 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::io::ErrorKind;
@@ -36,7 +35,7 @@ use parking_lot::{Mutex, RwLock};
 use snafu::ResultExt;
 
 #[cfg(target_arch = "x86_64")]
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::sev::{SevPolicy, SnpPageType, SnpPolicy};
 #[cfg(target_arch = "x86_64")]
@@ -742,7 +741,7 @@ impl Vm for KvmVm {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn tdx_init_vm(&self, attr: TdAttr, cpuids: &HashMap<CpuidIn, CpuidResult>) -> Result<()> {
+    fn tdx_init_vm(&self, attr: TdAttr, cpuids: &HashMap<CpuidIn, CpuidOut>) -> Result<()> {
         KvmVm::tdx_init_vm(self, attr, cpuids)
     }
 

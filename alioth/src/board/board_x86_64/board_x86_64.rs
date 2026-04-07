@@ -15,7 +15,7 @@
 mod sev;
 mod tdx;
 
-use std::arch::x86_64::{__cpuid, CpuidResult};
+use std::arch::x86_64::__cpuid;
 use std::collections::HashMap;
 use std::mem::{offset_of, size_of, size_of_val};
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 use snafu::ResultExt;
 use zerocopy::{FromZeros, IntoBytes};
 
-use crate::arch::cpuid::{Cpuid1Ecx, CpuidIn};
+use crate::arch::cpuid::{Cpuid1Ecx, CpuidIn, CpuidOut};
 use crate::arch::layout::{
     BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
     PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
@@ -48,13 +48,13 @@ pub struct ArchBoard<V>
 where
     V: Vm,
 {
-    pub(crate) cpuids: HashMap<CpuidIn, CpuidResult>,
+    pub(crate) cpuids: HashMap<CpuidIn, CpuidOut>,
     pub(crate) sev_ap_eip: AtomicU32,
     pub(crate) tdx_hob: AtomicU64,
     pub(crate) io_apic: Arc<IoApic<V::MsiSender>>,
 }
 
-fn add_topology(cpuids: &mut HashMap<CpuidIn, CpuidResult>, func: u32, levels: &[(u8, u16)]) {
+fn add_topology(cpuids: &mut HashMap<CpuidIn, CpuidOut>, func: u32, levels: &[(u8, u16)]) {
     let edx = 0; // patched later in init_vcpu()
     for (index, (level, count)) in levels.iter().chain(&[(0, 0)]).enumerate() {
         let eax = count.next_power_of_two().trailing_zeros();
@@ -65,7 +65,7 @@ fn add_topology(cpuids: &mut HashMap<CpuidIn, CpuidResult>, func: u32, levels: &
                 func,
                 index: Some(index as u32),
             },
-            CpuidResult { eax, ebx, ecx, edx },
+            CpuidOut { eax, ebx, ecx, edx },
         );
     }
 }
@@ -128,14 +128,14 @@ impl<V: Vm> ArchBoard<V> {
                 func: 0x8000_0000,
                 index: None,
             },
-            leaf_8000_0000,
+            leaf_8000_0000.into(),
         );
         // 0x8000_0002 to 0x8000_0004: processor name
         // 0x8000_0005: L1 cache/LTB
         // 0x8000_0006: L2 cache/TLB and L3 cache
         for func in 0x8000_0002..=0x8000_0006 {
             let host_cpuid = __cpuid(func);
-            cpuids.insert(CpuidIn { func, index: None }, host_cpuid);
+            cpuids.insert(CpuidIn { func, index: None }, host_cpuid.into());
         }
 
         if let Some(coco) = &config.coco

@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::arch::x86_64::CpuidResult;
 
 use rstest::rstest;
 
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 use crate::hv::kvm::{Kvm, KvmConfig};
 use crate::sys::kvm::{KVM_CPUID_SIGNATURE, KvmCpuid2Flag, KvmCpuidEntry2};
 
@@ -55,7 +54,7 @@ fn test_get_supported_cpuid() {
             func: 0,
             index: None,
         },
-        CpuidResult {
+        CpuidOut {
             eax: 0x10,
             ebx: u32::from_le_bytes(*b"Auth"),
             ecx: u32::from_le_bytes(*b"cAMD"),
@@ -79,7 +78,7 @@ fn test_get_supported_cpuid() {
             func: 0xb,
             index: Some(0),
         },
-        CpuidResult {
+        CpuidOut {
             eax: 0x0,
             ebx: 0x0,
             ecx: 0x0,
@@ -89,8 +88,8 @@ fn test_get_supported_cpuid() {
 )]
 fn test_convert_cpuid_entry(
     #[case] value: KvmCpuidEntry2,
-    #[case] expected: (CpuidIn, CpuidResult),
+    #[case] expected: (CpuidIn, CpuidOut),
 ) {
-    let got: (CpuidIn, CpuidResult) = value.into();
+    let got: (CpuidIn, CpuidOut) = value.into();
     assert_eq!(got, expected)
 }

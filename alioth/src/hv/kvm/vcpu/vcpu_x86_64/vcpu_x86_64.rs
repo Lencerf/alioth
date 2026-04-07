@@ -14,14 +14,13 @@
 
 mod tdx;
 
-use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 use std::iter::zip;
 use std::os::fd::{FromRawFd, OwnedFd};
 
 use snafu::ResultExt;
 
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 use crate::arch::msr::{Efer, Msr};
 use crate::arch::reg::{
     Cr0, Cr3, Cr4, DtReg, DtRegVal, Reg, Registers, SReg, SegAccess, SegReg, SegRegVal,
@@ -347,7 +346,7 @@ impl KvmVcpu {
         Ok(registers)
     }
 
-    pub fn kvm_set_cpuids(&mut self, cpuids: &HashMap<CpuidIn, CpuidResult>) -> Result<(), Error> {
+    pub fn kvm_set_cpuids(&mut self, cpuids: &HashMap<CpuidIn, CpuidOut>) -> Result<(), Error> {
         if cpuids.len() > KVM_MAX_CPUID_ENTRIES {
             return kvm_error::CpuidTableTooLong.fail()?;
         }

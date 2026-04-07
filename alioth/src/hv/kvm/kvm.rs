@@ -24,7 +24,6 @@ mod vcpu;
 mod vm;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::CpuidResult;
 #[cfg(target_arch = "x86_64")]
 use std::collections::HashMap;
 use std::fs::File;
@@ -40,7 +39,7 @@ use serde_aco::Help;
 use snafu::{ResultExt, Snafu};
 
 #[cfg(target_arch = "x86_64")]
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 use crate::errors::{DebugTrace, trace_error};
 use crate::ffi;
 #[cfg(target_arch = "x86_64")]
@@ -151,7 +150,7 @@ impl Hypervisor for Kvm {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn get_supported_cpuids(&self, coco: Option<&Coco>) -> Result<HashMap<CpuidIn, CpuidResult>> {
+    fn get_supported_cpuids(&self, coco: Option<&Coco>) -> Result<HashMap<CpuidIn, CpuidOut>> {
         Kvm::get_supported_cpuids(self, coco)
     }
 }

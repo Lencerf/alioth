@@ -15,7 +15,6 @@
 mod sev;
 mod tdx;
 
-use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 use std::path::Path;
 

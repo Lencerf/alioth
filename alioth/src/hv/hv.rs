@@ -20,7 +20,6 @@ mod hvf;
 mod kvm;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::CpuidResult;
 #[cfg(target_arch = "x86_64")]
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -33,7 +32,7 @@ use serde_aco::Help;
 use snafu::{AsErrorSource, Snafu};
 
 #[cfg(target_arch = "x86_64")]
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::msr::Msr;
 #[cfg(target_arch = "x86_64")]
@@ -208,7 +207,7 @@ pub trait Vcpu {
     fn run(&mut self, entry: VmEntry) -> Result<VmExit, Error>;
 
     #[cfg(target_arch = "x86_64")]
-    fn set_cpuids(&mut self, cpuids: HashMap<CpuidIn, CpuidResult>) -> Result<(), Error>;
+    fn set_cpuids(&mut self, cpuids: HashMap<CpuidIn, CpuidOut>) -> Result<(), Error>;
 
     #[cfg(target_arch = "x86_64")]
     fn set_msrs(&mut self, msrs: &[(Msr, u64)]) -> Result<()>;
@@ -384,7 +383,7 @@ pub trait Vm: Sync + Send + 'static {
     fn snp_launch_finish(&self) -> Result<()>;
 
     #[cfg(target_arch = "x86_64")]
-    fn tdx_init_vm(&self, attr: TdAttr, cpuids: &HashMap<CpuidIn, CpuidResult>) -> Result<()>;
+    fn tdx_init_vm(&self, attr: TdAttr, cpuids: &HashMap<CpuidIn, CpuidOut>) -> Result<()>;
 
     #[cfg(target_arch = "x86_64")]
     fn tdx_finalize_vm(&self) -> Result<()>;
@@ -421,7 +420,7 @@ pub trait Hypervisor: Sync + Send + 'static {
     fn create_vm(&self, config: &VmConfig) -> Result<Self::Vm, Error>;
 
     #[cfg(target_arch = "x86_64")]
-    fn get_supported_cpuids(&self, coco: Option<&Coco>) -> Result<HashMap<CpuidIn, CpuidResult>>;
+    fn get_supported_cpuids(&self, coco: Option<&Coco>) -> Result<HashMap<CpuidIn, CpuidOut>>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

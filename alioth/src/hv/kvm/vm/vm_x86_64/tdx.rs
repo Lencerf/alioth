@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 use crate::arch::tdx::TdAttr;
 use crate::hv::Result;
 use crate::hv::kvm::vm::KvmVm;
@@ -40,7 +39,7 @@ impl KvmVm {
         Ok(caps)
     }
 
-    pub fn tdx_init_vm(&self, attr: TdAttr, cpuids: &HashMap<CpuidIn, CpuidResult>) -> Result<()> {
+    pub fn tdx_init_vm(&self, attr: TdAttr, cpuids: &HashMap<CpuidIn, CpuidOut>) -> Result<()> {
         let mut init: Box<KvmTdxInitVm> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
         init.attributes = attr;
 

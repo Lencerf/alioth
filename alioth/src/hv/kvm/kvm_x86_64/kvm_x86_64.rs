@@ -15,12 +15,11 @@
 pub(crate) mod sev;
 pub(crate) mod tdx;
 
-use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 
 use snafu::ResultExt;
 
-use crate::arch::cpuid::CpuidIn;
+use crate::arch::cpuid::{CpuidIn, CpuidOut};
 #[cfg(target_arch = "x86_64")]
 use crate::hv::Coco;
 use crate::hv::{Kvm, Result, error};
@@ -29,7 +28,7 @@ use crate::sys::kvm::{
     KvmCpuidFeature, KvmX2apicApiFlag, kvm_get_supported_cpuid,
 };
 
-impl From<KvmCpuidEntry2> for (CpuidIn, CpuidResult) {
+impl From<KvmCpuidEntry2> for (CpuidIn, CpuidOut) {
     fn from(value: KvmCpuidEntry2) -> Self {
         let in_ = CpuidIn {
             func: value.function,
@@ -39,7 +38,7 @@ impl From<KvmCpuidEntry2> for (CpuidIn, CpuidResult) {
                 None
             },
         };
-        let result = CpuidResult {
+        let result = CpuidOut {
             eax: value.eax,
             ebx: value.ebx,
             ecx: value.ecx,
@@ -53,7 +52,7 @@ impl Kvm {
     pub fn get_supported_cpuids(
         &self,
         coco: Option<&Coco>,
-    ) -> Result<HashMap<CpuidIn, CpuidResult>> {
+    ) -> Result<HashMap<CpuidIn, CpuidOut>> {
         let mut kvm_cpuid2 = KvmCpuid2 {
             nent: KVM_MAX_CPUID_ENTRIES as u32,
             padding: 0,
