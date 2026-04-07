@@ -31,7 +31,7 @@ use serde_aco::Help;
 use snafu::Snafu;
 
 #[cfg(target_arch = "x86_64")]
-use crate::arch::cpuid::{CpuidIn, CpuidOut};
+use crate::arch::cpuid::CpuidIn;
 #[cfg(target_arch = "x86_64")]
 use crate::arch::layout::PORT_PCI_ADDRESS;
 use crate::arch::layout::{

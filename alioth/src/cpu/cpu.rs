@@ -19,63 +19,27 @@ mod aarch64;
 #[path = "cpu_x86_64/cpu_x86_64.rs"]
 mod x86_64;
 
-#[cfg(target_os = "linux")]
-use std::collections::HashMap;
-use std::collections::HashSet;
-#[cfg(target_os = "linux")]
-use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use flume::{Receiver, Sender};
-use libc::SCHED_BATCH;
-use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use snafu::{ResultExt, Snafu};
 
 #[cfg(target_arch = "aarch64")]
 use crate::arch::layout::{PL011_START, PL031_START};
-#[cfg(target_arch = "x86_64")]
-use crate::arch::layout::{PORT_CMOS_REG, PORT_COM1, PORT_FW_CFG_SELECTOR, PORT_FWDBG};
-use crate::board::{Board, BoardConfig};
-use crate::device::clock::SystemClock;
-#[cfg(target_arch = "x86_64")]
-use crate::device::cmos::Cmos;
-use crate::device::console::StdioConsole;
-#[cfg(target_arch = "x86_64")]
-use crate::device::fw_cfg::{FwCfg, FwCfgItemParam};
-#[cfg(target_arch = "x86_64")]
-use crate::device::fw_dbg::FwDbg;
+use crate::board::Board;
 #[cfg(target_arch = "aarch64")]
 use crate::device::pl011::Pl011;
 #[cfg(target_arch = "aarch64")]
 use crate::device::pl031::Pl031;
-#[cfg(target_arch = "x86_64")]
-use crate::device::serial::Serial;
 use crate::errors::{DebugTrace, trace_error};
-use crate::hv::{Hypervisor, IoeventFdRegistry, Vcpu, Vm, VmEntry, VmExit};
+use crate::hv::{Vcpu, Vm, VmEntry, VmExit};
 #[cfg(target_arch = "x86_64")]
 use crate::loader::xen;
-use crate::loader::{Executable, InitState, Payload, linux};
-use crate::pci::pvpanic::PvPanic;
-use crate::pci::{Bdf, Pci};
-#[cfg(target_os = "linux")]
-use crate::sys::vfio::VfioIommu;
-#[cfg(target_os = "linux")]
-use crate::vfio::cdev::Cdev;
-#[cfg(target_os = "linux")]
-use crate::vfio::container::{Container, UpdateContainerMapping};
-#[cfg(target_os = "linux")]
-use crate::vfio::group::{DevFd, Group};
-#[cfg(target_os = "linux")]
-use crate::vfio::iommu::{Ioas, Iommu, UpdateIommuIoas};
-#[cfg(target_os = "linux")]
-use crate::vfio::pci::VfioPciDev;
-#[cfg(target_os = "linux")]
-use crate::vfio::{CdevParam, ContainerParam, GroupParam, IoasParam};
-use crate::virtio::dev::{DevParam, Virtio, VirtioDevice};
-use crate::virtio::pci::VirtioPciDevice;
+use crate::loader::{Executable, InitState, linux};
+use crate::pci::Pci;
+use crate::virtio::dev::{DevParam, Virtio};
 
 #[cfg(target_arch = "x86_64")]
 pub use self::x86_64::Snapshot;

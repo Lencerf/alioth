@@ -21,18 +21,15 @@
 
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
-use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::thread::{self, JoinHandle};
+use std::thread::{self};
 use std::time::Duration;
 
 use flume::{Receiver, Sender};
-use libc::SCHED_BATCH;
-use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use serde::{Deserialize, Serialize, de};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 
 #[cfg(target_arch = "aarch64")]
@@ -59,10 +56,8 @@ use crate::device::pl031::Pl031;
 #[cfg(target_arch = "x86_64")]
 use crate::device::serial::Serial;
 use crate::errors::{DebugTrace, trace_error};
-use crate::hv::{Hypervisor, IoeventFdRegistry, Vcpu, Vm, VmEntry, VmExit};
-#[cfg(target_arch = "x86_64")]
-use crate::loader::xen;
-use crate::loader::{Executable, InitState, Payload, linux};
+use crate::hv::{Hypervisor, IoeventFdRegistry, Vm};
+use crate::loader::Payload;
 use crate::pci::pvpanic::PvPanic;
 use crate::pci::{Bdf, Pci};
 #[cfg(target_os = "linux")]
@@ -939,7 +934,7 @@ where
             };
             cpus[resp.index as usize] = Some(snapshot);
         }
-        let cpus: Vec<Box<cpu::Snapshot>> = cpus.into_iter().flat_map(|a| a).collect();
+        let cpus: Vec<Box<cpu::Snapshot>> = cpus.into_iter().flatten().collect();
 
         Ok(Snapshot { cpus })
     }
