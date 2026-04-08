@@ -208,9 +208,13 @@ pub trait Vcpu {
 
     #[cfg(target_arch = "x86_64")]
     fn set_cpuids(&mut self, cpuids: HashMap<CpuidIn, CpuidOut>) -> Result<(), Error>;
+    #[cfg(target_arch = "x86_64")]
+    fn get_cpuids(&self) -> Result<HashMap<CpuidIn, CpuidOut>>;
 
     #[cfg(target_arch = "x86_64")]
     fn set_msrs(&mut self, msrs: &[(Msr, u64)]) -> Result<()>;
+    #[cfg(target_arch = "x86_64")]
+    fn get_msrs(&self, msrs: &[Msr]) -> Result<Vec<u64>>;
 
     fn dump(&self) -> Result<(), Error>;
 
@@ -357,6 +361,8 @@ pub trait Vm: Sync + Send + 'static {
     fn create_vm_memory(&mut self) -> Result<Self::Memory, Error>;
     fn create_ioeventfd_registry(&self) -> Result<Self::IoeventFdRegistry>;
     fn stop_vcpu<T>(&self, identity: u64, handle: &JoinHandle<T>) -> Result<(), Error>;
+
+    fn get_supported_msrs(&self) -> Result<Vec<Msr>>;
 
     #[cfg(target_arch = "x86_64")]
     fn sev_launch_start(&self, policy: SevPolicy) -> Result<()>;

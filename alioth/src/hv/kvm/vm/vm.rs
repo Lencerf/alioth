@@ -36,6 +36,7 @@ use snafu::ResultExt;
 
 #[cfg(target_arch = "x86_64")]
 use crate::arch::cpuid::{CpuidIn, CpuidOut};
+use crate::arch::msr::Msr;
 #[cfg(target_arch = "x86_64")]
 use crate::arch::sev::{SevPolicy, SnpPageType, SnpPolicy};
 #[cfg(target_arch = "x86_64")]
@@ -55,10 +56,11 @@ use crate::sys::kvm::{
     KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KvmCap, KvmEnableCap, KvmEncRegion, KvmIoEventFd,
     KvmIoEventFdFlag, KvmIrqRouting, KvmIrqRoutingEntry, KvmIrqRoutingIrqchip, KvmIrqRoutingMsi,
     KvmIrqfd, KvmIrqfdFlag, KvmMemFlag, KvmMemoryAttribute, KvmMemoryAttributes, KvmMsi,
-    KvmUserspaceMemoryRegion, KvmUserspaceMemoryRegion2, kvm_create_vm, kvm_enable_cap,
-    kvm_get_vcpu_mmap_size, kvm_ioeventfd, kvm_irqfd, kvm_memory_encrypt_reg_region,
-    kvm_memory_encrypt_unreg_region, kvm_set_gsi_routing, kvm_set_memory_attributes,
-    kvm_set_user_memory_region, kvm_set_user_memory_region2, kvm_signal_msi,
+    KvmMsrList, KvmMsrs, KvmUserspaceMemoryRegion, KvmUserspaceMemoryRegion2, MAX_IO_MSRS,
+    kvm_create_vm, kvm_enable_cap, kvm_get_msr_index_list, kvm_get_vcpu_mmap_size, kvm_ioeventfd,
+    kvm_irqfd, kvm_memory_encrypt_reg_region, kvm_memory_encrypt_unreg_region, kvm_set_gsi_routing,
+    kvm_set_memory_attributes, kvm_set_user_memory_region, kvm_set_user_memory_region2,
+    kvm_signal_msi,
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -69,6 +71,7 @@ use self::x86_64::{VmArch, translate_msi_addr};
 #[derive(Debug)]
 pub struct VmInner {
     pub fd: OwnedFd,
+    pub kvm: Arc<OwnedFd>,
     pub vcpu_mmap_size: usize,
     memfd: Option<OwnedFd>,
     ioeventfds: Mutex<HashMap<i32, KvmIoEventFd>>,
@@ -610,6 +613,7 @@ impl KvmVm {
         let kvm_vm = KvmVm {
             vm: Arc::new(VmInner {
                 fd,
+                kvm: kvm.fd.clone(),
                 vcpu_mmap_size,
                 memfd,
                 ioeventfds: Mutex::new(HashMap::new()),
@@ -648,6 +652,16 @@ impl Vm for KvmVm {
         ffi!(unsafe { libc::pthread_kill(handle.as_pthread_t() as _, SIGRTMIN()) })
             .context(error::StopVcpu)?;
         Ok(())
+    }
+
+    fn get_supported_msrs(&self) -> Result<Vec<Msr>> {
+        let mut kvm_msr_list = KvmMsrList {
+            nmsrs: MAX_IO_MSRS as u32,
+            entries: [Msr::default(); MAX_IO_MSRS],
+        };
+        unsafe { kvm_get_msr_index_list(&self.vm.kvm, &mut kvm_msr_list) }
+            .context(error::GuestMsr)?;
+        Ok(kvm_msr_list.entries[..kvm_msr_list.nmsrs as usize].to_vec())
     }
 
     fn create_vm_memory(&mut self) -> Result<Self::Memory, Error> {

@@ -14,17 +14,18 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path;
 use std::sync::Arc;
 
 use alioth::hv::Hypervisor;
-use alioth::vm::{self, Machine, SnapshotParam};
+use alioth::vm::{self, Machine};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::routing::post;
 use axum::{Json, Router};
 use parking_lot::RwLock;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::fs::{self};
 
 use crate::boot::Result;
@@ -143,6 +144,11 @@ where
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SnapshotParam {
+    pub dest: Box<path::Path>,
+}
+
 impl Vmm {
     fn pause(&self, name: &str) -> Response {
         let vms = self.vms.read();
@@ -173,7 +179,7 @@ impl Vmm {
             Ok(Err(e)) => return internal_server_error(e),
             Err(e) => return internal_server_error(e),
         };
-        let data = match serde_json::to_string_pretty(&snapthot) {
+        let data = match serde_yaml::to_string(&snapthot) {
             Ok(data) => data,
             Err(e) => return internal_server_error(e),
         };

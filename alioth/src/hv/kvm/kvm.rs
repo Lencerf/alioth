@@ -32,6 +32,7 @@ use std::num::NonZero;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::ptr::null_mut;
+use std::sync::Arc;
 
 use libc::SIGRTMIN;
 use serde::Deserialize;
@@ -93,7 +94,7 @@ pub enum KvmError {
 
 #[derive(Debug)]
 pub struct Kvm {
-    fd: OwnedFd,
+    fd: Arc<OwnedFd>,
     #[cfg(target_arch = "x86_64")]
     config: KvmConfig,
 }
@@ -131,7 +132,7 @@ impl Kvm {
         ffi!(unsafe { libc::sigaction(SIGRTMIN(), &action, null_mut()) })
             .context(error::SetupSignal)?;
         Ok(Kvm {
-            fd: kvm_fd,
+            fd: Arc::new(kvm_fd),
             #[cfg(target_arch = "x86_64")]
             config,
         })

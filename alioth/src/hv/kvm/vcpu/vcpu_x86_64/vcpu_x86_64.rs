@@ -31,8 +31,9 @@ use crate::hv::kvm::vm::KvmVm;
 use crate::hv::{Error, Result, error};
 use crate::sys::kvm::{
     KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmMsrEntry, KvmMsrs, KvmRegs,
-    MAX_IO_MSRS, kvm_create_vcpu, kvm_get_regs, kvm_get_sregs, kvm_get_sregs2, kvm_kvmclock_ctrl,
-    kvm_set_cpuid2, kvm_set_msrs, kvm_set_regs, kvm_set_sregs, kvm_set_sregs2,
+    KvmXcr, KvmXcrs, MAX_IO_MSRS, kvm_create_vcpu, kvm_get_cpuid2, kvm_get_msrs, kvm_get_regs,
+    kvm_get_sregs, kvm_get_sregs2, kvm_get_xcrs, kvm_kvmclock_ctrl, kvm_set_cpuid2, kvm_set_msrs,
+    kvm_set_regs, kvm_set_sregs, kvm_set_sregs2, kvm_set_xcrs,
 };
 
 #[derive(Debug)]
@@ -47,13 +48,29 @@ impl VcpuArch {
 }
 
 macro_rules! set_kvm_sreg {
-    ($kvm_sregs:ident, $sreg:ident, $val:expr) => {
+    ($fd:expr, $kvm_sregs:ident, $sreg:ident, $val:expr) => {
         match $sreg {
             SReg::Cr0 => $kvm_sregs.cr0 = Cr0::from_bits_retain($val),
             SReg::Cr2 => $kvm_sregs.cr2 = $val,
             SReg::Cr3 => $kvm_sregs.cr3 = Cr3::from_bits_retain($val),
             SReg::Cr4 => $kvm_sregs.cr4 = Cr4::from_bits_retain($val),
             SReg::Cr8 => $kvm_sregs.cr8 = $val,
+            SReg::XCr0 => {
+                let mut xcrs = [const {
+                    KvmXcr {
+                        xcr: 0,
+                        reserved: 0,
+                        value: 0,
+                    }
+                }; 16];
+                xcrs[0].value = $val;
+                let kvm_xcrs = KvmXcrs {
+                    nr_xcrs: 1,
+                    xcrs,
+                    ..Default::default()
+                };
+                unsafe { kvm_set_xcrs(&$fd, &kvm_xcrs) }.context(error::VcpuReg)?;
+            }
         }
     };
 }
@@ -97,13 +114,14 @@ macro_rules! set_kvm_seg_reg {
 }
 
 macro_rules! get_kvm_sreg {
-    ($kvm_sregs:ident, $sreg:ident) => {
+    ($fd:expr, $kvm_sregs:ident, $sreg:ident) => {
         match $sreg {
             SReg::Cr0 => $kvm_sregs.cr0.bits(),
             SReg::Cr2 => $kvm_sregs.cr2,
             SReg::Cr3 => $kvm_sregs.cr3.bits(),
             SReg::Cr4 => $kvm_sregs.cr4.bits(),
             SReg::Cr8 => $kvm_sregs.cr8,
+            SReg::XCr0 => unsafe { kvm_get_xcrs(&$fd) }.context(error::VcpuReg)?.xcrs[0].value,
         }
     };
 }
@@ -132,7 +150,7 @@ macro_rules! get_kvm_dt_reg {
 }
 
 macro_rules! get_kvm_seg_reg {
-    ($kvm_sregs:ident, $seg_reg:ident) => {{
+    ($kvm_sregs:ident, $seg_reg:expr) => {{
         let kvm_segment = match $seg_reg {
             SegReg::Cs => $kvm_sregs.cs,
             SegReg::Ds => $kvm_sregs.ds,
@@ -243,7 +261,7 @@ impl KvmVcpu {
     ) -> Result<(), Error> {
         let mut kvm_sregs2 = unsafe { kvm_get_sregs2(&self.fd) }.context(error::VcpuReg)?;
         for (reg, val) in sregs {
-            set_kvm_sreg!(kvm_sregs2, reg, *val)
+            set_kvm_sreg!(self.fd, kvm_sregs2, reg, *val);
         }
         for (reg, val) in dt_regs {
             set_kvm_dt_reg!(kvm_sregs2, reg, val);
@@ -270,7 +288,7 @@ impl KvmVcpu {
 
     pub fn kvm_get_sreg2(&self, reg: SReg) -> Result<u64> {
         let kvm_sregs2 = unsafe { kvm_get_sregs2(&self.fd) }.context(error::VcpuReg)?;
-        let val = get_kvm_sreg!(kvm_sregs2, reg);
+        let val = get_kvm_sreg!(self.fd, kvm_sregs2, reg);
         Ok(val)
     }
 
@@ -282,7 +300,7 @@ impl KvmVcpu {
     ) -> Result<(), Error> {
         let mut kvm_sregs = unsafe { kvm_get_sregs(&self.fd) }.context(error::VcpuReg)?;
         for (reg, val) in sregs {
-            set_kvm_sreg!(kvm_sregs, reg, *val)
+            set_kvm_sreg!(self.fd, kvm_sregs, reg, *val);
         }
         for (reg, val) in dt_regs {
             set_kvm_dt_reg!(kvm_sregs, reg, val);
@@ -309,13 +327,17 @@ impl KvmVcpu {
 
     pub fn kvm_get_sreg(&self, reg: SReg) -> Result<u64> {
         let kvm_sregs = unsafe { kvm_get_sregs(&self.fd) }.context(error::VcpuReg)?;
-        let val = get_kvm_sreg!(kvm_sregs, reg);
+        let val = get_kvm_sreg!(self.fd, kvm_sregs, reg);
         Ok(val)
     }
 
     pub fn kvm_get_regs(&self) -> Result<Registers> {
         let kvm_regs = unsafe { kvm_get_regs(&self.fd) }.context(error::VcpuReg)?;
         let kvm_sregs2 = unsafe { kvm_get_sregs2(&self.fd) }.context(error::VcpuReg)?;
+        let xcr0 = unsafe { kvm_get_xcrs(&self.fd) }
+            .context(error::VcpuReg)?
+            .xcrs[0]
+            .value;
 
         let registers = Registers {
             rax: kvm_regs.rax,
@@ -336,10 +358,18 @@ impl KvmVcpu {
             rip: kvm_regs.rip,
             rflags: kvm_regs.rflags,
 
+            cs: get_kvm_seg_reg!(kvm_sregs2, SegReg::Cs),
+            ds: get_kvm_seg_reg!(kvm_sregs2, SegReg::Ds),
+            es: get_kvm_seg_reg!(kvm_sregs2, SegReg::Es),
+            fs: get_kvm_seg_reg!(kvm_sregs2, SegReg::Fs),
+            gs: get_kvm_seg_reg!(kvm_sregs2, SegReg::Gs),
+            ss: get_kvm_seg_reg!(kvm_sregs2, SegReg::Ss),
+
             cr0: kvm_sregs2.cr0,
             cr2: kvm_sregs2.cr2,
             cr3: kvm_sregs2.cr3,
             cr4: kvm_sregs2.cr4,
+            xcr0: xcr0,
 
             ..Default::default()
         };
@@ -372,6 +402,38 @@ impl KvmVcpu {
         Ok(())
     }
 
+    pub fn kvm_get_cpuids(&self) -> Result<HashMap<CpuidIn, CpuidOut>> {
+        let mut kvm_cpuid2 = KvmCpuid2 {
+            nent: KVM_MAX_CPUID_ENTRIES as u32,
+            padding: 0,
+            entries: [KvmCpuidEntry2::default(); KVM_MAX_CPUID_ENTRIES],
+        };
+        unsafe { kvm_get_cpuid2(&self.fd, &mut kvm_cpuid2) }.context(error::GuestCpuid)?;
+        let cpuids: HashMap<CpuidIn, CpuidOut> = kvm_cpuid2
+            .entries
+            .iter()
+            .take(kvm_cpuid2.nent as usize)
+            .map(|e| {
+                let in_ = CpuidIn {
+                    func: e.function,
+                    index: if e.flags.contains(KvmCpuid2Flag::SIGNIFCANT_INDEX) {
+                        Some(e.index)
+                    } else {
+                        None
+                    },
+                };
+                let out = CpuidOut {
+                    eax: e.eax,
+                    ebx: e.ebx,
+                    ecx: e.ecx,
+                    edx: e.edx,
+                };
+                (in_, out)
+            })
+            .collect();
+        Ok(cpuids)
+    }
+
     pub fn kvm_set_msrs(&mut self, msrs: &[(Msr, u64)]) -> Result<()> {
         let mut kvm_msrs = KvmMsrs {
             nmsrs: msrs.len() as u32,
@@ -379,11 +441,27 @@ impl KvmVcpu {
             entries: [KvmMsrEntry::default(); MAX_IO_MSRS],
         };
         for (i, (index, data)) in msrs.iter().enumerate() {
-            kvm_msrs.entries[i].index = index.raw();
+            kvm_msrs.entries[i].index = *index;
             kvm_msrs.entries[i].data = *data;
         }
         unsafe { kvm_set_msrs(&self.fd, &kvm_msrs) }.context(error::GuestMsr)?;
         Ok(())
+    }
+
+    pub fn kvm_get_msrs(&self, msrs: &[Msr]) -> Result<Vec<u64>> {
+        let mut kvm_msrs = KvmMsrs {
+            nmsrs: msrs.len() as u32,
+            _pad: 0,
+            entries: [KvmMsrEntry::default(); MAX_IO_MSRS],
+        };
+        for (i, index) in msrs.iter().enumerate() {
+            kvm_msrs.entries[i].index = *index;
+        }
+        unsafe { kvm_get_msrs(&self.fd, &mut kvm_msrs) }.context(error::GuestMsr)?;
+        Ok(kvm_msrs.entries[..msrs.len()]
+            .iter()
+            .map(|e| e.data)
+            .collect())
     }
 }
 

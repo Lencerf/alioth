@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use bitfield::bitfield;
+use serde::{Deserialize, Serialize};
 
 use crate::{bitflags, consts};
 
 // Intel Vol.4, Table 2-2.
 consts! {
+    #[derive(Default, Serialize, Deserialize)]
     pub struct Msr(u32) {
         EFER = 0xc000_0080;
         STAR = 0xc000_0081;

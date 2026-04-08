@@ -199,6 +199,7 @@ pub enum SReg {
     Cr3,
     Cr4,
     Cr8,
+    XCr0,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -269,6 +270,7 @@ pub struct Registers {
     pub cr3: Cr3,
     pub cr4: Cr4,
     pub cr8: u64,
+    pub xcr0: u64,
 
     pub cs: SegRegVal,
     pub ds: SegRegVal,

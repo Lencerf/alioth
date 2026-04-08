@@ -30,6 +30,7 @@ use crate::arch::layout::{
     BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
     PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
 };
+use crate::arch::msr::Msr;
 use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_SIZE, Result, error};
 use crate::device::ioapic::IoApic;
 use crate::firmware::acpi::bindings::{
@@ -49,6 +50,7 @@ where
     V: Vm,
 {
     pub(crate) cpuids: HashMap<CpuidIn, CpuidOut>,
+    pub(crate) msrs: Arc<[Msr]>,
     pub(crate) sev_ap_eip: AtomicU32,
     pub(crate) tdx_hob: AtomicU64,
     pub(crate) io_apic: Arc<IoApic<V::MsiSender>>,
@@ -144,8 +146,11 @@ impl<V: Vm> ArchBoard<V> {
             sev::adjust_cpuid(coco, &mut cpuids)?;
         }
 
+        let msrs = vm.get_supported_msrs()?;
+
         Ok(Self {
             cpuids,
+            msrs: msrs.into(),
             sev_ap_eip: AtomicU32::new(0),
             tdx_hob: AtomicU64::new(0),
             io_apic: Arc::new(IoApic::new(vm.create_msi_sender()?)),

@@ -15,6 +15,7 @@
 mod sev;
 mod tdx;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -115,8 +116,14 @@ impl<V: Vm> VcpuThread<V> {
 
     pub(crate) fn snapshot(&self) -> Result<Snapshot> {
         let regs = self.vcpu.get_regs()?;
+        let cpuids = self.vcpu.get_cpuids()?;
+
+        let msrs = self.vcpu.get_msrs(&self.ctx.board.arch.msrs)?;
+
         let snapshot = Snapshot {
             regs,
+            cpuids: cpuids.into_iter().collect(),
+            msrs,
             ..Default::default()
         };
         Ok(snapshot)
@@ -126,6 +133,6 @@ impl<V: Vm> VcpuThread<V> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub cpuids: Vec<(CpuidIn, CpuidOut)>,
-    pub msrs: Vec<(u32, u64)>,
+    pub msrs: Vec<u64>,
     pub regs: Registers,
 }

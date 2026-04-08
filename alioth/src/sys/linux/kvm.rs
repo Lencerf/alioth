@@ -16,7 +16,7 @@ use std::fmt::{Debug, Formatter, Result};
 
 use bitfield::bitfield;
 
-use crate::arch::x86_64::msr::{ApicBase, Efer};
+use crate::arch::x86_64::msr::{ApicBase, Efer, Msr};
 use crate::arch::x86_64::reg::{Cr0, Cr3, Cr4};
 use crate::sys::ioctl::{ioctl_ior, ioctl_iowr};
 use crate::{
@@ -99,7 +99,7 @@ bitflags! {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct KvmMsrEntry {
-    pub index: u32,
+    pub index: Msr,
     pub _reserved: u32,
     pub data: u64,
 }
@@ -113,6 +113,13 @@ pub struct KvmMsrs<const N: usize> {
 }
 
 pub const MAX_IO_MSRS: usize = 256;
+
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct KvmMsrList<const N: usize = MAX_IO_MSRS> {
+    pub nmsrs: u32,
+    pub entries: [Msr; N],
+}
 
 bitflags! {
     #[derive(Default)]
@@ -658,8 +665,26 @@ bitflags! {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Default)]
+pub struct KvmXcr {
+    pub xcr: u32,
+    pub reserved: u32,
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Default)]
+pub struct KvmXcrs {
+    pub nr_xcrs: u32,
+    pub flags: u32,
+    pub xcrs: [KvmXcr; 16],
+    pub padding: [u64; 16],
+}
+
 ioctl_none!(kvm_get_api_version, KVMIO, 0x00);
 ioctl_write_val!(kvm_create_vm, KVMIO, 0x01, KvmVmType);
+ioctl_writeread_buf!(kvm_get_msr_index_list, KVMIO, 0x02, KvmMsrList);
 ioctl_write_val!(kvm_check_extension, KVMIO, 0x03, KvmCap);
 ioctl_none!(kvm_get_vcpu_mmap_size, KVMIO, 0x04);
 ioctl_writeread_buf!(kvm_get_supported_cpuid, KVMIO, 0x05, KvmCpuid2);
@@ -691,12 +716,17 @@ ioctl_read!(kvm_get_regs, KVMIO, 0x81, KvmRegs);
 ioctl_write_ptr!(kvm_set_regs, KVMIO, 0x82, KvmRegs);
 ioctl_read!(kvm_get_sregs, KVMIO, 0x83, KvmSregs);
 ioctl_write_ptr!(kvm_set_sregs, KVMIO, 0x84, KvmSregs);
+ioctl_writeread_buf!(kvm_get_msrs, KVMIO, 0x88, KvmMsrs);
 ioctl_write_buf!(kvm_set_msrs, KVMIO, 0x89, KvmMsrs);
 
 ioctl_write_buf!(kvm_set_cpuid2, KVMIO, 0x90, KvmCpuid2);
+ioctl_writeread_buf!(kvm_get_cpuid2, KVMIO, 0x91, KvmCpuid2);
 
 ioctl_write_ptr!(kvm_enable_cap, KVMIO, 0xa3, KvmEnableCap);
 ioctl_write_ptr!(kvm_signal_msi, KVMIO, 0xa5, KvmMsi);
+
+ioctl_read!(kvm_get_xcrs, KVMIO, 0xa6, KvmXcrs);
+ioctl_write_ptr!(kvm_set_xcrs, KVMIO, 0xa7, KvmXcrs);
 
 ioctl_write_ptr!(kvm_get_one_reg, KVMIO, 0xab, KvmOneReg);
 ioctl_write_ptr!(kvm_set_one_reg, KVMIO, 0xac, KvmOneReg);

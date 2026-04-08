@@ -36,6 +36,7 @@ use snafu::{ResultExt, Snafu};
 use crate::arch::layout::{PL011_START, PL031_START};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::layout::{PORT_CMOS_REG, PORT_COM1, PORT_FW_CFG_SELECTOR, PORT_FWDBG};
+use crate::arch::msr::Msr;
 use crate::board::{Board, BoardConfig};
 use crate::cpu::{
     self, Context, Event, Message, Request, Response, State, VcpuHandle, stop_vcpus, unpark_vcpus,
@@ -857,13 +858,9 @@ where
 // }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SnapshotParam {
-    pub dest: Box<Path>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub cpus: Vec<Box<cpu::Snapshot>>,
+    pub msrs: Arc<[Msr]>,
 }
 
 impl<H> Machine<H>
@@ -936,7 +933,10 @@ where
         }
         let cpus: Vec<Box<cpu::Snapshot>> = cpus.into_iter().flatten().collect();
 
-        Ok(Snapshot { cpus })
+        Ok(Snapshot {
+            cpus,
+            msrs: self.ctx.board.arch.msrs.clone(),
+        })
     }
 
     pub fn wait(&self) -> Result<()> {
