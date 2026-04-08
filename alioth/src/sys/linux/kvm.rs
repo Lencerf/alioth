@@ -15,6 +15,7 @@
 use std::fmt::{Debug, Formatter, Result};
 
 use bitfield::bitfield;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::arch::x86_64::msr::{ApicBase, Efer, Msr};
 use crate::arch::x86_64::reg::{Cr0, Cr3, Cr4};
@@ -682,6 +683,18 @@ pub struct KvmXcrs {
     pub padding: [u64; 16],
 }
 
+#[repr(C, align(16))]
+#[derive(Debug, Clone, FromBytes, KnownLayout, Immutable, IntoBytes)]
+pub struct KvmXsave {
+    pub region: [u32; 1024],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, FromBytes, KnownLayout, Immutable, IntoBytes)]
+pub struct KvmLapicState {
+    pub regs: [u32; 0x100],
+}
+
 ioctl_none!(kvm_get_api_version, KVMIO, 0x00);
 ioctl_write_val!(kvm_create_vm, KVMIO, 0x01, KvmVmType);
 ioctl_writeread_buf!(kvm_get_msr_index_list, KVMIO, 0x02, KvmMsrList);
@@ -725,6 +738,8 @@ ioctl_writeread_buf!(kvm_get_cpuid2, KVMIO, 0x91, KvmCpuid2);
 ioctl_write_ptr!(kvm_enable_cap, KVMIO, 0xa3, KvmEnableCap);
 ioctl_write_ptr!(kvm_signal_msi, KVMIO, 0xa5, KvmMsi);
 
+ioctl_read!(kvm_get_xsave, KVMIO, 0xa4, KvmXsave);
+ioctl_write_ptr!(kvm_set_xsave, KVMIO, 0xa5, KvmXsave);
 ioctl_read!(kvm_get_xcrs, KVMIO, 0xa6, KvmXcrs);
 ioctl_write_ptr!(kvm_set_xcrs, KVMIO, 0xa7, KvmXcrs);
 
