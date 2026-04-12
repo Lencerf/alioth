@@ -31,11 +31,11 @@ use crate::hv::kvm::vcpu::KvmVcpu;
 use crate::hv::kvm::vm::KvmVm;
 use crate::hv::{Error, Result, error};
 use crate::sys::kvm::{
-    KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmMsrEntry, KvmMsrs, KvmRegs,
-    KvmXcr, KvmXcrs, KvmXsave, MAX_IO_MSRS, kvm_create_vcpu, kvm_get_cpuid2, kvm_get_msrs,
-    kvm_get_regs, kvm_get_sregs, kvm_get_sregs2, kvm_get_xcrs, kvm_get_xsave, kvm_kvmclock_ctrl,
-    kvm_set_cpuid2, kvm_set_msrs, kvm_set_regs, kvm_set_sregs, kvm_set_sregs2, kvm_set_xcrs,
-    kvm_set_xsave,
+    KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmLapicState, KvmMsrEntry,
+    KvmMsrs, KvmRegs, KvmXcr, KvmXcrs, KvmXsave, MAX_IO_MSRS, kvm_create_vcpu, kvm_get_cpuid2,
+    kvm_get_lapic, kvm_get_msrs, kvm_get_regs, kvm_get_sregs, kvm_get_sregs2, kvm_get_xcrs,
+    kvm_get_xsave, kvm_kvmclock_ctrl, kvm_set_cpuid2, kvm_set_lapic, kvm_set_msrs, kvm_set_regs,
+    kvm_set_sregs, kvm_set_sregs2, kvm_set_xcrs, kvm_set_xsave,
 };
 
 #[derive(Debug)]
@@ -474,6 +474,17 @@ impl KvmVcpu {
     pub fn kvm_set_xsave(&mut self, xsave: &[u32; 1024]) -> Result<()> {
         let kvm_xsave = KvmXsave::ref_from_bytes(xsave.as_bytes()).unwrap();
         unsafe { kvm_set_xsave(&self.fd, kvm_xsave) }.context(error::GuestXsave)?;
+        Ok(())
+    }
+
+    pub fn kvm_get_lapic(&self) -> Result<[u32; 256]> {
+        let kvm_lapic = unsafe { kvm_get_lapic(&self.fd) }.context(error::GuestLapic)?;
+        Ok(kvm_lapic.regs)
+    }
+
+    pub fn kvm_set_lapic(&mut self, lapic: &[u32; 256]) -> Result<()> {
+        let kvm_lapic = KvmLapicState::ref_from_bytes(lapic.as_bytes()).unwrap();
+        unsafe { kvm_set_lapic(&self.fd, kvm_lapic) }.context(error::GuestLapic)?;
         Ok(())
     }
 }

@@ -18,6 +18,7 @@ pub mod mapped;
 
 use std::any::{Any, type_name};
 use std::fmt::Debug;
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -97,6 +98,14 @@ pub struct MemConfig {
     #[cfg(target_os = "linux")]
     #[serde(default, alias = "thp")]
     pub transparent_hugepage: bool,
+    #[serde(default)]
+    pub ndoes: Vec<MemNodeConfig>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+pub struct MemNodeConfig {
+    pub size: u64,
+    pub backend: MemBackend,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
@@ -109,6 +118,8 @@ pub enum MemBackend {
     #[cfg(target_os = "linux")]
     #[serde(alias = "memfd")]
     Memfd,
+    #[serde(alias = "file")]
+    File { path: Box<Path> },
 }
 
 impl MemConfig {
@@ -117,6 +128,7 @@ impl MemConfig {
             #[cfg(target_os = "linux")]
             MemBackend::Memfd => true,
             MemBackend::Anonymous => false,
+            MemBackend::File { .. } => self.shared,
         }
     }
 }

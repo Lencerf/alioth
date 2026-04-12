@@ -731,7 +731,8 @@ ioctl_read!(kvm_get_sregs, KVMIO, 0x83, KvmSregs);
 ioctl_write_ptr!(kvm_set_sregs, KVMIO, 0x84, KvmSregs);
 ioctl_writeread_buf!(kvm_get_msrs, KVMIO, 0x88, KvmMsrs);
 ioctl_write_buf!(kvm_set_msrs, KVMIO, 0x89, KvmMsrs);
-
+ioctl_read!(kvm_get_lapic, KVMIO, 0x8e, KvmLapicState);
+ioctl_write_ptr!(kvm_set_lapic, KVMIO, 0x8f, KvmLapicState);
 ioctl_write_buf!(kvm_set_cpuid2, KVMIO, 0x90, KvmCpuid2);
 ioctl_writeread_buf!(kvm_get_cpuid2, KVMIO, 0x91, KvmCpuid2);
 

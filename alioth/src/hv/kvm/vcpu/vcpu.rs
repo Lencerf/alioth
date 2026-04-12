@@ -256,6 +256,16 @@ impl Vcpu for KvmVcpu {
         self.kvm_set_xsave(xsave)
     }
 
+    #[cfg(target_arch = "x86_64")]
+    fn get_lapic(&self) -> Result<[u32; 256]> {
+        self.kvm_get_lapic()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn set_lapic(&mut self, lapic: &[u32; 256]) -> Result<()> {
+        self.kvm_set_lapic(lapic)
+    }
+
     fn dump(&self) -> Result<(), Error> {
         Ok(())
     }

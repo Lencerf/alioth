@@ -119,12 +119,13 @@ impl<V: Vm> VcpuThread<V> {
         let cpuids = self.vcpu.get_cpuids()?;
         let msrs = self.vcpu.get_msrs(&self.ctx.board.arch.msrs)?;
         let xsave = self.vcpu.get_xsave()?.to_vec();
+        let lapic = self.vcpu.get_lapic()?.to_vec();
         let snapshot = Snapshot {
             regs,
             cpuids: cpuids.into_iter().collect(),
             msrs,
             xsave,
-            ..Default::default()
+            lapic,
         };
         Ok(snapshot)
     }
@@ -136,4 +137,5 @@ pub struct Snapshot {
     pub msrs: Vec<u64>,
     pub regs: Registers,
     pub xsave: Vec<u128>,
+    pub lapic: Vec<u32>,
 }
