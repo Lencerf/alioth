@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub use serde_aco_derive::Help;
 
@@ -88,6 +89,7 @@ impl_help_for_types!(
     String,
     &str,
     Box<str>,
+    Arc<str>,
     String,
     CStr,
     CString,
@@ -95,6 +97,7 @@ impl_help_for_types!(
     OsString,
     &Path,
     Box<Path>,
+    Arc<Path>,
     PathBuf
 );
 impl_help_for_array_types!(&[T], Box<[T]>, Vec<T>);

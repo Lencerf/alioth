@@ -16,6 +16,7 @@ mod sev;
 mod tdx;
 
 use std::arch::x86_64::__cpuid;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::mem::{offset_of, size_of, size_of_val};
 use std::sync::Arc;
@@ -42,7 +43,7 @@ use crate::firmware::acpi::{
 };
 use crate::hv::{Coco, Hypervisor, Vm};
 use crate::loader::{Executable, InitState, Payload};
-use crate::mem::{MemRange, MemRegion, MemRegionEntry, MemRegionType};
+use crate::mem::{MemNodeConfig, MemRange, MemRegion, MemRegionEntry, MemRegionType};
 use crate::utils::wrapping_sum;
 
 pub struct ArchBoard<V>
@@ -195,14 +196,66 @@ where
         Ok(())
     }
 
-    pub fn create_ram(&self) -> Result<()> {
-        let config = &self.config;
-        let memory = &self.memory;
+    // pub fn create_ram(&self) -> Result<()> {
+    //     let config = &self.config;
+    //     let memory = &self.memory;
 
-        let low_mem_size = std::cmp::min(config.mem.size, RAM_32_SIZE);
-        let pages_low = self.create_ram_pages(low_mem_size, c"ram-low")?;
-        let region_low = MemRegion {
-            ranges: vec![MemRange::Ram(pages_low.clone())],
+    //     let default_node = [MemNodeConfig {
+    //         size: config.mem.size,
+    //         backend: config.mem.backend.clone(),
+    //     }];
+    //     let nodes = if config.mem.ndoes.is_empty() {
+    //         &default_node
+    //     } else {
+    //         config.mem.ndoes.as_slice()
+    //     };
+
+    //     let low_mem_size = std::cmp::min(config.mem.size, RAM_32_SIZE);
+    //     let pages_low = self.create_ram_pages(low_mem_size, c"ram-low")?;
+    //     let region_low = MemRegion {
+    //         ranges: vec![MemRange::Ram(pages_low.clone())],
+    //         entries: if self.config.coco.is_none() {
+    //             vec![
+    //                 MemRegionEntry {
+    //                     size: BIOS_DATA_END,
+    //                     type_: MemRegionType::Reserved,
+    //                 },
+    //                 MemRegionEntry {
+    //                     size: EBDA_START - BIOS_DATA_END,
+    //                     type_: MemRegionType::Ram,
+    //                 },
+    //                 MemRegionEntry {
+    //                     size: EBDA_END - EBDA_START,
+    //                     type_: MemRegionType::Acpi,
+    //                 },
+    //                 MemRegionEntry {
+    //                     size: low_mem_size - EBDA_END,
+    //                     type_: MemRegionType::Ram,
+    //                 },
+    //             ]
+    //         } else {
+    //             vec![MemRegionEntry {
+    //                 size: low_mem_size,
+    //                 type_: MemRegionType::Ram,
+    //             }]
+    //         },
+    //         callbacks: Mutex::new(vec![]),
+    //     };
+    //     memory.add_region(0, Arc::new(region_low))?;
+
+    //     if config.mem.size > RAM_32_SIZE {
+    //         let mem_hi_size = config.mem.size - RAM_32_SIZE;
+    //         let mem_hi = self.create_ram_pages(mem_hi_size, c"ram-high")?;
+    //         let region_hi = MemRegion::with_ram(mem_hi.clone(), MemRegionType::Ram);
+    //         memory.add_region(MEM_64_START, Arc::new(region_hi))?;
+    //     }
+    //     Ok(())
+    // }
+
+    pub(crate) fn create_ram_regions(&self) -> Vec<(u64, MemRegion)> {
+        let low_mem_size = min(self.config.mem.size, RAM_32_SIZE);
+        let mem_low = MemRegion {
+            ranges: vec![MemRange::Span(low_mem_size)],
             entries: if self.config.coco.is_none() {
                 vec![
                     MemRegionEntry {
@@ -230,15 +283,19 @@ where
             },
             callbacks: Mutex::new(vec![]),
         };
-        memory.add_region(0, Arc::new(region_low))?;
-
-        if config.mem.size > RAM_32_SIZE {
-            let mem_hi_size = config.mem.size - RAM_32_SIZE;
-            let mem_hi = self.create_ram_pages(mem_hi_size, c"ram-high")?;
-            let region_hi = MemRegion::with_ram(mem_hi.clone(), MemRegionType::Ram);
-            memory.add_region(MEM_64_START, Arc::new(region_hi))?;
+        if let Some(mem_hi_size) = self.config.mem.size.checked_sub(RAM_32_SIZE)
+            && mem_hi_size > 0
+        {
+            vec![
+                (0, mem_low),
+                (
+                    MEM_64_START,
+                    MemRegion::with_span(mem_hi_size, MemRegionType::Ram),
+                ),
+            ]
+        } else {
+            vec![(0, mem_low)]
         }
-        Ok(())
     }
 
     pub fn coco_init(&self, memory: Arc<V::Memory>) -> Result<()> {

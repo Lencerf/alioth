@@ -99,16 +99,16 @@ pub struct MemConfig {
     #[serde(default, alias = "thp")]
     pub transparent_hugepage: bool,
     #[serde(default)]
-    pub ndoes: Vec<MemNodeConfig>,
+    pub nodes: Vec<MemNodeConfig>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Help)]
 pub struct MemNodeConfig {
     pub size: u64,
     pub backend: MemBackend,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Help)]
 pub enum MemBackend {
     /// Anonymous memory by MAP_ANONYMOUS.
     #[default]
@@ -119,7 +119,7 @@ pub enum MemBackend {
     #[serde(alias = "memfd")]
     Memfd,
     #[serde(alias = "file")]
-    File { path: Box<Path> },
+    File { path: Arc<Path> },
 }
 
 impl MemConfig {
@@ -190,6 +190,14 @@ impl MemRegion {
         let size = pages.size();
         MemRegion {
             ranges: vec![MemRange::Ram(pages)],
+            entries: vec![MemRegionEntry { type_, size }],
+            callbacks: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn with_span(size: u64, type_: MemRegionType) -> MemRegion {
+        MemRegion {
+            ranges: vec![MemRange::Span(size)],
             entries: vec![MemRegionEntry { type_, size }],
             callbacks: Mutex::new(vec![]),
         }

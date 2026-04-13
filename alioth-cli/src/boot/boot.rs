@@ -222,6 +222,7 @@ fn parse_mem_arg(
     mem_size: String,
     objects: &HashMap<&str, &str>,
 ) -> Result<MemConfig, Error> {
+    println!("arg={arg:#?}, obj={objects:#?}");
     let config = if let Some(arg) = arg {
         serde_aco::from_args(&arg, objects).context(error::ParseArg { arg })?
     } else {
