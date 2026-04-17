@@ -43,7 +43,7 @@ use crate::firmware::acpi::{
 };
 use crate::hv::{Coco, Hypervisor, Vm};
 use crate::loader::{Executable, InitState, Payload};
-use crate::mem::{MemNodeConfig, MemRange, MemRegion, MemRegionEntry, MemRegionType};
+use crate::mem::{MemRange, MemRegion, MemRegionEntry, MemRegionType};
 use crate::utils::wrapping_sum;
 
 pub struct ArchBoard<V>

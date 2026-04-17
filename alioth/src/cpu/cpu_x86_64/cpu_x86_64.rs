@@ -15,7 +15,6 @@
 mod sev;
 mod tdx;
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};

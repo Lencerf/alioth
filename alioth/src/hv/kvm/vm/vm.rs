@@ -56,7 +56,7 @@ use crate::sys::kvm::{
     KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KvmCap, KvmEnableCap, KvmEncRegion, KvmIoEventFd,
     KvmIoEventFdFlag, KvmIrqRouting, KvmIrqRoutingEntry, KvmIrqRoutingIrqchip, KvmIrqRoutingMsi,
     KvmIrqfd, KvmIrqfdFlag, KvmMemFlag, KvmMemoryAttribute, KvmMemoryAttributes, KvmMsi,
-    KvmMsrList, KvmMsrs, KvmUserspaceMemoryRegion, KvmUserspaceMemoryRegion2, MAX_IO_MSRS,
+    KvmMsrList, KvmUserspaceMemoryRegion, KvmUserspaceMemoryRegion2, MAX_IO_MSRS,
     kvm_create_vm, kvm_enable_cap, kvm_get_msr_index_list, kvm_get_vcpu_mmap_size, kvm_ioeventfd,
     kvm_irqfd, kvm_memory_encrypt_reg_region, kvm_memory_encrypt_unreg_region, kvm_set_gsi_routing,
     kvm_set_memory_attributes, kvm_set_user_memory_region, kvm_set_user_memory_region2,

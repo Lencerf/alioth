@@ -371,7 +371,7 @@ impl KvmVcpu {
             cr2: kvm_sregs2.cr2,
             cr3: kvm_sregs2.cr3,
             cr4: kvm_sregs2.cr4,
-            xcr0: xcr0,
+            xcr0,
 
             ..Default::default()
         };

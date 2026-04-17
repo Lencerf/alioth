@@ -38,8 +38,6 @@ use crate::hv::{Vcpu, Vm, VmEntry, VmExit};
 #[cfg(target_arch = "x86_64")]
 use crate::loader::xen;
 use crate::loader::{Executable, InitState, linux};
-use crate::pci::Pci;
-use crate::virtio::dev::{DevParam, Virtio};
 
 #[cfg(target_arch = "x86_64")]
 pub use self::x86_64::Snapshot;

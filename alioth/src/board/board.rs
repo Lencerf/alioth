@@ -20,18 +20,17 @@ mod aarch64;
 mod x86_64;
 
 use std::cmp::min;
-use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
 use std::os::fd::FromRawFd;
 use std::sync::Arc;
 
-use libc::{MAP_PRIVATE, MAP_SHARED, PROT_READ, PROT_WRITE};
+use libc::{PROT_READ, PROT_WRITE};
 #[cfg(target_arch = "x86_64")]
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use serde::Deserialize;
 use serde_aco::Help;
-use snafu::{ResultExt, Snafu};
+use snafu::Snafu;
 
 #[cfg(target_arch = "x86_64")]
 use crate::arch::cpuid::CpuidIn;
