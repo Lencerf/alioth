@@ -303,7 +303,7 @@ fn vsock_conn_test(fixture_ram_bus: RamBus, #[with(3)] fixture_queues: Box<[Queu
         false,
     );
     let mut g2h_read_buf = vec![0; g2h_data.len()];
-    h2g_stream.read(&mut g2h_read_buf).unwrap();
+    let _ = h2g_stream.read(&mut g2h_read_buf).unwrap();
     assert_eq!(String::from_utf8_lossy(&g2h_read_buf), g2h_data);
 
     // 3. Shutdown host-initiated connection
