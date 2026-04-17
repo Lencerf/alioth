@@ -25,6 +25,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirEntryExt, FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
+use std::sync::Arc;
 
 use zerocopy::{FromBytes, IntoBytes};
 
@@ -96,7 +97,7 @@ impl Handle {
 #[derive(Debug)]
 struct Node {
     lookup_count: u64,
-    path: Box<Path>,
+    path: Arc<Path>,
     handle: Option<Handle>,
 }
 
@@ -107,7 +108,7 @@ pub struct Passthrough {
 }
 
 impl Passthrough {
-    pub fn new(path: Box<Path>) -> Result<Self> {
+    pub fn new(path: Arc<Path>) -> Result<Self> {
         let node = Node {
             lookup_count: 1,
             path,
@@ -134,10 +135,10 @@ impl Passthrough {
         }
     }
 
-    fn join_path(&self, parent: u64, name: &[u8]) -> Result<Box<Path>> {
+    fn join_path(&self, parent: u64, name: &[u8]) -> Result<Arc<Path>> {
         let parent = self.get_node(parent)?;
         let p = OsStr::from_bytes(CStr::from_bytes_until_nul(name)?.to_bytes());
-        Ok(parent.path.join(p).into_boxed_path())
+        Ok(parent.path.join(p).into())
     }
 
     fn convert_meta(&self, meta: &Metadata) -> FuseAttr {
@@ -300,7 +301,7 @@ impl Fuse for Passthrough {
             .open(&path)?;
         let meta = file.metadata()?;
         let nodeid =
-            if let Some((nodeid, node)) = self.nodes.iter_mut().find(|(_, n)| n.path == path) {
+            if let Some((nodeid, node)) = self.nodes.iter_mut().find(|(_, n)| *n.path == *path) {
                 node.lookup_count += 1;
                 *nodeid
             } else {

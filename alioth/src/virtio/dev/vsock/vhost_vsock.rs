@@ -50,7 +50,7 @@ pub struct VhostVsockParam {
 impl DevParam for VhostVsockParam {
     type Device = VhostVsock;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
+    fn build(&self, name: Arc<str>) -> Result<Self::Device> {
         VhostVsock::new(self, name)
     }
 }
@@ -65,9 +65,8 @@ pub struct VhostVsock {
 }
 
 impl VhostVsock {
-    pub fn new(param: VhostVsockParam, name: impl Into<Arc<str>>) -> Result<VhostVsock> {
-        let name = name.into();
-        let vhost_dev = match param.dev {
+    pub fn new(param: &VhostVsockParam, name: Arc<str>) -> Result<VhostVsock> {
+        let vhost_dev = match &param.dev {
             Some(dev) => VhostDev::new(dev),
             None => VhostDev::new("/dev/vhost-vsock"),
         }?;

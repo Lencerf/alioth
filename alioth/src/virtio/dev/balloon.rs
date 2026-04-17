@@ -126,7 +126,7 @@ pub struct Balloon {
 }
 
 impl Balloon {
-    pub fn new(param: BalloonParam, name: impl Into<Arc<str>>) -> Result<Self> {
+    pub fn new(param: &BalloonParam, name: Arc<str>) -> Result<Self> {
         if unsafe { sysconf(_SC_PAGESIZE) } != 1 << 12 {
             let err = std::io::ErrorKind::Unsupported;
             Err(std::io::Error::from(err))?;
@@ -139,7 +139,6 @@ impl Balloon {
         if !param.free_page_reporting {
             feature.remove(BalloonFeature::PAGE_REPORTING);
         };
-        let name = name.into();
         Ok(Balloon {
             name: name.clone(),
             config: Arc::new(BalloonConfigMmio {
@@ -323,7 +322,7 @@ pub struct BalloonParam {
 impl DevParam for BalloonParam {
     type Device = Balloon;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
+    fn build(&self, name: Arc<str>) -> Result<Self::Device> {
         Balloon::new(self, name)
     }
 }

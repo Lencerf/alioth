@@ -151,7 +151,7 @@ pub struct BlkFileParam {
 impl DevParam for BlkFileParam {
     type Device = Block;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Block> {
+    fn build(&self, name: Arc<str>) -> Result<Block> {
         Block::new(self, name)
     }
 }
@@ -185,7 +185,7 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn new(param: BlkFileParam, name: impl Into<Arc<str>>) -> Result<Self> {
+    pub fn new(param: &BlkFileParam, name: Arc<str>) -> Result<Self> {
         let access_disk = error::AccessFile {
             path: param.path.as_ref(),
         };
@@ -216,7 +216,7 @@ impl Block {
             feature |= BlockFeature::RO;
         }
         Ok(Block {
-            name: name.into(),
+            name,
             disk,
             config,
             feature,

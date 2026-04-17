@@ -76,7 +76,7 @@ fn check_ret(ret: VmnetReturn) -> Result<(), io::Error> {
 }
 
 impl Net {
-    pub fn new(param: NetVmnetParam, name: impl Into<Arc<str>>) -> Result<Self> {
+    pub fn new(param: &NetVmnetParam, name: Arc<str>) -> Result<Self> {
         let allocate_mac = param.mac.is_none();
         let keys = unsafe {
             [
@@ -165,7 +165,7 @@ impl Net {
         }
 
         Ok(Net {
-            name: name.into(),
+            name,
             config: Arc::new(config),
             feature: NetFeature::MAC | NetFeature::MTU,
             dispatch_queue: AtomicPtr::new(dispatch_queue),
@@ -462,7 +462,7 @@ pub struct NetVmnetParam {
 impl DevParam for NetVmnetParam {
     type Device = Net;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
+    fn build(&self, name: Arc<str>) -> Result<Self::Device> {
         Net::new(self, name)
     }
 }

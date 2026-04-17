@@ -66,8 +66,7 @@ pub struct Entropy {
 }
 
 impl Entropy {
-    pub fn new(param: EntropyParam, name: impl Into<Arc<str>>) -> Result<Self> {
-        let name = name.into();
+    pub fn new(param: &EntropyParam, name: Arc<str>) -> Result<Self> {
         let mut options = OpenOptions::new();
         options.custom_flags(O_NONBLOCK).read(true);
         let path = param.source.as_deref().unwrap_or(Path::new("/dev/urandom"));
@@ -174,7 +173,7 @@ pub struct EntropyParam {
 impl DevParam for EntropyParam {
     type Device = Entropy;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
+    fn build(&self, name: Arc<str>) -> Result<Self::Device> {
         Entropy::new(self, name)
     }
 }

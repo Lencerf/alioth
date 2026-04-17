@@ -59,8 +59,8 @@ pub struct Net {
     tap_sockets: Vec<File>,
     feature: NetFeature,
     driver_feature: NetFeature,
-    dev_tap: Option<Box<Path>>,
-    if_name: Option<String>,
+    dev_tap: Option<Arc<Path>>,
+    if_name: Option<Arc<str>>,
     api: WorkerApi,
 }
 
@@ -77,12 +77,12 @@ pub struct NetTapParam {
     ///
     /// Required for MacVTap and IPVTap, e.g. /dev/tapX.
     /// Optional for TUN/TAP. [default: /dev/net/tun]
-    pub tap: Option<Box<Path>>,
+    pub tap: Option<Arc<Path>>,
     /// Name of a tap interface, e.g. tapX.
     ///
     /// Required for TUN/TAP. Optional for MacVTap and IPVTap.
     #[serde(alias = "if")]
-    pub if_name: Option<String>,
+    pub if_name: Option<Arc<str>>,
     /// System API for asynchronous IO.
     #[serde(default)]
     pub api: WorkerApi,
@@ -91,7 +91,7 @@ pub struct NetTapParam {
 impl DevParam for NetTapParam {
     type Device = Net;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Net> {
+    fn build(&self, name: Arc<str>) -> Result<Net> {
         Net::new(self, name)
     }
 }
@@ -108,7 +108,7 @@ fn new_socket(dev_tap: Option<&Path>, blocking: bool) -> Result<File> {
 }
 
 impl Net {
-    pub fn new(param: NetTapParam, name: impl Into<Arc<str>>) -> Result<Self> {
+    pub fn new(param: &NetTapParam, name: Arc<str>) -> Result<Self> {
         let mut socket = new_socket(
             param.tap.as_deref(),
             matches!(param.api, WorkerApi::IoUring),
@@ -129,7 +129,7 @@ impl Net {
             dev_feat |= NetFeature::MQ;
         }
         let net = Net {
-            name: name.into(),
+            name,
             config: Arc::new(NetConfig {
                 mac: param.mac,
                 max_queue_pairs,
@@ -139,8 +139,8 @@ impl Net {
             tap_sockets: vec![socket],
             feature: dev_feat,
             driver_feature: NetFeature::empty(),
-            dev_tap: param.tap,
-            if_name: param.if_name,
+            dev_tap: param.tap.clone(),
+            if_name: param.if_name.clone(),
             api: param.api,
         };
         Ok(net)

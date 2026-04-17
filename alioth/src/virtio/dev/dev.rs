@@ -169,7 +169,7 @@ where
     }
 
     pub fn new<D>(
-        name: impl Into<Arc<str>>,
+        name: Arc<str>,
         dev: D,
         memory: Arc<RamBus>,
         restricted_memory: bool,
@@ -177,7 +177,6 @@ where
     where
         D: Virtio,
     {
-        let name = name.into();
         let id = dev.id();
         let device_config = dev.config();
         let mut device_feature = dev.feature();
@@ -433,7 +432,7 @@ where
 
 pub trait DevParam {
     type Device;
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device>;
+    fn build(&self, name: Arc<str>) -> Result<Self::Device>;
     fn needs_mem_shared_fd(&self) -> bool {
         false
     }

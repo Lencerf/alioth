@@ -124,12 +124,7 @@ impl<F> Fs<F>
 where
     F: Fuse,
 {
-    pub fn new(
-        name: impl Into<Arc<str>>,
-        mut fuse: F,
-        config: FsConfig,
-        dax_window: usize,
-    ) -> Result<Self> {
+    pub fn new(name: Arc<str>, mut fuse: F, config: FsConfig, dax_window: usize) -> Result<Self> {
         let mut feature = FsFeature::empty();
         if config.notify_buf_size > 0 {
             feature |= FsFeature::NOTIFICATION;
@@ -142,7 +137,7 @@ where
             dax_region = Some(region);
         };
         Ok(Fs {
-            name: name.into(),
+            name,
             config: Arc::new(config),
             fuse,
             feature,

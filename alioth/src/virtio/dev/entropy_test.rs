@@ -70,7 +70,7 @@ fn entropy_test(fixture_ram_bus: RamBus, fixture_queues: Box<[QueueReg]>) {
     let param = EntropyParam {
         source: Some(pipe_path.clone().into()),
     };
-    let dev = param.build("entropy").unwrap();
+    let dev = param.build("entropy".into()).unwrap();
 
     assert_matches!(dev.id(), DeviceId::ENTROPY);
     assert_eq!(dev.name(), "entropy");

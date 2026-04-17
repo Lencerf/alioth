@@ -142,16 +142,7 @@ pub struct VuFrontend {
 }
 
 impl VuFrontend {
-    pub fn new<P>(
-        name: impl Into<Arc<str>>,
-        socket: P,
-        id: DeviceId,
-        extra_feat: VuFeature,
-    ) -> Result<Self>
-    where
-        P: AsRef<Path>,
-    {
-        let name = name.into();
+    pub fn new(name: Arc<str>, socket: &Path, id: DeviceId, extra_feat: VuFeature) -> Result<Self> {
         let session = Arc::new(VuSession::new(socket)?);
 
         let device_feature = session.get_features()?;
@@ -437,8 +428,8 @@ pub struct VuFrontendParam {
 impl DevParam for VuFrontendParam {
     type Device = VuFrontend;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
-        VuFrontend::new(name, self.socket, self.id, VuFeature::CONFIG)
+    fn build(&self, name: Arc<str>) -> Result<Self::Device> {
+        VuFrontend::new(name, &self.socket, self.id, VuFeature::CONFIG)
     }
 
     fn needs_mem_shared_fd(&self) -> bool {

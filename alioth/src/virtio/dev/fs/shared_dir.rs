@@ -29,7 +29,7 @@ pub struct SharedDirParam {
     /// Mount tag seen by the guest.
     pub tag: String,
     /// Path to the shared dir.
-    pub path: Box<Path>,
+    pub path: Arc<Path>,
     /// Size of memory region for DAX in bytes.
     /// 0 means no DAX. [default: 0]
     #[serde(default)]
@@ -39,8 +39,8 @@ pub struct SharedDirParam {
 impl DevParam for SharedDirParam {
     type Device = Fs<Passthrough>;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Fs<Passthrough>> {
-        let passthrough = Passthrough::new(self.path)?;
+    fn build(&self, name: Arc<str>) -> Result<Fs<Passthrough>> {
+        let passthrough = Passthrough::new(self.path.clone())?;
         let mut config = FsConfig {
             tag: [0; 36],
             num_request_queues: 1,

@@ -19,7 +19,7 @@ use serde::de::{self, Visitor};
 use serde_aco::{Help, TypedHelp};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Default, FromBytes, Immutable, IntoBytes, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct MacAddr(pub [u8; 6]);
 

@@ -53,13 +53,13 @@ pub struct UdsVsockParam {
     /// Vsock context id.
     pub cid: u32,
     /// Host-side Unix domain socket path.
-    pub path: Box<Path>,
+    pub path: Arc<Path>,
 }
 
 impl DevParam for UdsVsockParam {
     type Device = UdsVsock;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<UdsVsock> {
+    fn build(&self, name: Arc<str>) -> Result<UdsVsock> {
         UdsVsock::new(self, name)
     }
 }
@@ -68,7 +68,7 @@ impl DevParam for UdsVsockParam {
 pub struct UdsVsock {
     name: Arc<str>,
     config: Arc<VsockConfig>,
-    path: Box<Path>,
+    path: Arc<Path>,
     listener: UnixListener,
     connections: HashMap<(u32, u32), Connection>,
     ports: HashMap<Token, (u32, u32)>,
@@ -668,13 +668,12 @@ pub struct Connection {
 }
 
 impl UdsVsock {
-    fn new(param: UdsVsockParam, name: impl Into<Arc<str>>) -> Result<Self> {
-        let name = name.into();
+    fn new(param: &UdsVsockParam, name: Arc<str>) -> Result<Self> {
         let listener = UnixListener::bind(&param.path)?;
         listener.set_nonblocking(true)?;
         let vsock = UdsVsock {
             name,
-            path: param.path,
+            path: param.path.clone(),
             config: Arc::new(VsockConfig {
                 guest_cid: param.cid,
                 ..Default::default()

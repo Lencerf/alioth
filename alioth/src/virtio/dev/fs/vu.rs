@@ -56,7 +56,7 @@ pub struct VuFs {
 }
 
 impl VuFs {
-    pub fn new(param: VuFsParam, name: impl Into<Arc<str>>) -> Result<Self> {
+    pub fn new(param: &VuFsParam, name: Arc<str>) -> Result<Self> {
         let mut extra_features = VuFeature::empty();
         if param.dax_window > 0 {
             extra_features |= VuFeature::BACKEND_REQ | VuFeature::BACKEND_SEND_FD
@@ -65,7 +65,7 @@ impl VuFs {
             extra_features |= VuFeature::CONFIG;
         }
         let frontend = VuFrontend::new(name, &param.socket, DeviceId::FILE_SYSTEM, extra_features)?;
-        let config = if let Some(tag) = param.tag {
+        let config = if let Some(tag) = &param.tag {
             assert!(tag.len() <= 36);
             assert_ne!(tag.len(), 0);
             let mut config = FsConfig::new_zeroed();
@@ -117,7 +117,7 @@ pub struct VuFsParam {
 impl DevParam for VuFsParam {
     type Device = VuFs;
 
-    fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
+    fn build(&self, name: Arc<str>) -> Result<Self::Device> {
         VuFs::new(self, name)
     }
 
