@@ -28,7 +28,7 @@ use snafu::{ResultExt, Snafu};
 #[cfg(target_arch = "aarch64")]
 use crate::arch::layout::{PL011_START, PL031_START};
 #[cfg(target_arch = "x86_64")]
-use crate::arch::layout::{PORT_CMOS_REG, PORT_COM1, PORT_FW_CFG_SELECTOR, PORT_FWDBG};
+use crate::arch::layout::{PORT_CMOS, PORT_COM1, PORT_FW_CFG, PORT_FWDBG};
 use crate::board::{Board, BoardConfig};
 use crate::cpu::{Context, State, VcpuHandle, stop_vcpus, vcpu_thread};
 use crate::device::clock::SystemClock;
@@ -178,22 +178,21 @@ where
         let io_apic = self.ctx.board.arch.io_apic.clone();
         let console = StdioConsole::new().context(error::CreateConsole)?;
         let com1 = Serial::new(PORT_COM1, io_apic, 4, console).context(error::CreateConsole)?;
-        let mut io_devs = self.ctx.board.io_devs.write();
-        io_devs.push((PORT_COM1, Arc::new(com1)));
+        self.ctx.board.add_io_dev(PORT_COM1, Arc::new(com1));
         Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
     pub fn add_cmos(&self) -> Result<(), Error> {
-        let mut io_devs = self.ctx.board.io_devs.write();
-        io_devs.push((PORT_CMOS_REG, Arc::new(Cmos::new(SystemClock))));
+        let cmos = Cmos::new(SystemClock);
+        self.ctx.board.add_io_dev(PORT_CMOS, Arc::new(cmos));
         Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
     pub fn add_fw_dbg(&self) -> Result<(), Error> {
-        let mut io_devs = self.ctx.board.io_devs.write();
-        io_devs.push((PORT_FWDBG, Arc::new(FwDbg::new())));
+        let fw_dbg = FwDbg::new();
+        self.ctx.board.add_io_dev(PORT_FWDBG, Arc::new(fw_dbg));
         Ok(())
     }
 
@@ -242,8 +241,7 @@ where
         let fw_cfg = Arc::new(Mutex::new(
             FwCfg::new(self.ctx.board.memory.ram_bus(), items).context(error::FwCfg)?,
         ));
-        let mut io_devs = self.ctx.board.io_devs.write();
-        io_devs.push((PORT_FW_CFG_SELECTOR, fw_cfg.clone()));
+        self.ctx.board.add_io_dev(PORT_FW_CFG, fw_cfg.clone());
         *self.ctx.board.fw_cfg.lock() = Some(fw_cfg.clone());
         Ok(fw_cfg)
     }

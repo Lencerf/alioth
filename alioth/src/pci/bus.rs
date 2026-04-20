@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use bitfield::bitfield;
 
+use crate::device::{MmioDev, Pause};
 use crate::mem;
 use crate::mem::emulated::{Action, Mmio};
 #[cfg(target_arch = "x86_64")]
@@ -97,6 +98,10 @@ impl Mmio for PciIoBus {
         }
     }
 }
+
+impl Pause for PciIoBus {}
+
+impl MmioDev for PciIoBus {}
 
 #[derive(Debug)]
 pub struct PciBus {

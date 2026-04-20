@@ -460,10 +460,6 @@ impl Memory {
         entries
     }
 
-    pub fn add_io_dev(&self, port: u16, dev: Arc<dyn Mmio>) -> Result<()> {
-        self.add_io_region(port, Arc::new(IoRegion::new(dev)))
-    }
-
     pub fn add_io_region(&self, port: u16, region: Arc<IoRegion>) -> Result<()> {
         let mut regions = self.io_regions.lock();
         regions.add(port as u64, region.clone())?;

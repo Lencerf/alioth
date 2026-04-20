@@ -32,8 +32,6 @@ use snafu::Snafu;
 
 #[cfg(target_arch = "x86_64")]
 use crate::arch::cpuid::CpuidIn;
-#[cfg(target_arch = "x86_64")]
-use crate::arch::layout::PORT_PCI_ADDRESS;
 use crate::arch::layout::{
     MEM_64_START, PCIE_CONFIG_START, PCIE_MMIO_32_NON_PREFETCHABLE_END,
     PCIE_MMIO_32_NON_PREFETCHABLE_START, PCIE_MMIO_32_PREFETCHABLE_END,
@@ -156,7 +154,6 @@ where
     pub config: BoardConfig,
     pub payload: RwLock<Option<Payload>>,
     rams: RwLock<Vec<(u64, Arc<MemRegion>)>>,
-    pub io_devs: RwLock<Vec<(u16, Arc<dyn MmioDev>)>>,
     mmio_devs: RwLock<Vec<(u64, Arc<dyn MmioDev>)>>,
     pub pci_bus: PciBus,
     #[cfg(target_arch = "x86_64")]
@@ -187,7 +184,6 @@ where
             config,
             payload: RwLock::new(None),
             rams: RwLock::new(Vec::new()),
-            io_devs: RwLock::new(Vec::new()),
             mmio_devs: RwLock::new(Vec::new()),
             pci_bus: PciBus::new(),
             #[cfg(target_arch = "x86_64")]
@@ -206,9 +202,6 @@ where
     }
 
     fn add_pci_devs(&self) -> Result<()> {
-        #[cfg(target_arch = "x86_64")]
-        self.memory
-            .add_io_dev(PORT_PCI_ADDRESS, self.pci_bus.io_bus.clone())?;
         self.memory.add_region(
             PCIE_CONFIG_START,
             Arc::new(MemRegion::with_emulated(
@@ -233,9 +226,6 @@ where
     }
 
     pub(crate) fn init_devices(&self) -> Result<()> {
-        for (port, dev) in self.io_devs.read().iter() {
-            self.memory.add_io_dev(*port, dev.clone())?;
-        }
         for (addr, ram) in self.rams.write().iter() {
             self.memory.add_region(*addr, ram.clone())?;
         }
@@ -243,6 +233,7 @@ where
             let region = MemRegion::with_emulated(dev.clone(), MemRegionType::Hidden);
             self.memory.add_region(*addr, Arc::new(region))?;
         }
+        self.init_arch_buses()?;
         self.add_pci_devs()
     }
 

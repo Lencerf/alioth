@@ -60,6 +60,7 @@ pub const MEM_64_START: u64 = 0x1_0000_0000; // 4GiB
 
 pub const PAGE_SIZE: u64 = 0x1000; // 4KiB
 
+pub const PORT_CMOS: u16 = 0x70;
 pub const PORT_CMOS_REG: u16 = 0x70;
 pub const PORT_CMOS_DATA: u16 = 0x71;
 
@@ -67,6 +68,7 @@ pub const PORT_COM1: u16 = 0x3f8;
 
 pub const PORT_FWDBG: u16 = 0x402;
 
+pub const PORT_FW_CFG: u16 = 0x510;
 pub const PORT_FW_CFG_SELECTOR: u16 = 0x510;
 pub const PORT_FW_CFG_DATA: u16 = 0x511;
 pub const PORT_FW_CFG_DMA_HI: u16 = 0x514;

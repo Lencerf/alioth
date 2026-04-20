@@ -107,6 +107,10 @@ where
         encode_mpidr(&self.config.cpu.topology, index).0
     }
 
+    pub(crate) fn init_arch_buses(&self) -> Result<()> {
+        Ok(())
+    }
+
     pub fn create_ram(&self) -> Result<()> {
         let mem_size = self.config.mem.size;
         let mut rams = self.rams.write();

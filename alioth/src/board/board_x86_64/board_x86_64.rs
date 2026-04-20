@@ -21,16 +21,17 @@ use std::mem::{offset_of, size_of, size_of_val};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use snafu::ResultExt;
 use zerocopy::{FromZeros, IntoBytes};
 
 use crate::arch::cpuid::{Cpuid1Ecx, CpuidIn};
 use crate::arch::layout::{
     BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
-    PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
+    PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, PORT_PCI_ADDRESS, RAM_32_SIZE,
 };
 use crate::board::{Board, BoardConfig, CpuTopology, PCIE_MMIO_64_SIZE, Result, error};
+use crate::device::MmioDev;
 use crate::device::ioapic::IoApic;
 use crate::firmware::acpi::bindings::{
     AcpiTableFadt, AcpiTableHeader, AcpiTableRsdp, AcpiTableXsdt3,
@@ -41,7 +42,7 @@ use crate::firmware::acpi::{
 };
 use crate::hv::{Coco, Hypervisor, Vm};
 use crate::loader::{Executable, InitState, Payload};
-use crate::mem::{MemRange, MemRegion, MemRegionEntry, MemRegionType};
+use crate::mem::{IoRegion, MemRange, MemRegion, MemRegionEntry, MemRegionType};
 use crate::utils::wrapping_sum;
 
 pub struct ArchBoard<V>
@@ -52,6 +53,7 @@ where
     pub(crate) sev_ap_eip: AtomicU32,
     pub(crate) tdx_hob: AtomicU64,
     pub(crate) io_apic: Arc<IoApic<V::MsiSender>>,
+    io_devs: RwLock<Vec<(u16, Arc<dyn MmioDev>)>>,
 }
 
 fn add_topology(cpuids: &mut HashMap<CpuidIn, CpuidResult>, func: u32, levels: &[(u8, u16)]) {
@@ -149,6 +151,7 @@ impl<V: Vm> ArchBoard<V> {
             sev_ap_eip: AtomicU32::new(0),
             tdx_hob: AtomicU64::new(0),
             io_apic: Arc::new(IoApic::new(vm.create_msi_sender()?)),
+            io_devs: RwLock::new(Vec::new()),
         })
     }
 }
@@ -171,6 +174,18 @@ where
 {
     pub fn encode_cpu_identity(&self, index: u16) -> u64 {
         encode_x2apic_id(&self.config.cpu.topology, index) as u64
+    }
+
+    pub fn add_io_dev(&self, port: u16, dev: Arc<dyn MmioDev>) {
+        self.arch.io_devs.write().push((port, dev))
+    }
+
+    pub(crate) fn init_arch_buses(&self) -> Result<()> {
+        for (port, dev) in self.arch.io_devs.read().iter() {
+            let region = Arc::new(IoRegion::new(dev.clone()));
+            self.memory.add_io_region(*port, region)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn setup_fw_cfg(&self, payload: &Payload) -> Result<()> {
@@ -349,11 +364,11 @@ where
     pub fn arch_init(&self) -> Result<()> {
         self.add_mmio_dev(IOAPIC_START, self.arch.io_apic.clone());
 
-        let mut io_devs = self.io_devs.write();
-        io_devs.push((PORT_ACPI_RESET, Arc::new(FadtReset)));
-        io_devs.push((PORT_ACPI_SLEEP_CONTROL, Arc::new(FadtSleepControl)));
-        io_devs.push((PORT_ACPI_TIMER, Arc::new(AcpiPmTimer::new())));
+        self.add_io_dev(PORT_ACPI_RESET, Arc::new(FadtReset));
+        self.add_io_dev(PORT_ACPI_SLEEP_CONTROL, Arc::new(FadtSleepControl));
+        self.add_io_dev(PORT_ACPI_TIMER, Arc::new(AcpiPmTimer::new()));
 
+        self.add_io_dev(PORT_PCI_ADDRESS, self.pci_bus.io_bus.clone());
         Ok(())
     }
 }
