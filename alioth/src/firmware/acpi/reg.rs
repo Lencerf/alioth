@@ -15,6 +15,7 @@
 
 use std::time::Instant;
 
+use crate::device::{MmioDev, Pause};
 use crate::firmware::acpi::bindings::FadtSleepControlReg;
 use crate::mem::Result;
 use crate::mem::emulated::{Action, Mmio};
@@ -42,6 +43,10 @@ impl Mmio for FadtReset {
     }
 }
 
+impl Pause for FadtReset {}
+
+impl MmioDev for FadtReset {}
+
 #[derive(Debug)]
 pub struct FadtSleepControl;
 
@@ -63,6 +68,10 @@ impl Mmio for FadtSleepControl {
         }
     }
 }
+
+impl Pause for FadtSleepControl {}
+
+impl MmioDev for FadtSleepControl {}
 
 // The following AcpiPmTimer implementation is derived from Cloud Hypervisor.
 // Copyright © 2019 Intel Corporation
@@ -106,6 +115,10 @@ impl Mmio for AcpiPmTimer {
         4
     }
 }
+
+impl Pause for AcpiPmTimer {}
+
+impl MmioDev for AcpiPmTimer {}
 
 #[cfg(test)]
 #[path = "reg_test.rs"]

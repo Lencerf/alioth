@@ -320,12 +320,8 @@ where
 
     pub fn create_firmware_data(&self, _init_state: &InitState) -> Result<()> {
         let mut acpi_table = self.create_acpi();
-        let memory = &self.memory;
-        memory.add_io_dev(PORT_ACPI_RESET, Arc::new(FadtReset))?;
-        memory.add_io_dev(PORT_ACPI_SLEEP_CONTROL, Arc::new(FadtSleepControl))?;
-        memory.add_io_dev(PORT_ACPI_TIMER, Arc::new(AcpiPmTimer::new()))?;
         if self.config.coco.is_none() {
-            let ram = memory.ram_bus();
+            let ram = self.memory.ram_bus();
             acpi_table.relocate(EBDA_START + size_of::<AcpiTableRsdp>() as u64);
             acpi_table.update_checksums();
             ram.write_range(
@@ -342,7 +338,7 @@ where
         if let Some(fw_cfg) = &*self.fw_cfg.lock() {
             let mut dev = fw_cfg.lock();
             dev.add_acpi(acpi_table).context(error::FwCfg)?;
-            let mem_regions = memory.mem_region_entries();
+            let mem_regions = self.memory.mem_region_entries();
             dev.add_e820(&mem_regions).context(error::FwCfg)?;
             dev.add_ram_size(self.config.mem.size);
             dev.add_cpu_count(self.config.cpu.count);
@@ -352,6 +348,12 @@ where
 
     pub fn arch_init(&self) -> Result<()> {
         self.add_mmio_dev(IOAPIC_START, self.arch.io_apic.clone());
+
+        let mut io_devs = self.io_devs.write();
+        io_devs.push((PORT_ACPI_RESET, Arc::new(FadtReset)));
+        io_devs.push((PORT_ACPI_SLEEP_CONTROL, Arc::new(FadtSleepControl)));
+        io_devs.push((PORT_ACPI_TIMER, Arc::new(AcpiPmTimer::new())));
+
         Ok(())
     }
 }
