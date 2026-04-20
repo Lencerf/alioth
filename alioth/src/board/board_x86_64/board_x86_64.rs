@@ -192,7 +192,7 @@ where
 
     pub fn create_ram(&self) -> Result<()> {
         let config = &self.config;
-        let memory = &self.memory;
+        let mut rams = self.rams.write();
 
         let low_mem_size = std::cmp::min(config.mem.size, RAM_32_SIZE);
         let pages_low = self.create_ram_pages(low_mem_size, c"ram-low")?;
@@ -225,13 +225,13 @@ where
             },
             callbacks: Mutex::new(vec![]),
         };
-        memory.add_region(0, Arc::new(region_low))?;
+        rams.push((0, Arc::new(region_low)));
 
         if config.mem.size > RAM_32_SIZE {
             let mem_hi_size = config.mem.size - RAM_32_SIZE;
             let mem_hi = self.create_ram_pages(mem_hi_size, c"ram-high")?;
             let region_hi = MemRegion::with_ram(mem_hi.clone(), MemRegionType::Ram);
-            memory.add_region(MEM_64_START, Arc::new(region_hi))?;
+            rams.push((MEM_64_START, Arc::new(region_hi)));
         }
         Ok(())
     }

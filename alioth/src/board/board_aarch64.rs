@@ -109,22 +109,22 @@ where
 
     pub fn create_ram(&self) -> Result<()> {
         let mem_size = self.config.mem.size;
-        let memory = &self.memory;
+        let mut rams = self.rams.write();
 
         let low_mem_size = std::cmp::min(mem_size, RAM_32_SIZE);
         let pages_low = self.create_ram_pages(low_mem_size, c"ram-low")?;
-        memory.add_region(
+        rams.push((
             RAM_32_START,
             Arc::new(MemRegion::with_ram(pages_low, MemRegionType::Ram)),
-        )?;
+        ));
 
         let high_mem_size = mem_size.saturating_sub(RAM_32_SIZE);
         if high_mem_size > 0 {
             let pages_high = self.create_ram_pages(high_mem_size, c"ram-high")?;
-            memory.add_region(
+            rams.push((
                 MEM_64_START,
                 Arc::new(MemRegion::with_ram(pages_high, MemRegionType::Ram)),
-            )?;
+            ));
         }
 
         Ok(())

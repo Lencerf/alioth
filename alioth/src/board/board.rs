@@ -155,6 +155,7 @@ where
     pub arch: ArchBoard<V>,
     pub config: BoardConfig,
     pub payload: RwLock<Option<Payload>>,
+    rams: RwLock<Vec<(u64, Arc<MemRegion>)>>,
     pub io_devs: RwLock<Vec<(u16, Arc<dyn MmioDev>)>>,
     pub mmio_devs: RwLock<Vec<(u64, Arc<dyn MmioDev>)>>,
     pub pci_bus: PciBus,
@@ -185,12 +186,15 @@ where
             arch,
             config,
             payload: RwLock::new(None),
+            rams: RwLock::new(Vec::new()),
             io_devs: RwLock::new(Vec::new()),
             mmio_devs: RwLock::new(Vec::new()),
             pci_bus: PciBus::new(),
             #[cfg(target_arch = "x86_64")]
             fw_cfg: Mutex::new(None),
         };
+
+        board.create_ram()?;
 
         board.coco_init(vm_memory)?;
 
@@ -225,9 +229,11 @@ where
     }
 
     pub(crate) fn init_devices(&self) -> Result<()> {
-        self.create_ram()?;
         for (port, dev) in self.io_devs.read().iter() {
             self.memory.add_io_dev(*port, dev.clone())?;
+        }
+        for (addr, ram) in self.rams.write().iter() {
+            self.memory.add_region(*addr, ram.clone())?;
         }
         for (addr, dev) in self.mmio_devs.read().iter() {
             self.memory.add_mmio_dev(*addr, dev.clone())?;
