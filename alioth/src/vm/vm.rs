@@ -201,17 +201,15 @@ where
     pub fn add_pl011(&self) -> Result<(), Error> {
         let irq_line = self.ctx.board.vm.create_irq_sender(1)?;
         let console = StdioConsole::new().context(error::CreateConsole)?;
-        let pl011_dev = Pl011::new(PL011_START, irq_line, console).context(error::CreateConsole)?;
-        let mut mmio_devs = self.ctx.board.mmio_devs.write();
-        mmio_devs.push((PL011_START, Arc::new(pl011_dev)));
+        let pl011 = Pl011::new(PL011_START, irq_line, console).context(error::CreateConsole)?;
+        self.ctx.board.add_mmio_dev(PL011_START, Arc::new(pl011));
         Ok(())
     }
 
     #[cfg(target_arch = "aarch64")]
     pub fn add_pl031(&self) {
-        let pl031_dev = Pl031::new(PL031_START, SystemClock);
-        let mut mmio_devs = self.ctx.board.mmio_devs.write();
-        mmio_devs.push((PL031_START, Arc::new(pl031_dev)));
+        let pl031 = Pl031::new(PL031_START, SystemClock);
+        self.ctx.board.add_mmio_dev(PL031_START, Arc::new(pl031))
     }
 
     pub fn add_pci_dev(&self, bdf: Option<Bdf>, dev: Arc<dyn Pci>) -> Result<(), Error> {

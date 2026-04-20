@@ -351,8 +351,7 @@ where
     }
 
     pub fn arch_init(&self) -> Result<()> {
-        let io_apic = self.arch.io_apic.clone();
-        self.mmio_devs.write().push((IOAPIC_START, io_apic));
+        self.add_mmio_dev(IOAPIC_START, self.arch.io_apic.clone());
         Ok(())
     }
 }

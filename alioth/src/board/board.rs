@@ -157,7 +157,7 @@ where
     pub payload: RwLock<Option<Payload>>,
     rams: RwLock<Vec<(u64, Arc<MemRegion>)>>,
     pub io_devs: RwLock<Vec<(u16, Arc<dyn MmioDev>)>>,
-    pub mmio_devs: RwLock<Vec<(u64, Arc<dyn MmioDev>)>>,
+    mmio_devs: RwLock<Vec<(u64, Arc<dyn MmioDev>)>>,
     pub pci_bus: PciBus,
     #[cfg(target_arch = "x86_64")]
     pub fw_cfg: Mutex<Option<Arc<Mutex<FwCfg>>>>,
@@ -201,6 +201,10 @@ where
         Ok(board)
     }
 
+    pub fn add_mmio_dev(&self, addr: u64, dev: Arc<dyn MmioDev>) {
+        self.mmio_devs.write().push((addr, dev))
+    }
+
     fn add_pci_devs(&self) -> Result<()> {
         #[cfg(target_arch = "x86_64")]
         self.memory
@@ -236,7 +240,8 @@ where
             self.memory.add_region(*addr, ram.clone())?;
         }
         for (addr, dev) in self.mmio_devs.read().iter() {
-            self.memory.add_mmio_dev(*addr, dev.clone())?;
+            let region = MemRegion::with_emulated(dev.clone(), MemRegionType::Hidden);
+            self.memory.add_region(*addr, Arc::new(region))?;
         }
         self.add_pci_devs()
     }
