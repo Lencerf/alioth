@@ -19,10 +19,11 @@ mod aarch64;
 #[path = "board_x86_64/board_x86_64.rs"]
 mod x86_64;
 
-use std::ffi::CStr;
+use std::cmp::min;
+use std::ffi::CString;
 use std::sync::Arc;
 
-use libc::{MAP_PRIVATE, MAP_SHARED};
+use libc::{PROT_READ, PROT_WRITE};
 #[cfg(target_arch = "x86_64")]
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -43,8 +44,10 @@ use crate::device::fw_cfg::FwCfg;
 use crate::errors::{DebugTrace, trace_error};
 use crate::hv::{Coco, Hypervisor, Vm, VmConfig};
 use crate::loader::Payload;
-use crate::mem::mapped::ArcMemPages;
-use crate::mem::{MemBackend, MemConfig, MemRegion, MemRegionType, Memory};
+use crate::mem::mapped::{ArcMemPages, create_memfd};
+use crate::mem::{
+    MemBackend, MemConfig, MemNodeConfig, MemRange, MemRegion, MemRegionType, Memory,
+};
 use crate::pci::bus::PciBus;
 
 #[cfg(target_arch = "aarch64")]
@@ -237,26 +240,68 @@ where
         self.init_pci_bus()
     }
 
-    fn create_ram_pages(
-        &self,
-        size: u64,
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] name: &CStr,
-    ) -> Result<ArcMemPages> {
-        let mmap_flag = if self.config.mem.shared {
-            Some(MAP_SHARED)
+    fn create_ram(&self) -> Result<()> {
+        let mut regions = self.create_ram_regions();
+
+        let nodes = if self.config.mem.nodes.is_empty() {
+            &[MemNodeConfig {
+                size: self.config.mem.size,
+                backend: self.config.mem.backend.clone(),
+            }]
         } else {
-            Some(MAP_PRIVATE)
+            self.config.mem.nodes.as_slice()
         };
-        let pages = match self.config.mem.backend {
-            #[cfg(target_os = "linux")]
-            MemBackend::Memfd => ArcMemPages::from_memfd(name, size as usize, None),
-            MemBackend::Anonymous => ArcMemPages::from_anonymous(size as usize, None, mmap_flag),
-        }?;
-        #[cfg(target_os = "linux")]
-        if self.config.mem.transparent_hugepage {
-            pages.madvise_hugepage()?;
+
+        let mut regions_iter = regions.iter_mut();
+        let mut region = regions_iter.next();
+
+        for (i, node) in nodes.iter().enumerate() {
+            let file = match &node.backend {
+                MemBackend::Anonymous => None,
+                #[cfg(target_os = "linux")]
+                MemBackend::Memfd => {
+                    let name = format!("mem-{i}\0");
+                    let name = unsafe { CString::from_vec_with_nul_unchecked(name.into()) };
+                    let memfd = create_memfd(&name)?;
+                    Some(memfd)
+                }
+            };
+            if let Some(file) = &file {
+                file.set_len(node.size).unwrap();
+            }
+            let mut offset = 0;
+
+            while let Some((_, r)) = region.as_mut()
+                && offset < node.size
+            {
+                let Some(MemRange::Span(size)) =
+                    r.ranges.pop_if(|s| matches!(s, MemRange::Span(_)))
+                else {
+                    region = regions_iter.next();
+                    continue;
+                };
+                let map_size = min(size, node.size - offset) as usize;
+                let m = if let Some(file) = &file {
+                    let f = file.try_clone().unwrap();
+                    ArcMemPages::from_file(f, offset as _, map_size, PROT_READ | PROT_WRITE)
+                } else {
+                    ArcMemPages::from_anonymous(map_size, Some(PROT_READ | PROT_WRITE), None)
+                }?;
+                r.ranges.push(MemRange::Ram(m));
+                if let Some(s) = size.checked_sub(node.size - offset)
+                    && s > 0
+                {
+                    r.ranges.push(MemRange::Span(s));
+                };
+                offset += map_size as u64;
+            }
         }
-        Ok(pages)
+
+        let mut rams = self.rams.write();
+        for (start, region) in regions {
+            rams.push((start, Arc::new(region)));
+        }
+        Ok(())
     }
 }
 

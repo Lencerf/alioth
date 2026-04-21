@@ -120,19 +120,6 @@ impl ArcMemPages {
         Ok(Self::from_raw(addr, len, Some((file, offset as u64))))
     }
 
-    #[cfg(target_os = "linux")]
-    pub fn from_memfd(name: &CStr, size: usize, prot: Option<i32>) -> Result<Self> {
-        let fd = ffi!(unsafe { libc::memfd_create(name.as_ptr(), MFD_CLOEXEC) })?;
-        let prot = prot.unwrap_or(PROT_WRITE | PROT_READ);
-        let addr = ffi!(
-            unsafe { mmap(null_mut(), size, prot, MAP_SHARED, fd, 0) },
-            MAP_FAILED
-        )?;
-        let file = unsafe { File::from_raw_fd(fd) };
-        file.set_len(size as _)?;
-        Ok(Self::from_raw(addr, size, Some((file, 0))))
-    }
-
     pub fn from_anonymous(size: usize, prot: Option<i32>, flags: Option<i32>) -> Result<Self> {
         let prot = prot.unwrap_or(PROT_WRITE | PROT_READ);
         let flags = flags.unwrap_or(MAP_PRIVATE) | MAP_ANONYMOUS;
@@ -178,6 +165,12 @@ impl ArcMemPages {
         let (addr, len) = self.get_valid_range(offset, len)?;
         Ok(unsafe { std::slice::from_raw_parts_mut(addr as *mut u8, len) })
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn create_memfd(name: &CStr) -> Result<File> {
+    let fd = ffi!(unsafe { libc::memfd_create(name.as_ptr(), MFD_CLOEXEC) })?;
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 #[derive(Debug)]

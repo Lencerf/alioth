@@ -113,6 +113,7 @@ fn test_parse_args() {
                 shared: true,
                 #[cfg(target_os = "linux")]
                 transparent_hugepage: false,
+                nodes: vec![],
             },
             coco: None,
         },
@@ -282,7 +283,8 @@ fn test_parse_cpu_arg(
         size: 32 << 30,
         backend: MemBackend::Memfd,
         shared: true,
-        transparent_hugepage: true
+        transparent_hugepage: true,
+        nodes: vec![],
     }
 ))]
 fn test_parse_mem_arg(

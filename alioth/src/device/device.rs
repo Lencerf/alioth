@@ -39,6 +39,8 @@ pub enum Error {
     System { error: std::io::Error },
     #[snafu(display("Device is not pausable"))]
     NotPausable,
+    #[snafu(display("Device does not support snapshotting"))]
+    NotSnapshotable,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -49,6 +51,15 @@ pub trait Pause {
     }
     fn resume(&self) -> Result<()> {
         error::NotPausable.fail()
+    }
+}
+
+pub trait Snapshot {
+    fn snapshot(&self) -> Result<Vec<u8>> {
+        error::NotSnapshotable.fail()
+    }
+    fn restore(&mut self, _snapshot: &[u8]) -> Result<()> {
+        todo!()
     }
 }
 

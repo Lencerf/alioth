@@ -111,27 +111,17 @@ where
         Ok(())
     }
 
-    pub fn create_ram(&self) -> Result<()> {
-        let mem_size = self.config.mem.size;
-        let mut rams = self.rams.write();
+    pub(crate) fn create_ram_regions(&self) -> Vec<(u64, MemRegion)> {
+        let low_mem_size = std::cmp::min(self.config.mem.size, RAM_32_SIZE);
+        let mem_low = MemRegion::with_span(low_mem_size, MemRegionType::Ram);
 
-        let low_mem_size = std::cmp::min(mem_size, RAM_32_SIZE);
-        let pages_low = self.create_ram_pages(low_mem_size, c"ram-low")?;
-        rams.push((
-            RAM_32_START,
-            Arc::new(MemRegion::with_ram(pages_low, MemRegionType::Ram)),
-        ));
-
-        let high_mem_size = mem_size.saturating_sub(RAM_32_SIZE);
-        if high_mem_size > 0 {
-            let pages_high = self.create_ram_pages(high_mem_size, c"ram-high")?;
-            rams.push((
-                MEM_64_START,
-                Arc::new(MemRegion::with_ram(pages_high, MemRegionType::Ram)),
-            ));
+        if self.config.mem.size > RAM_32_SIZE {
+            let high_mem_size = self.config.mem.size - RAM_32_SIZE;
+            let mem_high = MemRegion::with_span(high_mem_size, MemRegionType::Ram);
+            vec![(RAM_32_START, mem_low), (MEM_64_START, mem_high)]
+        } else {
+            vec![(RAM_32_START, mem_low)]
         }
-
-        Ok(())
     }
 
     pub fn coco_init(&self, _: Arc<V::Memory>) -> Result<()> {
