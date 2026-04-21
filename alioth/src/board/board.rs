@@ -201,7 +201,7 @@ where
         self.mmio_devs.write().push((addr, dev))
     }
 
-    fn add_pci_devs(&self) -> Result<()> {
+    fn init_pci_bus(&self) -> Result<()> {
         self.memory.add_region(
             PCIE_CONFIG_START,
             Arc::new(MemRegion::with_emulated(
@@ -234,7 +234,7 @@ where
             self.memory.add_region(*addr, Arc::new(region))?;
         }
         self.init_arch_buses()?;
-        self.add_pci_devs()
+        self.init_pci_bus()
     }
 
     fn create_ram_pages(
