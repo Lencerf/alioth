@@ -21,6 +21,7 @@ mod x86_64;
 
 use std::cmp::min;
 use std::ffi::CString;
+use std::fs::OpenOptions;
 use std::sync::Arc;
 
 use libc::{PROT_READ, PROT_WRITE};
@@ -265,6 +266,13 @@ where
                     let memfd = create_memfd(&name)?;
                     Some(memfd)
                 }
+                MemBackend::File { path } => Some(
+                    OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(path)
+                        .unwrap(),
+                ),
             };
             if let Some(file) = &file {
                 file.set_len(node.size).unwrap();

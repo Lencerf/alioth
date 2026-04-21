@@ -18,6 +18,7 @@ pub mod mapped;
 
 use std::any::{Any, type_name};
 use std::fmt::Debug;
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -121,6 +122,9 @@ pub enum MemBackend {
     #[cfg(target_os = "linux")]
     #[serde(alias = "memfd")]
     Memfd,
+    /// File-backed memory.
+    #[serde(alias = "file")]
+    File { path: Arc<Path> },
 }
 
 impl MemConfig {
@@ -129,6 +133,7 @@ impl MemConfig {
             #[cfg(target_os = "linux")]
             MemBackend::Memfd => true,
             MemBackend::Anonymous => false,
+            MemBackend::File { .. } => true,
         }
     }
 }
