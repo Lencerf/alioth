@@ -16,6 +16,7 @@
 mod boot;
 mod img;
 mod objects;
+mod server;
 #[cfg(target_os = "linux")]
 mod vu;
 
