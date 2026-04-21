@@ -232,6 +232,10 @@ impl<V: Vm> VcpuThread<V> {
         }
     }
 
+    fn handle_cmds(&self) -> Result<()> {
+        todo!()
+    }
+
     fn run(&mut self) -> Result<()> {
         self.init_vcpu()?;
 
@@ -239,7 +243,10 @@ impl<V: Vm> VcpuThread<V> {
             let mut sync = self.ctx.sync.lock();
             loop {
                 match sync.state {
-                    State::Paused => self.ctx.cond.wait(&mut sync),
+                    State::Paused => {
+                        self.handle_cmds()?;
+                        self.ctx.cond.wait(&mut sync)
+                    }
                     State::Running => break,
                     State::Shutdown => break 'reboot Ok(()),
                     State::RebootPending => sync.state = State::Running,
@@ -265,7 +272,10 @@ impl<V: Vm> VcpuThread<V> {
                 }
                 loop {
                     match sync.state {
-                        State::Paused => self.ctx.cond.wait(&mut sync),
+                        State::Paused => {
+                            self.handle_cmds()?;
+                            self.ctx.cond.wait(&mut sync)
+                        }
                         State::Running => break,
                         State::RebootPending | State::Shutdown => break 'pause request,
                     }
