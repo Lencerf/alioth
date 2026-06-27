@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod elf;
 #[path = "firmware/firmware.rs"]
 pub mod firmware;
 #[path = "linux/linux.rs"]
 pub mod linux;
+#[cfg(target_arch = "x86_64")]
+#[path = "multiboot/multiboot.rs"]
+pub mod multiboot;
 #[cfg(target_arch = "x86_64")]
 #[path = "xen/xen.rs"]
 pub mod xen;
@@ -25,6 +27,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use serde::Deserialize;
+use serde_aco::Help;
 use snafu::Snafu;
 
 #[cfg(target_arch = "x86_64")]
@@ -35,19 +38,31 @@ use crate::arch::reg::{Reg, SReg};
 use crate::errors::{DebugTrace, trace_error};
 use crate::mem::{MemRegionEntry, MemRegionType};
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Help)]
 pub struct Payload {
+    /// Path to the firmware to boot
     pub firmware: Option<Box<Path>>,
+    /// Path to the executable/kernel to boot
+    #[serde(alias = "kernel")]
     pub executable: Option<Executable>,
+    /// Path to the initramfs for the kernel
     pub initramfs: Option<Box<Path>>,
     pub cmdline: Option<Box<str>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
 pub enum Executable {
+    /// Linux kernel image
+    #[serde(alias = "linux")]
     Linux(Box<Path>),
+    /// ELF image with a PVH entrypoint
     #[cfg(target_arch = "x86_64")]
+    #[serde(alias = "pvh")]
     Pvh(Box<Path>),
+    /// Multiboot-compatible image
+    #[cfg(target_arch = "x86_64")]
+    #[serde(alias = "multiboot")]
+    Multiboot(Box<Path>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,6 +95,10 @@ pub enum Error {
     RwMemory { source: Box<crate::mem::Error> },
     #[snafu(display("Missing magic number {magic:#x}, found {found:#x}"))]
     MissingMagic { magic: u64, found: u64 },
+    #[snafu(display("Missing Multiboot header"))]
+    MissingMultibootHeader,
+    #[snafu(display("Invalid Multiboot header: {reason}"))]
+    InvalidMultibootHeader { reason: &'static str },
     #[snafu(display("Cannot find payload entry point"))]
     NoEntryPoint,
     #[snafu(display("Not a 64-bit kernel"))]

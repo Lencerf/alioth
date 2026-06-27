@@ -12,14 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use zerocopy::{FromBytes, IntoBytes, KnownLayout};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const ELF_HEADER_MAGIC: [u8; 4] = *b"\x7fELF";
 pub const ELF_IDENT_CLASS_64: u8 = 2;
 pub const ELF_IDENT_LITTLE_ENDIAN: u8 = 1;
 
 #[repr(C)]
-#[derive(Debug, Default, Clone, FromBytes, IntoBytes)]
+#[derive(Debug, Default, Clone, FromBytes, IntoBytes, KnownLayout)]
+pub struct Elf32Header {
+    pub ident_magic: [u8; 4],
+    pub ident_class: u8,
+    pub ident_data: u8,
+    pub ident_version: u8,
+    pub ident_os_abi: u8,
+    pub ident_abi_version: u8,
+    pub _pad: [u8; 7],
+    pub type_: u16,
+    pub machine: u16,
+    pub version: u32,
+    pub entry: u32,
+    pub ph_off: u32,
+    pub sh_off: u32,
+    pub flags: u32,
+    pub eh_sz: u16,
+    pub ph_ent_sz: u16,
+    pub ph_num: u16,
+    pub sh_ent_sz: u16,
+    pub sh_num: u16,
+    pub sh_str_ndx: u16,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, FromBytes, IntoBytes, KnownLayout)]
+pub struct Elf32ProgramHeader {
+    pub type_: u32,
+    pub offset: u32,
+    pub vaddr: u32,
+    pub paddr: u32,
+    pub file_sz: u32,
+    pub mem_sz: u32,
+    pub flags: u32,
+    pub align: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct Elf64Header {
     pub ident_magic: [u8; 4],
     pub ident_class: u8,

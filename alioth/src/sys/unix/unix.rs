@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(target_os = "linux")]
-#[path = "linux/linux.rs"]
-mod linux;
-#[cfg(target_os = "macos")]
-#[path = "macos/macos.rs"]
-mod macos;
-#[cfg(unix)]
-#[path = "unix/unix.rs"]
-mod unix;
-
-#[cfg(target_os = "linux")]
-pub use linux::*;
-#[cfg(target_os = "macos")]
-pub use macos::*;
-#[cfg(unix)]
-pub use unix::*;
+pub mod elf;

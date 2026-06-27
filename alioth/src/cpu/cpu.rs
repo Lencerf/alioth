@@ -29,9 +29,9 @@ use snafu::{ResultExt, Snafu};
 use crate::board::Board;
 use crate::errors::{DebugTrace, trace_error};
 use crate::hv::{Vcpu, Vm, VmEntry, VmExit};
-#[cfg(target_arch = "x86_64")]
-use crate::loader::xen;
 use crate::loader::{Executable, InitState, linux};
+#[cfg(target_arch = "x86_64")]
+use crate::loader::{multiboot, xen};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -179,6 +179,14 @@ impl<V: Vm> VcpuThread<V> {
             ),
             #[cfg(target_arch = "x86_64")]
             Executable::Pvh(image) => xen::load(
+                &self.ctx.board.memory.ram_bus(),
+                &mem_regions,
+                image.as_ref(),
+                payload.cmdline.as_deref(),
+                payload.initramfs.as_deref(),
+            ),
+            #[cfg(target_arch = "x86_64")]
+            Executable::Multiboot(image) => multiboot::load(
                 &self.ctx.board.memory.ram_bus(),
                 &mem_regions,
                 image.as_ref(),

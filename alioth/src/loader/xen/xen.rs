@@ -29,10 +29,6 @@ use crate::arch::layout::{
 };
 use crate::arch::msr::{ApicBase, Msr};
 use crate::arch::reg::{Cr0, DtReg, DtRegVal, Reg, Rflags, SReg, SegAccess, SegReg, SegRegVal};
-use crate::loader::elf::{
-    ELF_HEADER_MAGIC, ELF_IDENT_CLASS_64, ELF_IDENT_LITTLE_ENDIAN, Elf64Header, Elf64Note,
-    Elf64ProgramHeader, Elf64SectionHeader, PT_NOTE, SHT_NOTE,
-};
 use crate::loader::xen::start_info::{
     XEN_HVM_MEMMAP_TYPE_ACPI, XEN_HVM_MEMMAP_TYPE_PMEM, XEN_HVM_MEMMAP_TYPE_RAM,
     XEN_HVM_MEMMAP_TYPE_RESERVED, XEN_HVM_START_INFO_V1, XEN_HVM_START_MAGIC_VALUE,
@@ -40,6 +36,10 @@ use crate::loader::xen::start_info::{
 use crate::loader::{InitState, Result, error, search_initramfs_address};
 use crate::mem::mapped::RamBus;
 use crate::mem::{MemRegionEntry, MemRegionType};
+use crate::sys::elf::{
+    ELF_HEADER_MAGIC, ELF_IDENT_CLASS_64, ELF_IDENT_LITTLE_ENDIAN, Elf64Header, Elf64Note,
+    Elf64ProgramHeader, Elf64SectionHeader, PT_NOTE, SHT_NOTE,
+};
 
 use self::start_info::{HvmMemmapTableEntry, HvmModlistEntry, HvmStartInfo};
 
