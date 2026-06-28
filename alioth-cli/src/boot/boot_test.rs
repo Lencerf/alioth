@@ -303,6 +303,7 @@ fn test_parse_mem_arg(
         initramfs: Some(Path::new("initramfs.cpio").into()),
         ..Default::default()
     },
+    &HashMap::new(),
     Payload {
         firmware: None,
         initramfs: Some(Path::new("initramfs.cpio").into()),
@@ -317,6 +318,7 @@ fn test_parse_mem_arg(
         initramfs: Some(Path::new("initramfs.cpio").into()),
         ..Default::default()
     },
+    &HashMap::new(),
     Payload {
         firmware: None,
         initramfs: Some(Path::new("initramfs.cpio").into()),
@@ -324,8 +326,25 @@ fn test_parse_mem_arg(
         cmdline: Some("console=ttyS0".into()),
     }
 ))]
-fn test_parse_payload_arg(#[case] mut args: BootArgs, #[case] want: Payload) {
-    assert_eq!(parse_payload_arg(&mut args), want);
+#[cfg_attr(target_arch = "x86_64", case(
+    BootArgs {
+        payload: Some("firmware=firmware.bin,kernel=id_k,initramfs=initramfs.cpio".into()),
+        ..Default::default()
+    },
+    &HashMap::from([("id_k", "multiboot,multiboot_kernel")]),
+    Payload {
+        firmware: Some(Path::new("firmware.bin").into()),
+        initramfs: Some(Path::new("initramfs.cpio").into()),
+        executable: Some(Executable::Multiboot(Path::new("multiboot_kernel").into())),
+        cmdline: None, //Some(c"console=ttyS0".into()),
+    }
+))]
+fn test_parse_payload_arg(
+    #[case] mut args: BootArgs,
+    #[case] objects: &HashMap<&str, &str>,
+    #[case] want: Payload,
+) {
+    assert_eq!(parse_payload_arg(&mut args, objects).unwrap(), want);
 }
 
 #[rstest]

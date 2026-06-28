@@ -70,6 +70,8 @@ pub enum Error {
     WaitVm { source: alioth::vm::Error },
 }
 
+type Result<T, E = Error> = std::result::Result<T, E>;
+
 #[derive(Args, Debug, Clone, Default)]
 #[command(arg_required_else_help = true, alias("run"))]
 pub struct BootArgs {
@@ -98,6 +100,12 @@ pub struct BootArgs {
     /// Path to an initramfs image.
     #[arg(short, long, value_name = "PATH")]
     initramfs: Option<Box<Path>>,
+
+    /// Specify the payload to boot, including firmware, kernel, and initramfs.
+    #[arg(long, help(
+        help_text::<Payload>("Specify the payload to boot, including firmware, kernel, etc.")
+    ))]
+    payload: Option<Box<str>>,
 
     /// DEPRECATED: Use --cpu instead.
     #[arg(long, default_value_t = 1)]
@@ -259,7 +267,11 @@ fn parse_cpu_arg(
     Ok(config)
 }
 
-fn parse_payload_arg(args: &mut BootArgs) -> Payload {
+fn parse_payload_arg(args: &mut BootArgs, objects: &HashMap<&str, &str>) -> Result<Payload> {
+    if let Some(arg) = args.payload.take() {
+        let payload = serde_aco::from_args(&arg, objects).context(error::ParseArg { arg })?;
+        return Ok(payload);
+    }
     let mut payload = Payload {
         firmware: args.firmware.take(),
         initramfs: args.initramfs.take(),
@@ -271,11 +283,11 @@ fn parse_payload_arg(args: &mut BootArgs) -> Payload {
     if payload.executable.is_none() {
         payload.executable = args.pvh.take().map(Executable::Pvh);
     }
-    payload
+    Ok(payload)
 }
 
 fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<Config, Error> {
-    let payload = parse_payload_arg(&mut args);
+    let payload = parse_payload_arg(&mut args, &objects)?;
 
     let mut board_config = BoardConfig::default();
     if let Some(arg) = args.coco {

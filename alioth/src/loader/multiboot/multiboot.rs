@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ffi::CStr;
+//! Multiboot v1 bootloader support for x86_64 Linux.
+//!
+//! Spec: https://www.gnu.org/software/grub/manual/multiboot/multiboot.html
+
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::mem::{offset_of, size_of, size_of_val};
@@ -94,17 +97,15 @@ struct MultibootInfoPage {
     mods: [MultibootModList; 1],
 }
 
-pub fn load<P: AsRef<Path>>(
+pub fn load(
     memory: &RamBus,
     mem_regions: &[(u64, MemRegionEntry)],
-    kernel: P,
-    cmdline: Option<&CStr>,
-    initramfs: Option<P>,
+    kernel: &Path,
+    cmdline: Option<&str>,
+    initramfs: Option<&Path>,
 ) -> Result<InitState> {
-    let access_kernel = error::AccessFile {
-        path: kernel.as_ref(),
-    };
-    let mut kernel = BufReader::new(File::open(&kernel).context(access_kernel)?);
+    let access_kernel = error::AccessFile { path: kernel };
+    let mut kernel = BufReader::new(File::open(kernel).context(access_kernel)?);
 
     // Search for the Multiboot Header in the first 8192 bytes
     let mut header_buf = [0u8; 8192];
@@ -312,15 +313,16 @@ pub fn load<P: AsRef<Path>>(
 
     // Load cmd line
     if let Some(cmdline) = cmdline {
-        let cmdline = cmdline.to_bytes_with_nul();
-        if cmdline.len() as u64 > KERNEL_CMDLINE_LIMIT {
+        let bytes = cmdline.as_bytes();
+        if bytes.len() as u64 >= KERNEL_CMDLINE_LIMIT {
             return error::CmdLineTooLong {
-                len: cmdline.len(),
-                limit: KERNEL_CMDLINE_LIMIT,
+                len: bytes.len(),
+                limit: KERNEL_CMDLINE_LIMIT - 1,
             }
             .fail();
         }
-        memory.write_range(KERNEL_CMDLINE_START, cmdline.len() as u64, cmdline)?;
+        memory.write_range(KERNEL_CMDLINE_START, bytes.len() as u64, bytes)?;
+        memory.write_t(KERNEL_CMDLINE_START + bytes.len() as u64, &0u8)?;
         start_info_page.info.cmdline = KERNEL_CMDLINE_START as u32;
         start_info_page.info.flags |= 1 << 2; // cmdline valid
     }
@@ -328,10 +330,8 @@ pub fn load<P: AsRef<Path>>(
     // Load initramfs (as Multiboot module)
     let initramfs_range;
     if let Some(initramfs) = initramfs {
-        let access_initramfs = error::AccessFile {
-            path: initramfs.as_ref(),
-        };
-        let initramfs = File::open(&initramfs).context(access_initramfs)?;
+        let access_initramfs = error::AccessFile { path: initramfs };
+        let initramfs = File::open(initramfs).context(access_initramfs)?;
         let initramfs_size = initramfs.metadata().context(access_initramfs)?.len();
         let initramfs_gpa = search_initramfs_address(mem_regions, initramfs_size, (2 << 30) - 1)?;
         let initramfs_end = initramfs_gpa + initramfs_size;
