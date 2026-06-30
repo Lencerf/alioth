@@ -14,12 +14,12 @@
 
 use std::mem::size_of;
 
-use super::{MultibootInfo, MultibootInfoPage, MultibootMmapEntry, MultibootModList};
+use super::{MultibootInfo, MultibootInfoPage, MultibootMmapEntry, MultibootMod};
 
 #[test]
 fn test_multiboot_struct_sizes() {
     assert_eq!(size_of::<MultibootInfo>(), 116);
     assert_eq!(size_of::<MultibootMmapEntry>(), 24);
-    assert_eq!(size_of::<MultibootModList>(), 16);
+    assert_eq!(size_of::<MultibootMod>(), 16);
     assert_eq!(size_of::<MultibootInfoPage>(), 932);
 }

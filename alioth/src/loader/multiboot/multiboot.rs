@@ -22,7 +22,7 @@ use std::mem::{offset_of, size_of, size_of_val};
 use std::path::Path;
 
 use snafu::ResultExt;
-use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
+use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout};
 
 use crate::arch::layout::{
     APIC_START, BOOT_GDT_START, KERNEL_CMDLINE_LIMIT, KERNEL_CMDLINE_START, MULTIBOOT_INFO_START,
@@ -36,65 +36,120 @@ use crate::sys::elf::{
     ELF_HEADER_MAGIC, ELF_IDENT_CLASS_64, Elf32Header, Elf32ProgramHeader, Elf64Header,
     Elf64ProgramHeader, PT_LOAD,
 };
+use crate::{bitflags, consts};
 
-#[repr(C, packed)]
-#[derive(Debug, Default, Copy, Clone, IntoBytes, Immutable, FromBytes)]
-struct MultibootInfo {
-    flags: u32,
-    mem_lower: u32,
-    mem_upper: u32,
-    boot_device: u32,
-    cmdline: u32,
-    mods_count: u32,
-    mods_addr: u32,
-    syms: [u32; 4],
-    mmap_length: u32,
-    mmap_addr: u32,
-    drives_length: u32,
-    drives_addr: u32,
-    config_table: u32,
-    boot_loader_name: u32,
-    apm_table: u32,
-    vbe_control_info: u32,
-    vbe_mode_info: u32,
-    vbe_mode: u16,
-    vbe_interface_seg: u16,
-    vbe_interface_off: u16,
-    vbe_interface_len: u16,
-    framebuffer_addr: u64,
-    framebuffer_pitch: u32,
-    framebuffer_width: u32,
-    framebuffer_height: u32,
-    framebuffer_bpp: u8,
-    framebuffer_type: u8,
-    color_info: [u8; 6],
+bitflags! {
+    pub struct HeaderFlag(u32) {
+        /// All boot modules must be page-aligned
+        PAGE_ALIGNED = 1 << 0;
+        /// Memory map must be available to the kernel
+        MMAP = 1 << 1;
+        /// Video mode table must be available to the kernel
+        VIDEO = 1 << 2;
+        /// HEader address fields are valid
+        ADDR = 1 << 16;
+    }
 }
 
-#[repr(C, packed)]
-#[derive(Debug, Default, Copy, Clone, IntoBytes, Immutable, FromBytes)]
-struct MultibootMmapEntry {
-    size: u32,
-    addr: u64,
-    len: u64,
-    type_: u32,
+pub const MULTIBOOT_MAGIC: u32 = 0x1BADB002;
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, KnownLayout, Immutable, IntoBytes, FromBytes)]
+pub struct MultibootHeader {
+    pub magic: u32,
+    pub flags: HeaderFlag,
+    pub checksum: u32,
+    pub header_addr: u32,
+    pub load_addr: u32,
+    pub load_end_addr: u32,
+    pub bss_end_addr: u32,
+    pub entry_addr: u32,
+    pub mode_type: u32,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
 }
 
-#[repr(C, packed)]
-#[derive(Debug, Default, Copy, Clone, IntoBytes, Immutable, FromBytes)]
-struct MultibootModList {
-    mod_start: u32,
-    mod_end: u32,
-    cmdline: u32,
-    pad: u32,
+bitflags! {
+    pub struct BootFlag(u32) {
+        MEM = 1 << 0;
+        BOOT_DEVICE = 1 << 1;
+        CMDLINE = 1 << 2;
+        MODS = 1 << 3;
+        MMAP = 1 << 6;
+        LOADER_NAME = 1 << 9;
+    }
 }
 
-#[repr(C, packed)]
-#[derive(Debug, IntoBytes, Default, Immutable)]
+#[repr(C)]
+#[derive(Debug, Default, Clone, KnownLayout, Immutable, IntoBytes, FromBytes)]
+pub struct MultibootInfo {
+    pub flags: BootFlag,
+    pub mem_lower: u32,
+    pub mem_upper: u32,
+    pub boot_device: u32,
+    pub cmdline: u32,
+    pub mods_count: u32,
+    pub mods_addr: u32,
+    pub syms: [u32; 4],
+    pub mmap_length: u32,
+    pub mmap_addr: u32,
+    pub drives_length: u32,
+    pub drives_addr: u32,
+    pub config_table: u32,
+    pub boot_loader_name: u32,
+    pub apm_table: u32,
+    pub vbe_control_info: u32,
+    pub vbe_mode_info: u32,
+    pub vbe_mode: u16,
+    pub vbe_interface_seg: u16,
+    pub vbe_interface_off: u16,
+    pub vbe_interface_len: u16,
+    pub framebuffer_addr: u64,
+    pub framebuffer_pitch: u32,
+    pub framebuffer_width: u32,
+    pub framebuffer_height: u32,
+    pub framebuffer_bpp: u8,
+    pub framebuffer_type: u8,
+    pub color_info: [u8; 6],
+    pub pad: u32,
+}
+
+consts! {
+    pub struct MultibootMemory(u32) {
+        AVAILABLE = 1;
+        RESERVED = 2;
+        ACPI_RECLAIMABLE = 3;
+        NVS = 4;
+        BADRAM = 5;
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, KnownLayout, Immutable, IntoBytes, FromBytes)]
+pub struct MultibootMmapEntry {
+    pub addr: u64,
+    pub len: u64,
+    pub type_: MultibootMemory,
+    pub size: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, KnownLayout, Immutable, IntoBytes, FromBytes)]
+pub struct MultibootMod {
+    pub start: u32,
+    pub end: u32,
+    pub cmdline: u32,
+    pub pad: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, KnownLayout, Immutable, IntoBytes, FromBytes)]
 struct MultibootInfoPage {
     info: MultibootInfo,
+    boot_loader_name: [u8; 8],
+    initramfs: MultibootMod,
     mmap: [MultibootMmapEntry; 32],
-    boot_loader_name: [u8; 32],
-    mods: [MultibootModList; 1],
 }
 
 pub fn load(
@@ -108,44 +163,35 @@ pub fn load(
     let mut kernel = BufReader::new(File::open(kernel).context(access_kernel)?);
 
     // Search for the Multiboot Header in the first 8192 bytes
-    let mut header_buf = [0u8; 8192];
+    let mut buf = [0u64; 1024];
     kernel.seek(SeekFrom::Start(0)).context(access_kernel)?;
-    let bytes_read = kernel.read(&mut header_buf).context(access_kernel)?;
 
-    let mut found_header = None;
-    for i in (0..bytes_read.saturating_sub(12)).step_by(4) {
-        let magic = u32::from_le_bytes(header_buf[i..i + 4].try_into().unwrap());
-        if magic == 0x1BADB002 {
-            let flags = u32::from_le_bytes(header_buf[i + 4..i + 8].try_into().unwrap());
-            let checksum = u32::from_le_bytes(header_buf[i + 8..i + 12].try_into().unwrap());
-            if magic.wrapping_add(flags).wrapping_add(checksum) == 0 {
-                found_header = Some((i as u64, flags));
-                break;
-            }
+    let bytes_read = kernel.read(buf.as_mut_bytes()).context(access_kernel)?;
+    let mut header_and_offset = None;
+    for o in (0..bytes_read.saturating_sub(size_of::<MultibootHeader>())).step_by(4) {
+        let (h, _) = MultibootHeader::ref_from_prefix(&buf.as_bytes()[o..]).unwrap();
+        if h.magic == MULTIBOOT_MAGIC
+            && h.flags.bits().wrapping_add(h.checksum) == 1 + !MULTIBOOT_MAGIC
+        {
+            header_and_offset = Some((h, o as u64));
+            break;
         }
     }
 
-    let Some((header_file_offset, flags)) = found_header else {
+    let Some((header, header_offset)) = header_and_offset else {
         return error::MissingMultibootHeader.fail();
     };
 
     let entry_point;
 
-    if flags & 0x00010000 != 0 {
+    if header.flags.contains(HeaderFlag::ADDR) {
         // Address fields (AOUT kludge) are valid
-        let mut addr_fields = [0u32; 5];
-        kernel
-            .seek(SeekFrom::Start(header_file_offset + 12))
-            .context(access_kernel)?;
-        kernel
-            .read_exact(addr_fields.as_mut_bytes())
-            .context(access_kernel)?;
 
-        let header_addr = addr_fields[0] as u64;
-        let load_addr = addr_fields[1] as u64;
-        let load_end_addr = addr_fields[2] as u64;
-        let bss_end_addr = addr_fields[3] as u64;
-        let entry_addr = addr_fields[4] as u64;
+        let header_addr = header.header_addr as u64;
+        let load_addr = header.load_addr as u64;
+        let load_end_addr = header.load_end_addr as u64;
+        let bss_end_addr = header.bss_end_addr as u64;
+        let entry_addr = header.entry_addr as u64;
 
         if load_addr > header_addr {
             return error::InvalidMultibootHeader {
@@ -154,7 +200,7 @@ pub fn load(
             .fail();
         }
 
-        let load_file_offset = header_file_offset - (header_addr - load_addr);
+        let load_file_offset = header_offset - (header_addr - load_addr);
         let kernel_meta = kernel.get_ref().metadata().context(access_kernel)?;
         let file_size = kernel_meta.len();
 
@@ -288,9 +334,9 @@ pub fn load(
 
     log::info!("Multiboot entry point = {entry_point:#x?}");
 
-    let mut start_info_page = MultibootInfoPage {
+    let mut info_page = MultibootInfoPage {
         info: MultibootInfo {
-            flags: 1 | (1 << 6) | (1 << 9), // mem_lower/upper, mmap, boot_loader_name
+            flags: BootFlag::MEM | BootFlag::MMAP | BootFlag::LOADER_NAME,
             ..Default::default()
         },
         ..Default::default()
@@ -308,8 +354,8 @@ pub fn load(
             }
         }
     }
-    start_info_page.info.mem_lower = mem_lower;
-    start_info_page.info.mem_upper = mem_upper;
+    info_page.info.mem_lower = mem_lower;
+    info_page.info.mem_upper = mem_upper;
 
     // Load cmd line
     if let Some(cmdline) = cmdline {
@@ -323,8 +369,8 @@ pub fn load(
         }
         memory.write_range(KERNEL_CMDLINE_START, bytes.len() as u64, bytes)?;
         memory.write_t(KERNEL_CMDLINE_START + bytes.len() as u64, &0u8)?;
-        start_info_page.info.cmdline = KERNEL_CMDLINE_START as u32;
-        start_info_page.info.flags |= 1 << 2; // cmdline valid
+        info_page.info.cmdline = KERNEL_CMDLINE_START as u32;
+        info_page.info.flags |= BootFlag::CMDLINE;
     }
 
     // Load initramfs (as Multiboot module)
@@ -337,17 +383,17 @@ pub fn load(
         let initramfs_end = initramfs_gpa + initramfs_size;
         memory.write_range(initramfs_gpa, initramfs_size, initramfs)?;
 
-        start_info_page.info.mods_count = 1;
-        start_info_page.info.mods_addr =
-            (MULTIBOOT_INFO_START + offset_of!(MultibootInfoPage, mods) as u64) as u32;
+        info_page.info.mods_count = 1;
+        info_page.info.mods_addr =
+            MULTIBOOT_INFO_START as u32 + offset_of!(MultibootInfoPage, initramfs) as u32;
 
-        start_info_page.mods[0] = MultibootModList {
-            mod_start: initramfs_gpa as u32,
-            mod_end: initramfs_end as u32,
+        info_page.initramfs = MultibootMod {
+            start: initramfs_gpa as u32,
+            end: initramfs_end as u32,
             cmdline: 0,
             pad: 0,
         };
-        start_info_page.info.flags |= 1 << 3; // mods valid
+        info_page.info.flags |= BootFlag::MODS;
 
         log::info!(
             "initramfs loaded as multiboot module at {:#x} - {:#x}",
@@ -360,37 +406,37 @@ pub fn load(
     }
 
     // Populate mmap
-    let mut index = 0;
+    let mut index = 1;
+    info_page.mmap[0].size = size_of::<MultibootMmapEntry>() as u32 - 4;
     for (addr, region) in mem_regions.iter() {
         let type_ = match region.type_ {
-            MemRegionType::Ram => 1,
-            MemRegionType::Acpi => 3,
-            MemRegionType::Reserved | MemRegionType::Pmem => 2,
+            MemRegionType::Ram => MultibootMemory::AVAILABLE,
+            MemRegionType::Acpi => MultibootMemory::ACPI_RECLAIMABLE,
+            MemRegionType::Reserved | MemRegionType::Pmem => MultibootMemory::RESERVED,
             MemRegionType::Hidden => continue,
         };
-        if index >= start_info_page.mmap.len() {
+        if index >= info_page.mmap.len() {
             break;
         }
-        start_info_page.mmap[index] = MultibootMmapEntry {
-            size: 20,
+        info_page.mmap[index] = MultibootMmapEntry {
+            size: size_of::<MultibootMmapEntry>() as u32 - 4,
             addr: *addr,
             len: region.size,
             type_,
         };
         index += 1;
     }
-    start_info_page.info.mmap_length = (index * size_of::<MultibootMmapEntry>()) as u32;
-    start_info_page.info.mmap_addr =
-        (MULTIBOOT_INFO_START + offset_of!(MultibootInfoPage, mmap) as u64) as u32;
+    info_page.info.mmap_length = ((index - 1) * size_of::<MultibootMmapEntry>()) as u32;
+    info_page.info.mmap_addr = MULTIBOOT_INFO_START as u32
+        + offset_of!(MultibootInfoPage, mmap) as u32
+        + offset_of!(MultibootMmapEntry, size) as u32;
 
     // Boot loader name
-    let name_bytes = b"alioth\0";
-    let name_len = std::cmp::min(name_bytes.len(), start_info_page.boot_loader_name.len());
-    start_info_page.boot_loader_name[..name_len].copy_from_slice(&name_bytes[..name_len]);
-    start_info_page.info.boot_loader_name =
-        (MULTIBOOT_INFO_START + offset_of!(MultibootInfoPage, boot_loader_name) as u64) as u32;
+    info_page.boot_loader_name = *b"alioth\0\0";
+    info_page.info.boot_loader_name =
+        MULTIBOOT_INFO_START as u32 + offset_of!(MultibootInfoPage, boot_loader_name) as u32;
 
-    memory.write_t(MULTIBOOT_INFO_START, &start_info_page)?;
+    memory.write_t(MULTIBOOT_INFO_START, &info_page)?;
 
     // Set up GDT for protected mode
     let boot_cs = SegRegVal {
