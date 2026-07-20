@@ -37,6 +37,7 @@ use crate::virtio::queue::tests::{GuestQueue, VirtQueueGuest};
 use crate::virtio::tests::{
     DATA_ADDR, FakeIoeventFd, FakeIrqSender, fixture_queues, fixture_ram_bus,
 };
+use crate::virtio::worker::WorkerApi;
 use crate::virtio::{DeviceId, FEATURE_BUILT_IN, VirtioFeature};
 
 #[test]
@@ -121,6 +122,7 @@ fn vsock_conn_test() {
     let param = UdsVsockSpec {
         cid: GUEST_CID,
         path: sock_path.clone().into(),
+        api: WorkerApi::Mio,
     };
     let dev = param.build("vsock").unwrap();
 
@@ -188,7 +190,7 @@ fn vsock_conn_test() {
         tx_buf_addr,
         &mut tx_q,
         &tx,
-        &notifier,
+        notifier.as_ref().unwrap(),
         &irq_rx,
         false,
     );
@@ -221,7 +223,7 @@ fn vsock_conn_test() {
         tx_buf_addr,
         &mut tx_q,
         &tx,
-        &notifier,
+        notifier.as_ref().unwrap(),
         &irq_rx,
         true,
     );
@@ -255,7 +257,7 @@ fn vsock_conn_test() {
         q_index: VsockVirtq::RX.raw(),
     })
     .unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
     assert_eq!(irq_rx.try_recv(), Err(TryRecvError::Empty));
 
     g2h_stream.write_all(h2g_data.as_bytes()).unwrap();
@@ -298,7 +300,7 @@ fn vsock_conn_test() {
         tx_buf_addr,
         &mut tx_q,
         &tx,
-        &notifier,
+        notifier.as_ref().unwrap(),
         &irq_rx,
         false,
     );
@@ -326,7 +328,7 @@ fn vsock_conn_test() {
         tx_buf_addr,
         &mut tx_q,
         &tx,
-        &notifier,
+        notifier.as_ref().unwrap(),
         &irq_rx,
         false,
     );
@@ -351,7 +353,7 @@ fn vsock_conn_test() {
         tx_buf_addr,
         &mut tx_q,
         &tx,
-        &notifier,
+        notifier.as_ref().unwrap(),
         &irq_rx,
         false,
     );
@@ -376,13 +378,13 @@ fn vsock_conn_test() {
         tx_buf_addr,
         &mut tx_q,
         &tx,
-        &notifier,
+        notifier.as_ref().unwrap(),
         &irq_rx,
         false,
     );
     assert_matches!(g2h_stream.read(&mut buf), Ok(0));
 
     tx.send(WakeEvent::Shutdown).unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
     handle.join().unwrap();
 }

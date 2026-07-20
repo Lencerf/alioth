@@ -174,6 +174,7 @@ fn test_parse_args() {
         vsock: Some(VsockSpec::Uds(UdsVsockSpec {
             cid: 3,
             path: Path::new("vsock_3.sock").into(),
+            api: WorkerApi::Mio,
         })),
         entropy: Some(EntropySpec::default()),
         balloon: Some(BalloonSpec {

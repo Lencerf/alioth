@@ -20,6 +20,7 @@ serde.workspace = true
 serde-aco.workspace = true
 snafu.workspace = true
 zerocopy.workspace = true
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "sync"] }
 
 [dev-dependencies]
 assert_matches.workspace = true

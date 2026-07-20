@@ -84,7 +84,7 @@ impl Mio {
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)>
     where
         D: VirtioMio,
         S: IrqSender,
@@ -100,11 +100,11 @@ impl<D> Backend<D> for Mio
 where
     D: VirtioMio,
 {
-    fn register_notifier(&mut self, token: u64) -> Result<Arc<Notifier>> {
+    fn register_notifier(&mut self, token: u64) -> Result<Option<Arc<Notifier>>> {
         let mut notifier = Notifier::new()?;
         let registry = self.poll.registry();
         registry.register(&mut notifier, Token(token as usize), Interest::READABLE)?;
-        Ok(Arc::new(notifier))
+        Ok(Some(Arc::new(notifier)))
     }
 
     fn reset(&self, dev: &mut D) -> Result<()> {

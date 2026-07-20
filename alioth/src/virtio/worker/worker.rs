@@ -15,6 +15,7 @@
 #[cfg(target_os = "linux")]
 pub mod io_uring;
 pub mod mio;
+pub mod tokio;
 
 use serde::Deserialize;
 use serde_aco::Help;
@@ -29,4 +30,7 @@ pub enum WorkerApi {
     #[cfg(target_os = "linux")]
     #[serde(alias = "iouring", alias = "io_uring")]
     IoUring,
+    /// Tokio async runtime. Best for devices with many concurrent
+    /// connections (e.g. vsock).
+    Tokio,
 }

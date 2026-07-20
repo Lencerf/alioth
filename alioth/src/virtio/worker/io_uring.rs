@@ -75,7 +75,7 @@ impl IoUring {
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)>
     where
         D: VirtioIoUring,
         E: IoeventFd,
@@ -103,9 +103,9 @@ impl<D> Backend<D> for IoUring
 where
     D: VirtioIoUring,
 {
-    fn register_notifier(&mut self, token: u64) -> Result<Arc<Notifier>> {
+    fn register_notifier(&mut self, token: u64) -> Result<Option<Arc<Notifier>>> {
         self.notifier_token = token;
-        Ok(self.notifier.clone())
+        Ok(Some(self.notifier.clone()))
     }
 
     fn reset(&self, _dev: &mut D) -> Result<()> {

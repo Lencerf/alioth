@@ -195,7 +195,7 @@ where
     irq_sender: Arc<PciIrqSender<M>>,
     ioeventfds: Option<Arc<[E]>>,
     event_tx: Sender<WakeEvent<PciIrqSender<M>, E>>,
-    notifier: Arc<Notifier>,
+    notifier: Option<Arc<Notifier>>,
 }
 
 impl<M, E> VirtioPciRegisterMmio<M, E>
@@ -212,7 +212,9 @@ where
         if is_start {
             return;
         }
-        if let Err(e) = self.notifier.notify() {
+        if let Some(n) = &self.notifier
+            && let Err(e) = n.notify()
+        {
             log::error!("{}: failed to wake up device: {e}", self.name);
         }
     }

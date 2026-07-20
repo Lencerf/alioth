@@ -257,7 +257,7 @@ impl Virtio for VuFrontend {
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)>
     where
         S: IrqSender,
         E: IoeventFd,

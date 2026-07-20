@@ -57,7 +57,7 @@ pub trait Virtio: Debug + Send + Sync + 'static {
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)>;
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)>;
     fn shared_mem_regions(&self) -> Option<Arc<MemRegion>> {
         None
     }
@@ -146,7 +146,7 @@ where
     pub device_feature: u128,
     pub queue_regs: Arc<[QueueReg]>,
     pub shared_mem_regions: Option<Arc<MemRegion>>,
-    pub notifier: Arc<Notifier>,
+    pub notifier: Option<Arc<Notifier>>,
     pub event_tx: Sender<WakeEvent<S, E>>,
     worker_handle: Option<JoinHandle<()>>,
 }
@@ -161,7 +161,9 @@ where
             return Ok(());
         };
         self.event_tx.send(WakeEvent::Shutdown)?;
-        self.notifier.notify()?;
+        if let Some(n) = &self.notifier {
+            n.notify()?;
+        }
         if let Err(e) = handle.join() {
             log::error!("{}: failed to join worker thread: {e:?}", self.name)
         }
@@ -229,7 +231,7 @@ where
 }
 
 pub trait Backend<D: Virtio>: Send + 'static {
-    fn register_notifier(&mut self, token: u64) -> Result<Arc<Notifier>>;
+    fn register_notifier(&mut self, token: u64) -> Result<Option<Arc<Notifier>>>;
     fn reset(&self, dev: &mut D) -> Result<()>;
     fn event_loop<'m, S, Q, E>(
         &mut self,
@@ -262,7 +264,7 @@ where
 {
     pub dev: D,
     memory: Arc<RamBus>,
-    event_rx: Receiver<WakeEvent<S, E>>,
+    pub(crate) event_rx: Receiver<WakeEvent<S, E>>,
     queue_regs: Arc<[QueueReg]>,
     pub state: WorkerState,
 }
@@ -347,7 +349,7 @@ where
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)> {
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)> {
         let notifier = backend.register_notifier(TOKEN_WARKER)?;
         let worker = Worker {
             context: Context {

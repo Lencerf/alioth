@@ -229,7 +229,7 @@ impl Virtio for Net {
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)>
     where
         S: IrqSender,
         E: IoeventFd,
@@ -237,6 +237,9 @@ impl Virtio for Net {
         match self.api {
             WorkerApi::Mio => Mio::spawn_worker(self, event_rx, memory, queue_regs),
             WorkerApi::IoUring => IoUring::spawn_worker(self, event_rx, memory, queue_regs),
+            WorkerApi::Tokio => {
+                unimplemented!("net does not support tokio backend yet")
+            }
         }
     }
 }

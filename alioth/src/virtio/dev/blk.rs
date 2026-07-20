@@ -307,7 +307,7 @@ impl Virtio for Block {
         event_rx: Receiver<WakeEvent<S, E>>,
         memory: Arc<RamBus>,
         queue_regs: Arc<[QueueReg]>,
-    ) -> Result<(JoinHandle<()>, Arc<Notifier>)>
+    ) -> Result<(JoinHandle<()>, Option<Arc<Notifier>>)>
     where
         S: IrqSender,
         E: IoeventFd,
@@ -316,6 +316,9 @@ impl Virtio for Block {
             #[cfg(target_os = "linux")]
             WorkerApi::IoUring => IoUring::spawn_worker(self, event_rx, memory, queue_regs),
             WorkerApi::Mio => Mio::spawn_worker(self, event_rx, memory, queue_regs),
+            WorkerApi::Tokio => {
+                unimplemented!("blk does not support tokio backend yet")
+            }
         }
     }
 }

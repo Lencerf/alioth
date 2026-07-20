@@ -86,7 +86,7 @@ fn entropy_test() {
         ioeventfds: Option::<Arc<[FakeIoeventFd]>>::None,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
 
     let mut writer = OpenOptions::new()
         .write(true)
@@ -96,13 +96,13 @@ fn entropy_test() {
 
     let id0 = guest_q.add_desc(&[], &[(buf0_addr, 4 << 10)]);
     tx.send(WakeEvent::Notify { q_index: 0 }).unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
     assert_eq!(irq_rx.try_recv(), Err(TryRecvError::Empty));
 
     writer.write_all(s0.as_bytes()).unwrap();
     writer.flush().unwrap();
     tx.send(WakeEvent::Notify { q_index: 0 }).unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
     assert_eq!(irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 0);
     let used0 = guest_q.get_used().unwrap();
     assert_eq!(used0.id, id0);
@@ -112,7 +112,7 @@ fn entropy_test() {
     writer.flush().unwrap();
     let id1 = guest_q.add_desc(&[], &[(buf1_addr, 4 << 10)]);
     tx.send(WakeEvent::Notify { q_index: 0 }).unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
     assert_eq!(irq_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 0);
 
     let used1 = guest_q.get_used().unwrap();
@@ -120,7 +120,7 @@ fn entropy_test() {
     assert_eq!(used1.len, s1.len() as u32);
 
     tx.send(WakeEvent::Shutdown).unwrap();
-    notifier.notify().unwrap();
+    notifier.as_ref().unwrap().notify().unwrap();
     handle.join().unwrap();
 
     for (s, addr) in [(s0, buf0_addr), (s1, buf1_addr)] {
