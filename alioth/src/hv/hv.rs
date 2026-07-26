@@ -245,22 +245,22 @@ pub trait MsiSender: Debug + Send + Sync + 'static {
     fn create_irqfd(&self) -> Result<Self::IrqFd>;
 }
 
-pub trait VmMemory: Debug + Send + Sync + 'static {
-    fn mem_map(&self, gpa: u64, size: u64, hva: usize, option: MemMapOption) -> Result<(), Error>;
+// pub trait VmMemory: Debug + Send + Sync + 'static {
+//     fn mem_map(&self, gpa: u64, size: u64, hva: usize, option: MemMapOption) -> Result<(), Error>;
 
-    fn unmap(&self, gpa: u64, size: u64) -> Result<(), Error>;
+//     fn unmap(&self, gpa: u64, size: u64) -> Result<(), Error>;
 
-    fn reset(&self) -> Result<()>;
+//     fn reset(&self) -> Result<()>;
 
-    fn register_encrypted_range(&self, _range: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-    fn deregister_encrypted_range(&self, _range: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
+//     fn register_encrypted_range(&self, _range: &[u8]) -> Result<()> {
+//         unimplemented!()
+//     }
+//     fn deregister_encrypted_range(&self, _range: &[u8]) -> Result<()> {
+//         unimplemented!()
+//     }
 
-    fn mark_private_memory(&self, gpa: u64, size: u64, private: bool) -> Result<()>;
-}
+//     fn mark_private_memory(&self, gpa: u64, size: u64, private: bool) -> Result<()>;
+// }
 
 pub trait IoeventFd: Debug + Send + Sync + AsFd + 'static {}
 
@@ -341,9 +341,9 @@ pub struct VmSpec {
     pub coco: Option<CocoSpec>,
 }
 
-pub trait Vm {
+pub trait Vm: Debug + Send + Sync + 'static {
     type Vcpu: Vcpu;
-    type Memory: VmMemory;
+    // type Memory: VmMemory;
     type IrqSender: IrqSender + Send + Sync;
     type MsiSender: MsiSender;
     type IoeventFdRegistry: IoeventFdRegistry;
@@ -353,9 +353,18 @@ pub trait Vm {
         &self,
         #[cfg(target_arch = "aarch64")] devid: u32,
     ) -> Result<Self::MsiSender>;
-    fn create_vm_memory(&mut self) -> Result<Self::Memory, Error>;
     fn create_ioeventfd_registry(&self) -> Result<Self::IoeventFdRegistry>;
     fn stop_vcpu<T>(&self, identity: u64, handle: &JoinHandle<T>) -> Result<(), Error>;
+
+    fn map(&self, gpa: u64, size: u64, hva: usize, option: MemMapOption) -> Result<(), Error>;
+
+    fn unmap(&self, gpa: u64, size: u64) -> Result<(), Error>;
+
+    fn register_encrypted_range(&self, _range: &[u8]) -> Result<()>;
+
+    fn deregister_encrypted_range(&self, _range: &[u8]) -> Result<()>;
+
+    fn mark_private_memory(&self, gpa: u64, size: u64, private: bool) -> Result<()>;
 
     #[cfg(target_arch = "x86_64")]
     fn sev_launch_start(&self, policy: SevPolicy) -> Result<()>;

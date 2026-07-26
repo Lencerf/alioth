@@ -28,7 +28,7 @@ use snafu::Snafu;
 #[cfg(target_arch = "aarch64")]
 use crate::arch::layout::IO_START;
 use crate::errors::{DebugTrace, trace_error};
-use crate::hv::{MemMapOption, VmEntry, VmMemory};
+use crate::hv::{Vm, VmEntry};
 
 use self::addressable::{Addressable, SlotBackend};
 use self::emulated::{Action, Mmio, MmioBus};
@@ -260,25 +260,29 @@ struct LayoutCallbacks {
 // lock order: region -> callbacks -> bus
 #[derive(Debug)]
 pub struct Memory {
-    regions: Mutex<Addressable<Arc<MemRegion>>>,
+    pub(crate) regions: Mutex<Addressable<Arc<MemRegion>>>,
     callbacks: Mutex<LayoutCallbacks>,
     ram_bus: Arc<RamBus>,
     mmio_bus: RwLock<MmioBus>,
-    vm_memory: Arc<dyn VmMemory>,
 
     #[cfg(target_arch = "x86_64")]
     io_bus: RwLock<MmioBus>,
     io_regions: Mutex<Addressable<Arc<IoRegion>>>,
 }
 
+impl Default for Memory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Memory {
-    pub fn new(vm_memory: Arc<dyn VmMemory>) -> Self {
+    pub fn new() -> Self {
         Memory {
             regions: Mutex::new(Addressable::new()),
             callbacks: Mutex::new(LayoutCallbacks::default()),
             ram_bus: Arc::new(RamBus::new()),
             mmio_bus: RwLock::new(MmioBus::new()),
-            vm_memory,
             #[cfg(target_arch = "x86_64")]
             io_bus: RwLock::new(MmioBus::new()),
             io_regions: Mutex::new(Addressable::new()),
@@ -306,7 +310,7 @@ impl Memory {
     pub fn register_update_callback(&self, callback: Box<dyn LayoutUpdated>) -> Result<()> {
         let _regions = self.regions.lock();
         let mut callbacks = self.callbacks.lock();
-        let ram = self.ram_bus.lock_layout();
+        let ram = self.ram_bus.ram.read();
         callback.ram_updated(&ram)?;
         callbacks.updated.push(callback);
         Ok(())
@@ -314,29 +318,15 @@ impl Memory {
 
     pub fn reset(&self) -> Result<()> {
         self.clear()?;
-        self.vm_memory.reset()?;
         Ok(())
     }
 
-    pub fn ram_bus(&self) -> Arc<RamBus> {
+    pub fn ram_bus(&self) -> &RamBus {
+        &self.ram_bus
+    }
+
+    pub fn get_ram_bus(&self) -> Arc<RamBus> {
         self.ram_bus.clone()
-    }
-
-    fn map_to_vm(&self, gpa: u64, user_mem: &ArcMemPages) -> Result<(), Error> {
-        let mem_options = MemMapOption {
-            read: true,
-            write: true,
-            exec: true,
-            log_dirty: false,
-        };
-        self.vm_memory
-            .mem_map(gpa, user_mem.size(), user_mem.addr(), mem_options)?;
-        Ok(())
-    }
-
-    fn unmap_from_vm(&self, gpa: u64, user_mem: &ArcMemPages) -> Result<(), Error> {
-        self.vm_memory.unmap(gpa, user_mem.size())?;
-        Ok(())
     }
 
     pub fn add_mmio_dev(&self, addr: u64, dev: Arc<dyn Mmio>) -> Result<()> {
@@ -358,21 +348,22 @@ impl Memory {
                     let mut mmio_bus = self.mmio_bus.write();
                     mmio_bus.add(gpa, r.clone())?
                 }
-                MemRange::Ram(r) => {
-                    self.map_to_vm(gpa, r)?;
+                MemRange::Ram(r) | MemRange::DevMem(r) => {
                     for callback in &callbacks.changed {
                         callback.ram_added(gpa, r)?;
                     }
-                    self.ram_bus.add(gpa, r.clone())?;
+                    let mut guard = self.ram_bus.ram.write();
+                    let mut ram = (**guard).clone();
+                    ram.add(gpa, r.clone())?;
+                    *guard = Arc::new(ram);
                     ram_updated = true;
                 }
-                MemRange::DevMem(r) => self.map_to_vm(gpa, r)?,
                 MemRange::Span(_) => {}
             }
             offset += range.size();
         }
         if ram_updated {
-            let ram = self.ram_bus.lock_layout();
+            let ram = self.ram_bus.ram.read();
             for update_callback in &callbacks.updated {
                 update_callback.ram_updated(&ram)?;
             }
@@ -395,21 +386,23 @@ impl Memory {
                     let mut mmio_bus = self.mmio_bus.write();
                     mmio_bus.remove(gpa)?;
                 }
-                MemRange::Ram(r) => {
-                    self.ram_bus.remove(gpa)?;
+                MemRange::Ram(r) | MemRange::DevMem(r) => {
                     for callback in callbacks.changed.iter().rev() {
                         callback.ram_removed(gpa, r)?;
                     }
-                    self.unmap_from_vm(gpa, r)?;
+                    let mut guard = self.ram_bus.ram.write();
+                    let mut ram = (**guard).clone();
+                    ram.remove(gpa)?;
+                    *guard = Arc::new(ram);
                     ram_updated = true;
                 }
-                MemRange::DevMem(r) => self.unmap_from_vm(gpa, r)?,
+                // MemRange::DevMem(r) => self.unmap_from_vm(gpa, r)?,
                 MemRange::Span(_) => {}
             };
             offset += range.size();
         }
         if ram_updated {
-            let ram = self.ram_bus.lock_layout();
+            let ram = self.ram_bus.ram.read();
             for callback in &callbacks.updated {
                 callback.ram_updated(&ram)?;
             }
@@ -514,19 +507,13 @@ impl Memory {
         Ok(io_region)
     }
 
-    pub fn register_encrypted_pages(&self, pages: &ArcMemPages) -> Result<()> {
-        self.vm_memory.register_encrypted_range(pages.as_slice())?;
-        Ok(())
-    }
-
-    pub fn deregister_encrypted_pages(&self, pages: &ArcMemPages) -> Result<()> {
-        self.vm_memory
-            .deregister_encrypted_range(pages.as_slice())?;
-        Ok(())
-    }
-
-    pub fn mark_private_memory(&self, gpa: u64, size: u64, private: bool) -> Result<()> {
-        let vm_memory = &self.vm_memory;
+    pub fn mark_private_memory<V: Vm>(
+        &self,
+        vm: &V,
+        gpa: u64,
+        size: u64,
+        private: bool,
+    ) -> Result<()> {
         let regions = self.regions.lock();
         let end = gpa + size;
         let mut start = gpa;
@@ -547,7 +534,7 @@ impl Memory {
                 if gpa_start >= gpa_end {
                     break 'out;
                 }
-                vm_memory.mark_private_memory(gpa_start, gpa_end - gpa_start, private)?;
+                vm.mark_private_memory(gpa_start, gpa_end - gpa_start, private)?;
                 start = gpa_end;
             }
             if next_start >= end {
@@ -607,13 +594,16 @@ impl Memory {
 }
 
 #[derive(Debug)]
-pub struct MarkPrivateMemory {
-    pub memory: Arc<dyn VmMemory>,
+pub struct MarkPrivateMemory<V> {
+    pub vm: Arc<V>,
 }
 
-impl LayoutChanged for MarkPrivateMemory {
+impl<V> LayoutChanged for MarkPrivateMemory<V>
+where
+    V: Vm,
+{
     fn ram_added(&self, gpa: u64, pages: &ArcMemPages) -> Result<()> {
-        self.memory.mark_private_memory(gpa, pages.size(), true)?;
+        self.vm.mark_private_memory(gpa, pages.size(), true)?;
         Ok(())
     }
 

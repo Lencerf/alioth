@@ -259,7 +259,7 @@ where
             .collect::<Result<Vec<_>, _>>()
             .context(error::FwCfg)?;
         let fw_cfg = Arc::new(Mutex::new(
-            FwCfg::new(self.ctx.board.memory.ram_bus(), items).context(error::FwCfg)?,
+            FwCfg::new(self.ctx.board.memory.get_ram_bus(), items).context(error::FwCfg)?,
         ));
         let mut io_devs = self.ctx.board.io_devs.write();
         io_devs.push((PORT_FW_CFG_SELECTOR, fw_cfg.clone()));
@@ -282,17 +282,11 @@ where
         let name = name.into();
         let bdf = self.ctx.board.pci_bus.reserve(None).unwrap();
         let dev = spec.build(name.clone())?;
-        if let Some(callback) = dev.mem_update_callback() {
-            self.ctx.board.memory.register_update_callback(callback)?;
-        }
-        if let Some(callback) = dev.mem_change_callback() {
-            self.ctx.board.memory.register_change_callback(callback)?;
-        }
         let registry = self.ctx.board.vm.create_ioeventfd_registry()?;
         let virtio_dev = VirtioDevice::new(
             name.clone(),
             dev,
-            self.ctx.board.memory.ram_bus(),
+            &self.ctx.board.memory,
             self.ctx.board.spec.coco.is_some(),
         )?;
         let msi_sender = self.ctx.board.vm.create_msi_sender(

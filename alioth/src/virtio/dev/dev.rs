@@ -34,7 +34,7 @@ use snafu::ResultExt;
 use crate::hv::IoeventFd;
 use crate::mem::emulated::Mmio;
 use crate::mem::mapped::{Ram, RamBus};
-use crate::mem::{LayoutChanged, LayoutUpdated, MemRegion};
+use crate::mem::{self, LayoutChanged, LayoutUpdated, MemRegion, Memory};
 use crate::sync::notifier::Notifier;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
@@ -87,22 +87,14 @@ pub struct Register {
 const TOKEN_WARKER: u64 = 1 << 63;
 
 #[derive(Debug, Clone)]
-pub struct StartParam<S, E>
-where
-    S: IrqSender,
-    E: IoeventFd,
-{
+pub struct StartParam<S, E> {
     pub(crate) feature: u128,
     pub(crate) irq_sender: Arc<S>,
     pub(crate) ioeventfds: Option<Arc<[E]>>,
 }
 
 #[derive(Debug, Clone)]
-pub enum WakeEvent<S, E>
-where
-    S: IrqSender,
-    E: IoeventFd,
-{
+pub enum WakeEvent<S, E> {
     Notify {
         q_index: u16,
     },
@@ -114,12 +106,14 @@ where
     Start {
         param: StartParam<S, E>,
     },
+    MemoryUpdate,
     Reset,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum WorkerState {
     Pending,
+    Stable,
     Running,
     Shutdown,
 }
@@ -132,6 +126,22 @@ where
 {
     context: Context<D, S, E>,
     backend: B,
+}
+
+#[derive(Debug)]
+struct NotifyMemoryUpdate<S, E> {
+    event_tx: Sender<WakeEvent<S, E>>,
+}
+
+impl<S, E> LayoutUpdated for NotifyMemoryUpdate<S, E>
+where
+    S: IrqSender,
+    E: IoeventFd,
+{
+    fn ram_updated(&self, _ram: &Ram) -> mem::Result<()> {
+        let _ = self.event_tx.send(WakeEvent::MemoryUpdate);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -171,7 +181,7 @@ where
     pub fn new<D>(
         name: impl Into<Arc<str>>,
         dev: D,
-        memory: Arc<RamBus>,
+        memory: &Memory,
         restricted_memory: bool,
     ) -> Result<Self>
     where
@@ -195,7 +205,19 @@ where
 
         let shared_mem_regions = dev.shared_mem_regions();
         let (event_tx, event_rx) = flume::unbounded();
-        let (handle, notifier) = dev.spawn_worker(event_rx, memory, queue_regs.clone())?;
+
+        if let Some(callback) = dev.mem_update_callback() {
+            memory.register_update_callback(callback)?;
+        }
+        memory.register_update_callback(Box::new(NotifyMemoryUpdate {
+            event_tx: event_tx.clone(),
+        }))?;
+        if let Some(callback) = dev.mem_change_callback() {
+            memory.register_change_callback(callback)?;
+        }
+
+        let ram_bus = memory.get_ram_bus();
+        let (handle, notifier) = dev.spawn_worker(event_rx, ram_bus, queue_regs.clone())?;
         log::debug!(
             "{name}: created with {:x?}, {:x?}",
             VirtioFeature::from_bits_retain(device_feature & !D::Feature::all().bits()),
@@ -284,6 +306,11 @@ where
                     self.state = WorkerState::Shutdown;
                     break;
                 }
+                WakeEvent::MemoryUpdate => {
+                    self.state = WorkerState::Stable;
+                    log::debug!("{}: memory to be refreshed", self.dev.name());
+                    break;
+                }
                 WakeEvent::Start { .. } => {
                     log::error!("{}: device has already started", self.dev.name())
                 }
@@ -302,7 +329,7 @@ where
     fn wait_start(&mut self) -> Option<StartParam<S, E>> {
         for wake_event in self.event_rx.iter() {
             match wake_event {
-                WakeEvent::Reset => {}
+                WakeEvent::Reset | WakeEvent::MemoryUpdate => {}
                 WakeEvent::Start { param } => {
                     self.state = WorkerState::Running;
                     return Some(param);
@@ -391,31 +418,36 @@ where
         let Some(param) = self.context.wait_start() else {
             return Ok(());
         };
-        let memory = self.context.memory.clone();
-        let ram = memory.lock_layout();
         let feature = param.feature & !VirtioFeature::ACCESS_PLATFORM.bits();
         let queue_regs = self.context.queue_regs.clone();
         let feature = VirtioFeature::from_bits_retain(feature);
         let event_idx = feature.contains(VirtioFeature::EVENT_IDX);
-        if feature.contains(VirtioFeature::RING_PACKED) {
-            let new_queue = |reg| {
-                let Some(split_queue) = PackedQueue::new(reg, &ram, event_idx)? else {
-                    return Ok(None);
+        loop {
+            let ram = self.context.memory.ram.read().clone();
+            if feature.contains(VirtioFeature::RING_PACKED) {
+                let new_queue = |reg| {
+                    let Some(split_queue) = PackedQueue::new(reg, &ram, event_idx)? else {
+                        return Ok(None);
+                    };
+                    Ok(Some(Queue::new(split_queue, reg, &ram)))
                 };
-                Ok(Some(Queue::new(split_queue, reg, &ram)))
-            };
-            let queues: Result<Box<_>> = queue_regs.iter().map(new_queue).collect();
-            self.event_loop(&mut (queues?), &ram, &param)?;
-        } else {
-            let new_queue = |reg| {
-                let Some(split_queue) = SplitQueue::new(reg, &ram, event_idx)? else {
-                    return Ok(None);
+                let queues: Result<Box<_>> = queue_regs.iter().map(new_queue).collect();
+                self.event_loop(&mut (queues?), &ram, &param)?;
+            } else {
+                let new_queue = |reg| {
+                    let Some(split_queue) = SplitQueue::new(reg, &ram, event_idx)? else {
+                        return Ok(None);
+                    };
+                    Ok(Some(Queue::new(split_queue, reg, &ram)))
                 };
-                Ok(Some(Queue::new(split_queue, reg, &ram)))
+                let queues: Result<Box<_>> = queue_regs.iter().map(new_queue).collect();
+                self.event_loop(&mut (queues?), &ram, &param)?;
             };
-            let queues: Result<Box<_>> = queue_regs.iter().map(new_queue).collect();
-            self.event_loop(&mut (queues?), &ram, &param)?;
-        };
+            if self.context.state != WorkerState::Stable {
+                break;
+            }
+            log::debug!("{}: refreshing memory", self.context.dev.name());
+        }
         self.backend.reset(&mut self.context.dev)?;
         Ok(())
     }

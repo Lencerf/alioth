@@ -236,14 +236,14 @@ where
         Ok(())
     }
 
-    pub fn coco_init(&self, memory: Arc<V::Memory>) -> Result<()> {
+    pub fn coco_init(&self) -> Result<()> {
         let Some(coco) = &self.spec.coco else {
             return Ok(());
         };
         match coco {
-            CocoSpec::AmdSev { policy } => self.sev_init(*policy, memory)?,
-            CocoSpec::AmdSnp { policy } => self.snp_init(*policy, memory)?,
-            CocoSpec::IntelTdx { attr } => self.tdx_init(*attr, memory)?,
+            CocoSpec::AmdSev { policy } => self.sev_init(*policy)?,
+            CocoSpec::AmdSnp { policy } => self.snp_init(*policy)?,
+            CocoSpec::IntelTdx { attr } => self.tdx_init(*attr)?,
         }
         Ok(())
     }
@@ -325,7 +325,7 @@ where
         memory.add_io_dev(PORT_ACPI_SLEEP_CONTROL, Arc::new(FadtSleepControl))?;
         memory.add_io_dev(PORT_ACPI_TIMER, Arc::new(AcpiPmTimer::new()))?;
         if self.spec.coco.is_none() {
-            let ram = memory.ram_bus();
+            let ram = memory.ram_bus().ram.read();
             acpi_table.relocate(EBDA_START + size_of::<AcpiTableRsdp>() as u64);
             acpi_table.update_checksums();
             ram.write_range(

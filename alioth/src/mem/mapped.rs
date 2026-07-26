@@ -31,7 +31,7 @@ use libc::{
     MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, MAP_SHARED, MS_ASYNC, PROT_READ, PROT_WRITE, c_void,
     madvise, mmap, msync, munmap,
 };
-use parking_lot::{RwLock, RwLockReadGuard};
+use parking_lot::RwLock;
 use snafu::ResultExt;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -180,14 +180,9 @@ impl ArcMemPages {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub struct Ram {
     inner: Addressable<ArcMemPages>,
-}
-
-#[derive(Debug)]
-pub struct RamBus {
-    ram: RwLock<Ram>,
 }
 
 struct Iter<'m> {
@@ -392,75 +387,16 @@ impl Ram {
         }
         Ok(())
     }
-}
-
-impl Default for RamBus {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RamBus {
-    pub fn lock_layout(&self) -> RwLockReadGuard<'_, Ram> {
-        self.ram.read()
-    }
-
-    pub fn new() -> Self {
-        Self {
-            ram: RwLock::new(Ram {
-                inner: Addressable::default(),
-            }),
-        }
-    }
-
-    pub(crate) fn add(&self, gpa: u64, user_mem: ArcMemPages) -> Result<(), Error> {
-        let mut ram = self.ram.write();
-        ram.inner.add(gpa, user_mem)?;
-        Ok(())
-    }
-
-    pub(crate) fn remove(&self, gpa: u64) -> Result<ArcMemPages, Error> {
-        let mut ram = self.ram.write();
-        ram.inner.remove(gpa)
-    }
-
-    pub fn read(&self, gpa: u64, buf: &mut [u8]) -> Result<()> {
-        let ram = self.ram.read();
-        ram.read(gpa, buf)
-    }
-
-    pub fn write(&self, gpa: u64, buf: &[u8]) -> Result<()> {
-        let ram = self.ram.read();
-        ram.write(gpa, buf)
-    }
-
-    pub fn read_t<T>(&self, gpa: u64) -> Result<T, Error>
-    where
-        T: FromBytes + IntoBytes,
-    {
-        let ram = self.ram.read();
-        ram.read_t(gpa)
-    }
-
-    pub fn write_t<T>(&self, gpa: u64, val: &T) -> Result<(), Error>
-    where
-        T: IntoBytes + Immutable,
-    {
-        let ram = self.ram.read();
-        ram.write_t(gpa, val)
-    }
 
     pub fn read_range(&self, gpa: u64, len: u64, dst: &mut impl Write) -> Result<()> {
-        let ram = self.ram.read();
-        for r in ram.slice_iter(gpa, len) {
+        for r in self.slice_iter(gpa, len) {
             dst.write_all(r?).context(error::Write)?;
         }
         Ok(())
     }
 
     pub fn write_range(&self, gpa: u64, len: u64, mut src: impl Read) -> Result<()> {
-        let ram = self.ram.read();
-        for r in ram.slice_iter_mut(gpa, len) {
+        for r in self.slice_iter_mut(gpa, len) {
             src.read_exact(r?).context(error::Read)?;
         }
         Ok(())
@@ -470,10 +406,9 @@ impl RamBus {
     where
         F: FnOnce(&[IoSlice<'_>]) -> T,
     {
-        let ram = self.ram.read();
         let mut iov = vec![];
         for (gpa, len) in bufs {
-            for r in ram.slice_iter(*gpa, *len) {
+            for r in self.slice_iter(*gpa, *len) {
                 iov.push(IoSlice::new(r?));
             }
         }
@@ -484,17 +419,62 @@ impl RamBus {
     where
         F: FnOnce(&mut [IoSliceMut<'_>]) -> T,
     {
-        let ram = self.ram.read();
         let mut iov = vec![];
         for (gpa, len) in bufs {
-            for r in ram.slice_iter_mut(*gpa, *len) {
+            for r in self.slice_iter_mut(*gpa, *len) {
                 iov.push(IoSliceMut::new(r?));
             }
         }
         Ok(callback(&mut iov))
     }
+
+    pub fn add(&mut self, gpa: u64, user_mem: ArcMemPages) -> Result<()> {
+        self.inner.add(gpa, user_mem)?;
+        Ok(())
+    }
+
+    pub fn remove(&mut self, gpa: u64) -> Result<ArcMemPages> {
+        self.inner.remove(gpa)
+    }
 }
 
-#[cfg(test)]
-#[path = "mapped_test.rs"]
-mod tests;
+#[derive(Debug)]
+pub struct RamBus {
+    pub(crate) ram: RwLock<Arc<Ram>>,
+}
+
+impl Default for RamBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RamBus {
+    // pub fn ram(&self) -> RwLockReadGuard<'_, Arc<Ram>> {
+    //     self.ram.read()
+    // }
+
+    // pub fn ram_mut(&self) -> RwLockWriteGuard<'_, Arc<Ram>> {
+    //     self.ram.write()
+    // }
+
+    // pub fn get_ram(&self) -> Arc<Ram> {
+    //     self.ram.read().clone()
+    // }
+
+    // pub fn update(&self, ram: Ram) {
+    //     *self.ram.write() = Arc::new(ram);
+    // }
+
+    pub fn new() -> Self {
+        Self {
+            ram: RwLock::new(Arc::new(Ram {
+                inner: Addressable::default(),
+            })),
+        }
+    }
+}
+
+// #[cfg(test)]
+// #[path = "mapped_test.rs"]
+// mod tests;

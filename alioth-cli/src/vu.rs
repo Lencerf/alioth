@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use alioth::errors::{DebugTrace, trace_error};
-use alioth::mem::mapped::RamBus;
+use alioth::mem::Memory;
 use alioth::virtio::dev::blk::BlkFileSpec;
 use alioth::virtio::dev::fs::shared_dir::SharedDirSpec;
 use alioth::virtio::dev::net::tap::TapNetSpec;
@@ -107,7 +107,7 @@ pub struct VuArgs {
 fn create_dev<D, P>(
     name: String,
     args: &DevArgs<P>,
-    memory: Arc<RamBus>,
+    memory: &Memory,
 ) -> Result<VirtioDevice<VuIrqSender, VuEventfd>, Error>
 where
     D: Virtio,
@@ -136,12 +136,12 @@ pub fn start(args: VuArgs) -> Result<(), Error> {
     let listener = UnixListener::bind(&socket).context(error::Bind { socket })?;
     let mut index = 0i32;
     loop {
-        let memory = Arc::new(RamBus::new());
+        let memory = Memory::new();
         let dev = match &ty {
-            DevType::Net(args) => create_dev(format!("net-{index}"), args, memory.clone()),
-            DevType::Blk(args) => create_dev(format!("blk-{index}"), args, memory.clone()),
-            DevType::Fs(args) => create_dev(format!("fs-{index}"), args, memory.clone()),
-            DevType::Vsock(args) => create_dev(format!("vsock-{index}"), args, memory.clone()),
+            DevType::Net(args) => create_dev(format!("net-{index}"), args, &memory),
+            DevType::Blk(args) => create_dev(format!("blk-{index}"), args, &memory),
+            DevType::Fs(args) => create_dev(format!("fs-{index}"), args, &memory),
+            DevType::Vsock(args) => create_dev(format!("vsock-{index}"), args, &memory),
         }?;
         let (conn, _) = listener.accept().context(error::Accept)?;
         let backend = VuBackend::new(conn, dev, memory).context(error::CreateVu)?;

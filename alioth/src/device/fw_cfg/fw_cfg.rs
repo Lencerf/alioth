@@ -376,9 +376,8 @@ impl FwCfg {
     ) -> Result<u32> {
         let content_size = content.size()?.saturating_sub(offset);
         let op_size = std::cmp::min(content_size, len);
-        let r = self
-            .memory
-            .write_range(address, op_size as u64, content.access(offset));
+        let ram = self.memory.ram.read();
+        let r = ram.write_range(address, op_size as u64, content.access(offset));
         match r {
             Err(e) => {
                 log::error!("fw_cfg: dam read error: {e:x?}");
@@ -407,7 +406,7 @@ impl FwCfg {
 
     fn do_dma(&mut self) {
         let dma_address = self.dma_address;
-        let dma_access: FwCfgDmaAccess = match self.memory.read_t(dma_address) {
+        let dma_access: FwCfgDmaAccess = match self.memory.ram.read().read_t(dma_address) {
             Ok(access) => access,
             Err(e) => {
                 log::error!("fw_cfg: invalid address of dma access {dma_address:#x}: {e:?}");
@@ -435,7 +434,7 @@ impl FwCfg {
             log::error!("fw_cfg: dma operation {dma_access:x?}: {e:x?}");
             access_resp.set_error(true);
         }
-        if let Err(e) = self.memory.write_t(
+        if let Err(e) = self.memory.ram.read().write_t(
             dma_address + FwCfgDmaAccess::OFFSET_CONTROL as u64,
             &Bu32::from(access_resp.0),
         ) {
