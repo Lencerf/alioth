@@ -130,7 +130,7 @@ where
         Ok(())
     }
 
-    pub fn coco_init(&self, _: Arc<V::Memory>) -> Result<()> {
+    pub fn coco_init(&self) -> Result<()> {
         Ok(())
     }
 
@@ -520,7 +520,7 @@ where
         self.create_psci_node(root);
         log::debug!("device tree: {device_tree:#x?}");
         let blob = device_tree.to_blob();
-        let ram = self.memory.ram_bus();
+        let ram = self.memory.ram_bus().ram.read();
         assert!(blob.len() as u64 <= DEVICE_TREE_LIMIT);
         ram.write_range(DEVICE_TREE_START, blob.len() as u64, &*blob)?;
         Ok(())
