@@ -349,6 +349,10 @@ impl Memory {
                     mmio_bus.add(gpa, r.clone())?
                 }
                 MemRange::Ram(r) | MemRange::DevMem(r) => {
+                    log::info!(
+                        "adding ram range: {range:?}, changed callbacks: {:#x?}",
+                        callbacks.changed
+                    );
                     for callback in &callbacks.changed {
                         callback.ram_added(gpa, r)?;
                     }
@@ -364,6 +368,7 @@ impl Memory {
         }
         if ram_updated {
             let ram = self.ram_bus.ram.read();
+            log::info!("calling update callbacks: {:#x?}", callbacks.updated);
             for update_callback in &callbacks.updated {
                 update_callback.ram_updated(&ram)?;
             }

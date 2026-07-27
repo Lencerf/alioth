@@ -109,14 +109,16 @@ pub struct UpdateContainerMapping {
 
 impl LayoutChanged for UpdateContainerMapping {
     fn ram_added(&self, gpa: u64, pages: &ArcMemPages) -> mem::Result<()> {
-        let ret = self.container.map(pages.addr(), gpa, pages.size());
-        ret.box_trace(mem::error::ChangeLayout)?;
-        Ok(())
+        self.container
+            .map(pages.addr(), gpa, pages.size())
+            .map_err(|e| Box::new(e) as _)
+            .context(mem::error::ChangeLayout)
     }
 
     fn ram_removed(&self, gpa: u64, pages: &ArcMemPages) -> mem::Result<()> {
-        let ret = self.container.unmap(gpa, pages.size());
-        ret.box_trace(mem::error::ChangeLayout)?;
-        Ok(())
+        self.container
+            .unmap(gpa, pages.size())
+            .map_err(|e| Box::new(e) as _)
+            .context(mem::error::ChangeLayout)
     }
 }

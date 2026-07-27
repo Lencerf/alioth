@@ -276,7 +276,7 @@ impl<V: Vm> VcpuThread<V> {
             if self.index == 0 {
                 let board = &self.ctx.board;
                 board.pci_bus.segment.reset().context(error::ResetPci)?;
-                board.memory.reset()?;
+                let _ = board.memory.reset();
             }
             self.reset_vcpu()?;
 

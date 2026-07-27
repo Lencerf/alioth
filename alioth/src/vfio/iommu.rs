@@ -14,7 +14,7 @@
 
 use std::fs::File;
 use std::mem::size_of;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,6 +23,7 @@ use snafu::ResultExt;
 use crate::errors::BoxTrace;
 use crate::mem::mapped::ArcMemPages;
 use crate::mem::{self, LayoutChanged};
+use crate::sys::iommufd::{IommuIoasMapFile, iommu_ioas_map_file};
 use crate::sys::vfio::{
     IommuDestroy, IommuIoasAlloc, IommuIoasMap, IommuIoasMapFlag, IommuIoasUnmap, iommu_destroy,
     iommu_ioas_alloc, iommu_ioas_map, iommu_ioas_unmap,
@@ -99,6 +100,27 @@ impl Ioas {
         Ok(())
     }
 
+    pub fn map_file(&self, fd: BorrowedFd, start: u64, iova: u64, len: u64) -> Result<()> {
+        let ioas_map_file = IommuIoasMapFile {
+            size: size_of::<IommuIoasMapFile>() as u32,
+            flags: IommuIoasMapFlag::READABLE
+                | IommuIoasMapFlag::WRITEABLE
+                | IommuIoasMapFlag::FIXED_IOVA,
+            ioas_id: self.id,
+            fd: fd.as_raw_fd(),
+            start,
+            length: len,
+            iova,
+        };
+        log::debug!(
+            "ioas-{}-{}: mapped file: {iova:#018x} -> fd = {fd:?}, offset = {start:#x}, size = {len:#x}",
+            self.iommu.fd.as_raw_fd(),
+            self.id,
+        );
+        unsafe { iommu_ioas_map_file(&self.iommu.fd, &ioas_map_file) }?;
+        Ok(())
+    }
+
     pub fn unmap(&self, iova: u64, len: u64) -> Result<()> {
         let ioas_unmap = IommuIoasUnmap {
             size: size_of::<IommuIoasUnmap>() as u32,
@@ -127,14 +149,23 @@ pub struct UpdateIommuIoas {
 
 impl LayoutChanged for UpdateIommuIoas {
     fn ram_added(&self, gpa: u64, pages: &ArcMemPages) -> mem::Result<()> {
-        let ret = self.ioas.map(pages.addr(), gpa, pages.size());
-        ret.box_trace(mem::error::ChangeLayout)?;
-        Ok(())
+        if let Some((fd, offset)) = pages.fd() {
+            self.ioas
+                .map_file(fd, offset, gpa, pages.size())
+                .map_err(|e| Box::new(e) as _)
+                .context(mem::error::ChangeLayout)
+        } else {
+            self.ioas
+                .map(pages.addr(), gpa, pages.size())
+                .map_err(|e| Box::new(e) as _)
+                .context(mem::error::ChangeLayout)
+        }
     }
 
     fn ram_removed(&self, gpa: u64, pages: &ArcMemPages) -> mem::Result<()> {
-        let ret = self.ioas.unmap(gpa, pages.size());
-        ret.box_trace(mem::error::ChangeLayout)?;
-        Ok(())
+        self.ioas
+            .unmap(gpa, pages.size())
+            .map_err(|e| Box::new(e) as _)
+            .context(mem::error::ChangeLayout)
     }
 }

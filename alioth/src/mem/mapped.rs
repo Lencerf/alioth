@@ -120,6 +120,25 @@ impl ArcMemPages {
         Ok(Self::from_raw(addr, len, Some((file, offset as u64))))
     }
 
+    /// # Safety
+    ///
+    /// The caller must ensure that `dma_buf_fd` is a valid DMA buffer file descriptor.
+    pub unsafe fn from_dma_buf(
+        dev_fd: BorrowedFd,
+        offset: u64,
+        len: usize,
+        prot: i32,
+        dma_buf_fd: File,
+    ) -> Result<Self> {
+        let offset = offset as i64;
+        let fd = dev_fd.as_raw_fd();
+        let addr = ffi!(
+            unsafe { mmap(null_mut(), len, prot, MAP_SHARED, fd, offset,) },
+            MAP_FAILED
+        )?;
+        Ok(Self::from_raw(addr, len, Some((dma_buf_fd, 0))))
+    }
+
     #[cfg(target_os = "linux")]
     pub fn from_memfd(name: &CStr, size: usize, prot: Option<i32>) -> Result<Self> {
         let fd = ffi!(unsafe { libc::memfd_create(name.as_ptr(), MFD_CLOEXEC) })?;

@@ -224,7 +224,7 @@ where
 
         let board = Board {
             vm,
-            memory: Memory::new(),
+            memory,
             arch,
             spec,
             payload: RwLock::new(None),

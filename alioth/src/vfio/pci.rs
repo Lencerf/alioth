@@ -17,7 +17,7 @@ use std::fs::File;
 use std::iter::zip;
 use std::mem::size_of;
 use std::ops::Range;
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -42,8 +42,9 @@ use crate::pci::config::{
 };
 use crate::pci::{self, Pci, PciBar};
 use crate::sys::vfio::{
+    DeviceFeature, VfioDeviceFeature, VfioDeviceFeatureDmaBuf, VfioDeviceFeatureFlag,
     VfioDeviceInfoFlag, VfioIrqSet, VfioIrqSetData, VfioIrqSetFlag, VfioPciIrq, VfioPciRegion,
-    VfioRegionInfo, VfioRegionInfoFlag,
+    VfioRegionDmaRange, VfioRegionInfo, VfioRegionInfoFlag, vfio_device_feature,
 };
 use crate::vfio::device::Device;
 use crate::vfio::{Result, error};
@@ -55,18 +56,40 @@ fn round_up_range(range: Range<usize>) -> Range<usize> {
 
 fn create_mapped_bar_pages(
     fd: &File,
-    region_flags: VfioRegionInfoFlag,
-    offset: i64,
+    region: &VfioRegionInfo,
+    offset: u64,
     size: usize,
 ) -> Result<ArcMemPages> {
+    let data = VfioDeviceFeatureDmaBuf {
+        region_index: region.index,
+        open_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
+        flags: 0,
+        nr_ranges: 1,
+        dma_range: VfioRegionDmaRange {
+            offset,
+            length: size as u64,
+        },
+    };
+    let mut feature = VfioDeviceFeature {
+        argsz: 0,
+        flags: VfioDeviceFeatureFlag::new(DeviceFeature::DMA_BUF, true, false, false),
+        data: [0u8; size_of::<VfioDeviceFeatureDmaBuf>()],
+    };
+    feature.data.copy_from_slice(data.as_bytes());
+    feature.argsz = size_of_val(&feature) as u32;
+    let dma_buf_fd = unsafe { vfio_device_feature(fd, &feature) }.unwrap();
+    log::debug!("got region info fd: {}", dma_buf_fd);
+    let f = unsafe { File::from_raw_fd(dma_buf_fd) };
+
     let mut prot = 0;
-    if region_flags.contains(VfioRegionInfoFlag::READ) {
+    if region.flags.contains(VfioRegionInfoFlag::READ) {
         prot |= PROT_READ;
     }
-    if region_flags.contains(VfioRegionInfoFlag::WRITE) {
+    if region.flags.contains(VfioRegionInfoFlag::WRITE) {
         prot |= PROT_WRITE;
     }
-    let mapped_pages = ArcMemPages::from_file(fd.try_clone()?, offset, size, prot)?;
+    let mapped_pages =
+        unsafe { ArcMemPages::from_dma_buf(fd.as_fd(), region.offset + offset, size, prot, f)? };
     Ok(mapped_pages)
 }
 
@@ -109,8 +132,8 @@ where
     if excluded_page1.start > 0 {
         region.ranges.push(MemRange::DevMem(create_mapped_bar_pages(
             dev.dev.fd(),
-            region_info.flags,
-            region_info.offset as i64,
+            region_info,
+            0,
             excluded_page1.start,
         )?));
     }
@@ -130,8 +153,8 @@ where
     if excluded_page2.start - excluded_page1.end > 0 {
         region.ranges.push(MemRange::DevMem(create_mapped_bar_pages(
             dev.dev.fd(),
-            region_info.flags,
-            region_info.offset as i64 + excluded_page1.end as i64,
+            region_info,
+            excluded_page1.end as u64,
             excluded_page2.start - excluded_page1.end,
         )?));
     }
@@ -151,8 +174,8 @@ where
     if excluded_page2.end < region_info.size as usize {
         region.ranges.push(MemRange::DevMem(create_mapped_bar_pages(
             dev.dev.fd(),
-            region_info.flags,
-            region_info.offset as i64 + excluded_page2.end as i64,
+            region_info,
+            excluded_page2.end as u64,
             region_info.size as usize - excluded_page2.end,
         )?));
     }

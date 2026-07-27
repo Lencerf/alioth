@@ -329,7 +329,10 @@ where
     fn wait_start(&mut self) -> Option<StartParam<S, E>> {
         for wake_event in self.event_rx.iter() {
             match wake_event {
-                WakeEvent::Reset | WakeEvent::MemoryUpdate => {}
+                WakeEvent::Reset => {}
+                WakeEvent::MemoryUpdate => {
+                    log::debug!("{}: pre-start MemoryUpdate ignored", self.dev.name())
+                }
                 WakeEvent::Start { param } => {
                     self.state = WorkerState::Running;
                     return Some(param);
