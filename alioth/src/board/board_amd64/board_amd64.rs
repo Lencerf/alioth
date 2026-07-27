@@ -325,7 +325,7 @@ where
         memory.add_io_dev(PORT_ACPI_SLEEP_CONTROL, Arc::new(FadtSleepControl))?;
         memory.add_io_dev(PORT_ACPI_TIMER, Arc::new(AcpiPmTimer::new()))?;
         if self.spec.coco.is_none() {
-            let ram = memory.ram_bus();
+            let ram = memory.ram_bus().ram.read();
             acpi_table.relocate(EBDA_START + size_of::<AcpiTableRsdp>() as u64);
             acpi_table.update_checksums();
             ram.write_range(

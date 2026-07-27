@@ -169,9 +169,10 @@ impl<V: Vm> VcpuThread<V> {
             return error::MissingPayload.fail();
         };
         let mem_regions = self.ctx.board.memory.mem_region_entries();
+        let ram = self.ctx.board.memory.ram_bus().ram.read();
         let init_state = match exec {
             Executable::Linux(image) => linux::load(
-                &self.ctx.board.memory.ram_bus(),
+                &ram,
                 &mem_regions,
                 image.as_ref(),
                 payload.cmdline.as_deref(),
@@ -179,7 +180,7 @@ impl<V: Vm> VcpuThread<V> {
             ),
             #[cfg(target_arch = "x86_64")]
             Executable::Pvh(image) => xen::load(
-                &self.ctx.board.memory.ram_bus(),
+                &ram,
                 &mem_regions,
                 image.as_ref(),
                 payload.cmdline.as_deref(),

@@ -14,6 +14,7 @@
 
 use std::io::{Read, Write};
 use std::mem::size_of;
+use std::sync::Arc;
 
 use assert_matches::assert_matches;
 use libc::{PROT_READ, PROT_WRITE};
@@ -36,12 +37,19 @@ fn test_ram_bus_read() {
     let mem1 = ArcMemPages::from_anonymous(PAGE_SIZE as usize, Some(prot), None).unwrap();
     let mem2 = ArcMemPages::from_anonymous(PAGE_SIZE as usize, Some(prot), None).unwrap();
 
+    let add_to_bus = |gpa: u64, mem: ArcMemPages| {
+        let mut guard = bus.ram.write();
+        let mut ram = (**guard).clone();
+        ram.add(gpa, mem).unwrap();
+        *guard = Arc::new(ram);
+    };
+
     if mem1.addr > mem2.addr {
-        bus.add(0x0, mem1).unwrap();
-        bus.add(PAGE_SIZE, mem2).unwrap();
+        add_to_bus(0x0, mem1);
+        add_to_bus(PAGE_SIZE, mem2);
     } else {
-        bus.add(0x0, mem2).unwrap();
-        bus.add(PAGE_SIZE, mem1).unwrap();
+        add_to_bus(0x0, mem2);
+        add_to_bus(PAGE_SIZE, mem1);
     }
 
     let data = MyStruct {
@@ -49,45 +57,52 @@ fn test_ram_bus_read() {
     };
     let data_size = size_of::<MyStruct>() as u64;
     for gpa in (PAGE_SIZE - data_size)..=PAGE_SIZE {
-        bus.write_t(gpa, &data).unwrap();
-        let r: MyStruct = bus.read_t(gpa).unwrap();
+        let ram = bus.ram.read().clone();
+        ram.write_t(gpa, &data).unwrap();
+        let r: MyStruct = ram.read_t(gpa).unwrap();
         assert_eq!(r, data)
     }
     let memory_end = PAGE_SIZE * 2;
     for gpa in (memory_end - data_size - 10)..=(memory_end - data_size) {
-        bus.write_t(gpa, &data).unwrap();
-        let r: MyStruct = bus.read_t(gpa).unwrap();
+        let ram = bus.ram.read().clone();
+        ram.write_t(gpa, &data).unwrap();
+        let r: MyStruct = ram.read_t(gpa).unwrap();
         assert_eq!(r, data)
     }
     for gpa in (memory_end - data_size + 1)..memory_end {
-        assert_matches!(bus.write_t(gpa, &data), Err(_));
-        assert_matches!(bus.read_t::<MyStruct>(gpa), Err(_));
+        let ram = bus.ram.read().clone();
+        assert_matches!(ram.write_t(gpa, &data), Err(_));
+        assert_matches!(ram.read_t::<MyStruct>(gpa), Err(_));
     }
 
     let data: Vec<u8> = (0..64).collect();
     for gpa in (PAGE_SIZE - 64)..=PAGE_SIZE {
-        bus.write_range(gpa, 64, &*data).unwrap();
+        let ram = bus.ram.read().clone();
+        ram.write_range(gpa, 64, &*data).unwrap();
         let mut buf = Vec::new();
-        bus.read_range(gpa, 64, &mut buf).unwrap();
+        ram.read_range(gpa, 64, &mut buf).unwrap();
         assert_eq!(data, buf)
     }
 
     let guest_iov = [(0, 16), (PAGE_SIZE - 16, 32), (2 * PAGE_SIZE - 16, 16)];
-    let write_ret = bus.write_vectored(&guest_iov, |iov| {
+    let ram = bus.ram.read().clone();
+    let write_ret = ram.write_vectored(&guest_iov, |iov| {
         assert_eq!(iov.len(), 4);
         (&*data).read_vectored(iov)
     });
     assert_matches!(write_ret, Ok(Ok(64)));
     let mut buf_read = Vec::new();
-    let read_ret = bus.read_vectored(&guest_iov, |iov| {
+    let read_ret = ram.read_vectored(&guest_iov, |iov| {
         assert_eq!(iov.len(), 4);
         buf_read.write_vectored(iov)
     });
     assert_matches!(read_ret, Ok(Ok(64)));
 
-    let locked_bus = bus.lock_layout();
-    let bufs = locked_bus.translate_iov(&guest_iov).unwrap();
+    let bufs = ram.translate_iov(&guest_iov).unwrap();
     println!("{bufs:?}");
-    drop(locked_bus);
-    bus.remove(0x0).unwrap();
+
+    let mut guard = bus.ram.write();
+    let mut ram_to_remove = (**guard).clone();
+    ram_to_remove.remove(0x0).unwrap();
+    *guard = Arc::new(ram_to_remove);
 }

@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use std::os::fd::{AsFd, BorrowedFd};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64};
 
 use flume::Sender;
+use parking_lot::RwLock;
 
 use crate::hv::IoeventFd;
-use crate::mem::mapped::{ArcMemPages, RamBus};
+use crate::mem::mapped::{ArcMemPages, Ram, RamBus};
 use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg};
 use crate::virtio::{IrqSender, Result};
 
@@ -29,9 +31,11 @@ const QUEUE_START: u64 = 1 << 20;
 
 pub fn fixture_ram_bus() -> RamBus {
     let host_pages = ArcMemPages::from_anonymous(MEM_SIZE, None, None).unwrap();
-    let ram_bus = RamBus::new();
-    ram_bus.add(0, host_pages).unwrap();
-    ram_bus
+    let mut ram = Ram::default();
+    ram.add(0, host_pages).unwrap();
+    RamBus {
+        ram: RwLock::new(Arc::new(ram)),
+    }
 }
 
 pub fn fixture_queues(count: u16) -> Box<[QueueReg]> {

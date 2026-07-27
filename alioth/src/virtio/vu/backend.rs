@@ -27,7 +27,8 @@ use zerocopy::IntoBytes;
 
 use crate::errors::DebugTrace;
 use crate::hv::IoeventFd;
-use crate::mem::mapped::{ArcMemPages, RamBus};
+use crate::mem::mapped::ArcMemPages;
+use crate::mem::{MemRegion, MemRegionType, Memory};
 use crate::virtio::dev::{StartParam, VirtioDevice, WakeEvent};
 use crate::virtio::vu::Error as VuError;
 use crate::virtio::vu::bindings::{
@@ -153,7 +154,7 @@ pub struct VuBackend {
     session: VuSession,
     channel: Option<Arc<VuChannel>>,
     status: DevStatus,
-    memory: Arc<RamBus>,
+    memory: Memory,
     dev: VirtioDevice<VuIrqSender, VuEventfd>,
     init: VuInit,
 }
@@ -162,7 +163,7 @@ impl VuBackend {
     pub fn new(
         conn: UnixStream,
         dev: VirtioDevice<VuIrqSender, VuEventfd>,
-        memory: Arc<RamBus>,
+        memory: Memory,
     ) -> Result<Self> {
         conn.set_nonblocking(false)?;
         let queue_num = dev.queue_regs.len();
@@ -417,7 +418,10 @@ impl VuBackend {
                     region.size as usize,
                     libc::PROT_READ | libc::PROT_WRITE,
                 )?;
-                self.memory.add(region.gpa, user_mem)?;
+                self.memory.add_region(
+                    region.gpa,
+                    Arc::new(MemRegion::with_ram(user_mem, MemRegionType::Ram)),
+                )?;
                 self.init.regions.push(single.region);
             }
             (VuFrontMsg::REM_MEM_REG, 40) => {
@@ -430,7 +434,7 @@ impl VuBackend {
                     if r.gpa == region.gpa && r.hva == region.hva && r.size == region.size {
                         log::info!("{name}: remove mem: {r:x?}");
                         self.init.regions.remove(index);
-                        let _ = self.memory.remove(region.gpa);
+                        let _ = self.memory.remove_region(region.gpa);
                         break;
                     }
                 }

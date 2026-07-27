@@ -23,7 +23,7 @@ use crate::arch::layout::{DEVICE_TREE_START, KERNEL_IMAGE_START};
 use crate::arch::reg::{Pstate, Reg};
 use crate::loader::{InitState, Result, error, search_initramfs_address};
 use crate::mem::MemRegionEntry;
-use crate::mem::mapped::RamBus;
+use crate::mem::mapped::Ram;
 
 #[repr(C)]
 #[derive(Debug, FromBytes, Immutable, IntoBytes)]
@@ -43,7 +43,7 @@ struct ImageHeader {
 const IMAGE_MAGIC: u32 = 0x644d5241;
 
 pub fn load<P: AsRef<Path>>(
-    memory: &RamBus,
+    memory: &Ram,
     mem_regions: &[(u64, MemRegionEntry)],
     kernel: P,
     _cmdline: Option<&str>,

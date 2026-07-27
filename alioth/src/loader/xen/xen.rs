@@ -38,7 +38,7 @@ use crate::loader::xen::start_info::{
     XEN_HVM_MEMMAP_TYPE_RESERVED, XEN_HVM_START_INFO_V1, XEN_HVM_START_MAGIC_VALUE,
 };
 use crate::loader::{InitState, Result, error, search_initramfs_address};
-use crate::mem::mapped::RamBus;
+use crate::mem::mapped::Ram;
 use crate::mem::{MemRegionEntry, MemRegionType};
 
 use self::start_info::{HvmMemmapTableEntry, HvmModlistEntry, HvmStartInfo};
@@ -100,7 +100,7 @@ fn search_pvh_note<F: Read + Seek>(
 
 // https://xenbits.xen.org/docs/4.18-testing/misc/pvh.html
 pub fn load<P: AsRef<Path>>(
-    memory: &RamBus,
+    memory: &Ram,
     mem_regions: &[(u64, MemRegionEntry)],
     kernel: P,
     cmdline: Option<&str>,

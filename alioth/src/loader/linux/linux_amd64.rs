@@ -29,7 +29,7 @@ use crate::arch::paging::Entry;
 use crate::arch::reg::{
     Cr0, Cr4, DtReg, DtRegVal, Reg, Rflags, SReg, SegAccess, SegReg, SegRegVal,
 };
-use crate::mem::mapped::RamBus;
+use crate::mem::mapped::Ram;
 use crate::mem::{MemRegionEntry, MemRegionType};
 
 use crate::loader::linux::bootparams::{
@@ -42,7 +42,7 @@ use crate::loader::{Error, InitState, error, search_initramfs_address};
 const MINIMAL_VERSION: u16 = 0x020c;
 
 pub fn load<P: AsRef<Path>>(
-    memory: &RamBus,
+    memory: &Ram,
     mem_regions: &[(u64, MemRegionEntry)],
     kernel: P,
     cmdline: Option<&str>,

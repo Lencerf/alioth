@@ -266,7 +266,7 @@ struct LayoutCallbacks {
 // lock order: region -> callbacks -> bus
 #[derive(Debug, Default)]
 pub struct Memory {
-    regions: Mutex<Addressable<Arc<MemRegion>>>,
+    pub(crate) regions: Mutex<Addressable<Arc<MemRegion>>>,
     callbacks: Mutex<LayoutCallbacks>,
     ram_bus: Arc<RamBus>,
     mmio_bus: RwLock<MmioBus>,
@@ -302,7 +302,7 @@ impl Memory {
     pub fn register_update_callback(&self, callback: Box<dyn LayoutUpdated>) -> Result<()> {
         let _regions = self.regions.lock();
         let mut callbacks = self.callbacks.lock();
-        let ram = self.ram_bus.lock_layout();
+        let ram = self.ram_bus.ram.read();
         callback.ram_updated(&ram)?;
         callbacks.updated.push(callback);
         Ok(())
@@ -313,7 +313,11 @@ impl Memory {
         Ok(())
     }
 
-    pub fn ram_bus(&self) -> Arc<RamBus> {
+    pub fn ram_bus(&self) -> &RamBus {
+        &self.ram_bus
+    }
+
+    pub fn get_ram_bus(&self) -> Arc<RamBus> {
         self.ram_bus.clone()
     }
 
@@ -349,13 +353,16 @@ impl Memory {
                 MemRange::Span(_) => {}
             }
             if let MemRange::Ram(r) | MemRange::DevMem(r) = range {
-                self.ram_bus.add(gpa, r.clone())?;
+                let mut guard = self.ram_bus.ram.write();
+                let mut ram = (**guard).clone();
+                ram.add(gpa, r.clone())?;
+                *guard = Arc::new(ram);
                 ram_updated = true;
             }
             offset += range.size();
         }
         if ram_updated {
-            let ram = self.ram_bus.lock_layout();
+            let ram = self.ram_bus.ram.read();
             for update_callback in &callbacks.updated {
                 update_callback.ram_updated(&ram)?;
             }
@@ -391,13 +398,16 @@ impl Memory {
                 MemRange::Span(_) => {}
             };
             if let MemRange::Ram(_) | MemRange::DevMem(_) = range {
-                self.ram_bus.remove(gpa)?;
+                let mut guard = self.ram_bus.ram.write();
+                let mut ram = (**guard).clone();
+                ram.remove(gpa)?;
+                *guard = Arc::new(ram);
                 ram_updated = true;
             }
             offset += range.size();
         }
         if ram_updated {
-            let ram = self.ram_bus.lock_layout();
+            let ram = self.ram_bus.ram.read();
             for callback in &callbacks.updated {
                 callback.ram_updated(&ram)?;
             }

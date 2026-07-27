@@ -102,7 +102,7 @@ fn send_to_tx<'m, Q>(
 #[test]
 fn vsock_conn_test() {
     let ram_bus = Arc::new(fixture_ram_bus());
-    let ram = ram_bus.lock_layout();
+    let ram = ram_bus.ram.read();
     let regs: Arc<[QueueReg]> = Arc::from(fixture_queues(3));
     let reg_tx = &regs[VsockVirtq::TX.raw() as usize];
     let reg_rx = &regs[VsockVirtq::RX.raw() as usize];
@@ -391,7 +391,7 @@ fn vsock_conn_test() {
 #[test]
 fn vsock_host_close_test() {
     let ram_bus = Arc::new(fixture_ram_bus());
-    let ram = ram_bus.lock_layout();
+    let ram = ram_bus.ram.read();
     let regs: Arc<[QueueReg]> = Arc::from(fixture_queues(3));
     let reg_tx = &regs[VsockVirtq::TX.raw() as usize];
     let reg_rx = &regs[VsockVirtq::RX.raw() as usize];
@@ -509,7 +509,7 @@ fn vsock_host_close_test() {
 #[test]
 fn vsock_host_close_no_desc_test() {
     let ram_bus = Arc::new(fixture_ram_bus());
-    let ram = ram_bus.lock_layout();
+    let ram = ram_bus.ram.read();
     let regs: Arc<[QueueReg]> = Arc::from(fixture_queues(3));
     let reg_tx = &regs[VsockVirtq::TX.raw() as usize];
     let reg_rx = &regs[VsockVirtq::RX.raw() as usize];
