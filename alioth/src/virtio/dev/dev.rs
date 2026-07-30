@@ -450,6 +450,7 @@ where
                 break;
             }
             log::debug!("{}: refreshing memory", self.context.dev.name());
+            self.context.state = WorkerState::Running;
         }
         self.backend.reset(&mut self.context.dev)?;
         Ok(())

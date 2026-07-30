@@ -64,10 +64,11 @@ where
 {
     pub fn new(q: Q, reg: &QueueReg) -> Self {
         let size = reg.size.load(Ordering::Acquire);
+        let init_index = q.init_index();
         Self {
             q,
-            avail: Q::INIT_INDEX,
-            used: Q::INIT_INDEX,
+            avail: init_index,
+            used: init_index,
             ids: vec![false; size as usize],
             chains: HashMap::new(),
             next_id: 0,
