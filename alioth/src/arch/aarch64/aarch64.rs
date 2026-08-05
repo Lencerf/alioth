@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod cpu_models;
 pub mod layout;
 pub mod psci;
 pub mod reg;
+pub mod features;

@@ -108,6 +108,7 @@ fn test_parse_args() {
                     sockets: 1,
                     thread_contiguous: false,
                 },
+                ..Default::default()
             },
             mem: MemSpec {
                 size: 128 << 30,
@@ -244,6 +245,7 @@ fn test_parse_net_arg(#[case] arg: &str, #[case] want: NetSpec) {
     CpuSpec {
         count: 16,
         topology: CpuTopology { smt: false, cores: 8, sockets: 2, thread_contiguous: false },
+        ..Default::default()
     }
 )]
 #[case(
@@ -252,7 +254,8 @@ fn test_parse_net_arg(#[case] arg: &str, #[case] want: NetSpec) {
     HashMap::new(),
     CpuSpec {
         count: 16,
-        topology: CpuTopology { smt: false, cores: 16, sockets: 1, thread_contiguous: false }
+        topology: CpuTopology { smt: false, cores: 16, sockets: 1, thread_contiguous: false },
+        ..Default::default()
     }
 )]
 fn test_parse_cpu_arg(

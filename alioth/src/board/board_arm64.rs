@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::arch::aarch64::cpu_models::CPU_MODELS;
+use crate::arch::aarch64::features::{CpuFeature, CPU_FEATURES};
 use crate::arch::layout::{
     DEVICE_TREE_LIMIT, DEVICE_TREE_START, GIC_DIST_START, GIC_MSI_START,
     GIC_V2_CPU_INTERFACE_START, GIC_V3_REDIST_START, IO_END, IO_START, MEM_64_START,
@@ -22,8 +24,8 @@ use crate::arch::layout::{
     PCIE_MMIO_32_PREFETCHABLE_END, PCIE_MMIO_32_PREFETCHABLE_START, PL011_START, PL031_START,
     RAM_32_SIZE, RAM_32_START,
 };
-use crate::arch::reg::MpidrEl1;
-use crate::board::{Board, BoardSpec, CpuTopology, PCIE_MMIO_64_SIZE, Result};
+use crate::arch::reg::{MpidrEl1, SReg};
+use crate::board::{Board, BoardSpec, CpuSpec, CpuTopology, PCIE_MMIO_64_SIZE, Result, error};
 use crate::firmware::dt::{DeviceTree, Node, PropVal};
 use crate::hv::{GicV2, GicV2m, GicV3, Hypervisor, Its, Vm};
 use crate::loader::{Executable, InitState};
@@ -51,6 +53,7 @@ where
 {
     gic: Gic<V>,
     msi: Option<Msi<V>>,
+    pub sregs: Vec<(SReg, u64)>,
 }
 
 impl<V: Vm> ArchBoard<V> {
@@ -58,6 +61,7 @@ impl<V: Vm> ArchBoard<V> {
     where
         H: Hypervisor<Vm = V>,
     {
+        let sregs = resolve_cpu_model(&spec.cpu)?;
         let gic = match vm.create_gic_v3(GIC_DIST_START, GIC_V3_REDIST_START, spec.cpu.count) {
             Ok(v3) => Gic::V3(v3),
             Err(e) => {
@@ -86,7 +90,7 @@ impl<V: Vm> ArchBoard<V> {
             create_gic_v2m()
         };
 
-        Ok(ArchBoard { gic, msi })
+        Ok(ArchBoard { gic, msi, sregs })
     }
 }
 
@@ -531,6 +535,67 @@ const PHANDLE_GIC: u32 = 1;
 const PHANDLE_CLOCK: u32 = 2;
 const PHANDLE_MSI: u32 = 3;
 const PHANDLE_CPU: u32 = 1 << 31;
+
+fn resolve_cpu_model(spec: &CpuSpec) -> Result<Vec<(SReg, u64)>, crate::board::Error> {
+    if spec.model == "host" {
+        if !spec.features.is_empty() {
+            return error::InvalidCpuFeature {
+                feature: spec.features[0].clone(),
+            }
+            .fail();
+        }
+        return Ok(Vec::new());
+    }
+
+    let model = match CPU_MODELS.iter().find(|m| m.name == spec.model) {
+        Some(m) => m,
+        None => {
+            return error::InvalidCpuModel {
+                model: spec.model.clone(),
+            }
+            .fail();
+        }
+    };
+
+    let mut regs = Vec::new();
+    regs.push((SReg::MIDR_EL1, model.midr));
+    for &(reg, val) in model.id_regs {
+        regs.push((reg, val));
+    }
+
+    // Apply features
+    for feat_str in &spec.features {
+        let (enable, feat_name) = if let Some(stripped) = feat_str.strip_prefix('-') {
+            (false, stripped)
+        } else if let Some(stripped) = feat_str.strip_prefix('+') {
+            (true, stripped)
+        } else {
+            (true, feat_str.as_str())
+        };
+
+        if let Some(feat) = lookup_feature(feat_name) {
+            if let Some(pos) = regs.iter().position(|&(r, _)| r == feat.sreg) {
+                let (_, val) = &mut regs[pos];
+                let mask = ((1u64 << feat.width) - 1) << feat.shift;
+                *val &= !mask;
+                if enable {
+                    *val |= feat.value << feat.shift;
+                }
+            }
+        } else {
+            return error::InvalidCpuFeature {
+                feature: feat_str.clone(),
+            }
+            .fail();
+        }
+    }
+
+    Ok(regs)
+}
+
+fn lookup_feature(name: &str) -> Option<&'static CpuFeature> {
+    CPU_FEATURES.iter().find(|f| f.name == name)
+}
 
 #[cfg(test)]
 #[path = "board_arm64_test.rs"]

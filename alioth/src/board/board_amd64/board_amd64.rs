@@ -30,7 +30,9 @@ use crate::arch::layout::{
     BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
     PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
 };
-use crate::board::{Board, BoardSpec, CpuTopology, PCIE_MMIO_64_SIZE, Result, error};
+use crate::arch::x86_64::cpu_models::{CPU_MODELS, CpuModel};
+use crate::arch::x86_64::features::{CpuidReg, FEATURE_WORDS, CpuFeature};
+use crate::board::{Board, BoardSpec, CpuSpec, CpuTopology, PCIE_MMIO_64_SIZE, Result, error};
 use crate::device::ioapic::IoApic;
 use crate::firmware::acpi::bindings::{
     AcpiTableFadt, AcpiTableHeader, AcpiTableRsdp, AcpiTableXsdt3,
@@ -75,7 +77,8 @@ impl<V: Vm> ArchBoard<V> {
     where
         H: Hypervisor<Vm = V>,
     {
-        let mut cpuids = hv.get_supported_cpuids(spec.coco.as_ref())?;
+        let host_supported = hv.get_supported_cpuids(spec.coco.as_ref())?;
+        let mut cpuids = expand_cpu_model(&spec.cpu, &host_supported)?;
 
         let threads_per_core = 1 + spec.cpu.topology.smt as u16;
         let threads_per_socket = spec.cpu.topology.cores * threads_per_core;
@@ -121,22 +124,6 @@ impl<V: Vm> ArchBoard<V> {
             return error::MissingCpuid { leaf: leaf1 }.fail();
         };
         out.ecx |= (Cpuid1Ecx::TSC_DEADLINE | Cpuid1Ecx::HYPERVISOR).bits();
-
-        let leaf_8000_0000 = __cpuid(0x8000_0000);
-        cpuids.insert(
-            CpuidIn {
-                func: 0x8000_0000,
-                index: None,
-            },
-            leaf_8000_0000,
-        );
-        // 0x8000_0002 to 0x8000_0004: processor name
-        // 0x8000_0005: L1 cache/LTB
-        // 0x8000_0006: L2 cache/TLB and L3 cache
-        for func in 0x8000_0002..=0x8000_0006 {
-            let host_cpuid = __cpuid(func);
-            cpuids.insert(CpuidIn { func, index: None }, host_cpuid);
-        }
 
         if let Some(coco) = &spec.coco
             && matches!(coco, CocoSpec::AmdSev { .. } | CocoSpec::AmdSnp { .. })
@@ -383,6 +370,313 @@ const DSDT_TEMPLATE: [u8; 352] = [
 ];
 
 const DSDT_OFFSET_PCI_QWORD_MEM: usize = 0x12b;
+
+fn parse_model_name(model_str: &str) -> Option<(&str, u32)> {
+    if let Some(pos) = model_str.rfind("-v") {
+        let (name, ver_str) = model_str.split_at(pos);
+        let ver_str = &ver_str[2..]; // skip "-v"
+        if let Ok(version) = ver_str.parse::<u32>() {
+            return Some((name, version));
+        }
+    }
+    None
+}
+
+fn resolve_model(model_str: &str) -> Result<(&CpuModel, u32), super::Error> {
+    if let Some((name, version)) = parse_model_name(model_str) {
+        if let Some(model) = CPU_MODELS.iter().find(|m| m.name == name) {
+            return Ok((model, version));
+        }
+    } else {
+        if let Some(model) = CPU_MODELS.iter().find(|m| m.name == model_str) {
+            return Ok((model, 1));
+        }
+    }
+    error::InvalidCpuModel {
+        model: model_str.to_owned(),
+    }
+    .fail()
+}
+
+fn set_cpuid_bit(
+    cpuids: &mut HashMap<CpuidIn, CpuidResult>,
+    feat: &CpuFeature,
+    enable: bool,
+) {
+    let leaf = CpuidIn {
+        func: feat.func,
+        index: feat.index,
+    };
+    let entry = cpuids.entry(leaf).or_insert(CpuidResult {
+        eax: 0,
+        ebx: 0,
+        ecx: 0,
+        edx: 0,
+    });
+    let reg_val = match feat.reg {
+        CpuidReg::Eax => &mut entry.eax,
+        CpuidReg::Ebx => &mut entry.ebx,
+        CpuidReg::Ecx => &mut entry.ecx,
+        CpuidReg::Edx => &mut entry.edx,
+    };
+    if enable {
+        *reg_val |= 1 << feat.bit;
+    } else {
+        *reg_val &= !(1 << feat.bit);
+    }
+}
+
+fn get_cpuid_bit(cpuids: &HashMap<CpuidIn, CpuidResult>, feat: &CpuFeature) -> bool {
+    let leaf = CpuidIn {
+        func: feat.func,
+        index: feat.index,
+    };
+    if let Some(entry) = cpuids.get(&leaf) {
+        let reg_val = match feat.reg {
+            CpuidReg::Eax => entry.eax,
+            CpuidReg::Ebx => entry.ebx,
+            CpuidReg::Ecx => entry.ecx,
+            CpuidReg::Edx => entry.edx,
+        };
+        return (reg_val & (1 << feat.bit)) != 0;
+    }
+    false
+}
+
+fn encode_string_to_cpuid(s: &str) -> Vec<CpuidResult> {
+    let mut bytes = s.as_bytes().to_vec();
+    bytes.resize(48, 0); // pad with nulls up to 48 bytes
+    let mut results = Vec::new();
+    for chunk in bytes.chunks_exact(16) {
+        let eax = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
+        let ebx = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
+        let ecx = u32::from_le_bytes(chunk[8..12].try_into().unwrap());
+        let edx = u32::from_le_bytes(chunk[12..16].try_into().unwrap());
+        results.push(CpuidResult { eax, ebx, ecx, edx });
+    }
+    results
+}
+
+fn expand_cpu_model(
+    spec: &CpuSpec,
+    host_supported: &HashMap<CpuidIn, CpuidResult>,
+) -> Result<HashMap<CpuidIn, CpuidResult>, super::Error> {
+    if spec.model == "host" {
+        let mut cpuids = host_supported.clone();
+        // Apply customizations to host model
+        for feat_str in &spec.features {
+            let (enable, feat_name) = if let Some(stripped) = feat_str.strip_prefix('+') {
+                (true, stripped)
+            } else if let Some(stripped) = feat_str.strip_prefix('-') {
+                (false, stripped)
+            } else {
+                (true, feat_str.as_str())
+            };
+            if let Some(feat) = lookup_feature(feat_name) {
+                if enable {
+                    // Check if host supports it
+                    if !get_cpuid_bit(host_supported, &feat) {
+                        return error::UnsupportedCpuFeature {
+                            feature: feat_name.to_owned(),
+                        }
+                        .fail();
+                    }
+                }
+                set_cpuid_bit(&mut cpuids, &feat, enable);
+            } else {
+                return error::InvalidCpuFeature {
+                    feature: feat_str.clone(),
+                }
+                .fail();
+            }
+        }
+        // Ensure host brand and cache are populated from raw CPUID
+        let leaf_8000_0000 = __cpuid(0x8000_0000);
+        cpuids.insert(
+            CpuidIn {
+                func: 0x8000_0000,
+                index: None,
+            },
+            leaf_8000_0000,
+        );
+        for func in 0x8000_0002..=0x8000_0006 {
+            let host_cpuid = __cpuid(func);
+            cpuids.insert(CpuidIn { func, index: None }, host_cpuid);
+        }
+        return Ok(cpuids);
+    }
+
+    let (model, version) = resolve_model(&spec.model)?;
+
+    // 1. Initialize CPUID map with model base features
+    let mut cpuids = HashMap::new();
+
+    // Set level and vendor
+    let leaf0 = CpuidIn {
+        func: 0,
+        index: None,
+    };
+    cpuids.insert(
+        leaf0,
+        CpuidResult {
+            eax: model.level,
+            ebx: model.vendor[0],
+            edx: model.vendor[1],
+            ecx: model.vendor[2],
+        },
+    );
+
+    // Set xlevel
+    let leaf_8000_0000 = CpuidIn {
+        func: 0x8000_0000,
+        index: None,
+    };
+    cpuids.insert(
+        leaf_8000_0000,
+        CpuidResult {
+            eax: model.xlevel,
+            ebx: 0,
+            ecx: 0,
+            edx: 0,
+        },
+    );
+
+    // Family, model, stepping are encoded in leaf 1 EAX
+    let family_encoded = if model.family >= 16 {
+        ((model.family - 15) & 0xff) << 20
+    } else {
+        0
+    };
+    let model_encoded = if model.family >= 6 {
+        ((model.model >> 4) & 0xf) << 16
+    } else {
+        0
+    };
+    let eax_val = ((model.family & 0xf) << 8)
+        | ((model.model & 0xf) << 4)
+        | (model.stepping & 0xf)
+        | family_encoded
+        | model_encoded;
+
+    let leaf1 = CpuidIn {
+        func: 1,
+        index: None,
+    };
+    cpuids.insert(
+        leaf1,
+        CpuidResult {
+            eax: eax_val,
+            ebx: 0,
+            ecx: 0,
+            edx: 0,
+        },
+    );
+
+    // Populate base features
+    for &feat_name in model.features {
+        if let Some(feat) = lookup_feature(feat_name) {
+            set_cpuid_bit(&mut cpuids, &feat, true);
+        } else {
+            panic!("Feature {} not found in registry", feat_name);
+        }
+    }
+
+    // 2. Apply version properties (inheritance)
+    for vdef in model.versions {
+        if vdef.version > version {
+            break;
+        }
+        for &(prop_name, enable) in vdef.props {
+            if let Some(feat) = lookup_feature(prop_name) {
+                set_cpuid_bit(&mut cpuids, &feat, enable);
+            } else {
+                panic!("Version property {} not found in registry", prop_name);
+            }
+        }
+    }
+
+    // 3. Apply user customizations (+/- features)
+    for feat_str in &spec.features {
+        let (enable, feat_name) = if let Some(stripped) = feat_str.strip_prefix('+') {
+            (true, stripped)
+        } else if let Some(stripped) = feat_str.strip_prefix('-') {
+            (false, stripped)
+        } else {
+            (true, feat_str.as_str())
+        };
+        if let Some(feat) = lookup_feature(feat_name) {
+            set_cpuid_bit(&mut cpuids, &feat, enable);
+        } else {
+            return error::InvalidCpuFeature {
+                feature: feat_str.clone(),
+            }
+            .fail();
+        }
+    }
+
+    // 4. Filter against host capabilities and warn/fail
+    for info in FEATURE_WORDS {
+        for bit in 0..32 {
+            let name = info.names[bit as usize];
+            if name.is_empty() {
+                continue;
+            }
+            let feat = CpuFeature {
+                name,
+                func: info.func,
+                index: info.index,
+                reg: info.reg,
+                bit: bit as u8,
+            };
+            if get_cpuid_bit(&cpuids, &feat) {
+                if !get_cpuid_bit(host_supported, &feat) {
+                    return error::UnsupportedCpuFeature {
+                        feature: name.to_owned(),
+                    }
+                    .fail();
+                }
+            }
+        }
+    }
+
+    // Encode model_id into 0x8000_0002..4
+    let brand = encode_string_to_cpuid(model.model_id);
+    for (i, res) in brand.into_iter().enumerate() {
+        let func = 0x8000_0002 + i as u32;
+        cpuids.insert(CpuidIn { func, index: None }, res);
+    }
+
+    // Copy 0x8000_0005 and 0x8000_0006 from host raw CPUID
+    for func in 0x8000_0005..=0x8000_0006 {
+        let leaf = CpuidIn { func, index: None };
+        cpuids.insert(leaf, __cpuid(func));
+    }
+
+    // Copy hypervisor leaves from host_supported
+    for (leaf, &res) in host_supported {
+        if leaf.func >= 0x4000_0000 && leaf.func <= 0x4000_00ff {
+            cpuids.insert(leaf.clone(), res);
+        }
+    }
+    Ok(cpuids)
+}
+
+fn lookup_feature(name: &str) -> Option<CpuFeature> {
+    for info in FEATURE_WORDS {
+        for (bit, &feat_name) in info.names.iter().enumerate() {
+            if feat_name == name {
+                return Some(CpuFeature {
+                    name: feat_name,
+                    func: info.func,
+                    index: info.index,
+                    reg: info.reg,
+                    bit: bit as u8,
+                });
+            }
+        }
+    }
+    None
+}
 
 #[cfg(test)]
 #[path = "board_amd64_test.rs"]

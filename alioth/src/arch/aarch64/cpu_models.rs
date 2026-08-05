@@ -1,4 +1,4 @@
-// Copyright 2024 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cpu_models;
-pub mod cpuid;
-pub mod features;
-pub mod intr;
-pub mod ioapic;
-pub mod layout;
-pub mod msr;
-pub mod paging;
-pub mod reg;
-pub mod sev;
-pub mod tdx;
+pub mod neoverse_n1;
+
+use super::reg::SReg;
+
+pub struct CpuModel {
+    pub name: &'static str,
+    pub midr: u64,
+    pub id_regs: &'static [(SReg, u64)],
+}
+
+use self::neoverse_n1::NEOVERSE_N1;
+
+pub const CPU_MODELS: &[CpuModel] = &[NEOVERSE_N1];

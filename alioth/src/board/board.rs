@@ -70,6 +70,12 @@ pub enum Error {
     #[cfg(target_arch = "x86_64")]
     #[snafu(display("Missing CPUID leaf {leaf:x?}"))]
     MissingCpuid { leaf: CpuidIn },
+    #[snafu(display("Invalid CPU model: {model}"))]
+    InvalidCpuModel { model: String },
+    #[snafu(display("Invalid CPU feature: {feature}"))]
+    InvalidCpuFeature { feature: String },
+    #[snafu(display("Unsupported CPU feature {feature} on host"))]
+    UnsupportedCpuFeature { feature: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -122,7 +128,11 @@ const fn default_cpu_count() -> u16 {
     1
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+fn default_cpu_model() -> String {
+    "host".to_owned()
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
 pub struct CpuSpec {
     /// Number of VCPUs assigned to the guest. [default: 1]
     #[serde(default = "default_cpu_count")]
@@ -130,6 +140,23 @@ pub struct CpuSpec {
     /// Architecture specific CPU topology.
     #[serde(default)]
     pub topology: CpuTopology,
+    /// CPU model name. [default: host]
+    #[serde(default = "default_cpu_model")]
+    pub model: String,
+    /// CPU features to enable (+) or disable (-).
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+impl Default for CpuSpec {
+    fn default() -> Self {
+        Self {
+            count: default_cpu_count(),
+            topology: Default::default(),
+            model: default_cpu_model(),
+            features: Default::default(),
+        }
+    }
 }
 
 impl CpuSpec {

@@ -1,4 +1,4 @@
-// Copyright 2024 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cpu_models;
-pub mod cpuid;
-pub mod features;
-pub mod intr;
-pub mod ioapic;
-pub mod layout;
-pub mod msr;
-pub mod paging;
-pub mod reg;
-pub mod sev;
-pub mod tdx;
+use super::super::reg::SReg;
+use super::CpuModel;
+
+pub const NEOVERSE_N1: CpuModel = CpuModel {
+    name: "neoverse-n1",
+    midr: 0x414fd0c1,
+    id_regs: &[
+        (SReg::ID_AA64ISAR0_EL1, 0x0000100010211120),
+        (SReg::ID_AA64ISAR1_EL1, 0x0000000000100001),
+    ],
+};
