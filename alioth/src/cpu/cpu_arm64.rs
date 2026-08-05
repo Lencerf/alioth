@@ -20,7 +20,17 @@ use crate::loader::{InitState, PayloadSpec};
 
 impl<V: Vm> VcpuThread<V> {
     pub(crate) fn init_vcpu(&mut self) -> Result<()> {
-        self.reset_vcpu()
+        self.reset_vcpu()?;
+        self.apply_cpu_model()?;
+        Ok(())
+    }
+
+    fn apply_cpu_model(&mut self) -> Result<()> {
+        let sregs = &self.ctx.board.arch.sregs;
+        if !sregs.is_empty() {
+            self.vcpu.set_sregs(sregs)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn init_boot_vcpu(&mut self, init: &InitState) -> Result<()> {

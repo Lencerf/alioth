@@ -67,8 +67,24 @@ consts! {
         /// OS Double Lock Register
         /// https://developer.arm.com/documentation/ddi0601/latest/AArch64-Registers/OSDLR-EL1--OS-Double-Lock-Register
         OSDLR_EL1 = encode(2, 0, 1, 3, 4);
+        /// Main ID Register
+        MIDR_EL1 = encode(3, 0, 0, 0, 0);
         /// Multiprocessor Affinity Register
         MPIDR_EL1 = encode(3, 0, 0, 0, 5);
+        /// ID_AA64PFR0_EL1
+        ID_AA64PFR0_EL1 = encode(3, 0, 0, 4, 0);
+        /// ID_AA64PFR1_EL1
+        ID_AA64PFR1_EL1 = encode(3, 0, 0, 4, 1);
+        /// ID_AA64DFR0_EL1
+        ID_AA64DFR0_EL1 = encode(3, 0, 0, 5, 0);
+        /// ID_AA64ISAR0_EL1
+        ID_AA64ISAR0_EL1 = encode(3, 0, 0, 6, 0);
+        /// ID_AA64ISAR1_EL1
+        ID_AA64ISAR1_EL1 = encode(3, 0, 0, 6, 1);
+        /// ID_AA64MMFR0_EL1
+        ID_AA64MMFR0_EL1 = encode(3, 0, 0, 7, 0);
+        /// ID_AA64MMFR1_EL1
+        ID_AA64MMFR1_EL1 = encode(3, 0, 0, 7, 1);
         /// System Control Register
         /// https://developer.arm.com/documentation/ddi0601/latest/AArch64-Registers/SCTLR-EL1--System-Control-Register--EL1-
         SCTLR_EL1 = encode(3, 0, 1, 0, 0);
