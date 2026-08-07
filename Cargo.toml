@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "alioth",
   "alioth-cli",
+  "alioth-cpu-detect",
   "alioth-macros",
   "serde-aco",
   "serde-aco-derive",
@@ -26,6 +27,7 @@ proc-macro2 = "1"
 quote = { version = "1" }
 rstest = "0.26"
 serde = { version = "1.0", features = ["derive"] }
+serde_yml = "0.0.12"
 serde-aco = { path = "serde-aco", version = "0.12.0" }
 serde-aco-derive = { path = "serde-aco-derive", version = "0.12.0" }
 snafu = "0.9.1"

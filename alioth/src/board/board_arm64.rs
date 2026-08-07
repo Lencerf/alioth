@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::path::Path;
 use std::sync::Arc;
 
-use crate::arch::aarch64::cpu_models::CPU_MODELS;
+use snafu::ResultExt;
+
+use crate::arch::aarch64::cpu_models::{CpuModel, YamlCpuModel};
 use crate::arch::aarch64::features::{CpuFeature, CPU_FEATURES};
 use crate::arch::layout::{
     DEVICE_TREE_LIMIT, DEVICE_TREE_START, GIC_DIST_START, GIC_MSI_START,
@@ -536,6 +540,31 @@ const PHANDLE_CLOCK: u32 = 2;
 const PHANDLE_MSI: u32 = 3;
 const PHANDLE_CPU: u32 = 1 << 31;
 
+fn resolve_model(model_str: &str) -> Result<CpuModel, crate::board::Error> {
+    let path = Path::new(model_str);
+    if path.exists() || model_str.ends_with(".yaml") || model_str.ends_with(".yml") {
+        let file = File::open(path).context(error::LoadCpuModel {
+            path: model_str.to_owned(),
+        })?;
+        let yaml_model: YamlCpuModel = serde_yml::from_reader(file).context(error::ParseCpuModel {
+            path: model_str.to_owned(),
+        })?;
+        let model = CpuModel::try_from(yaml_model).map_err(|reason| {
+            error::CpuModelConfig {
+                path: model_str.to_owned(),
+                reason,
+            }
+            .build()
+        })?;
+        Ok(model)
+    } else {
+        error::InvalidCpuModel {
+            model: model_str.to_owned(),
+        }
+        .fail()
+    }
+}
+
 fn resolve_cpu_model(spec: &CpuSpec) -> Result<Vec<(SReg, u64)>, crate::board::Error> {
     if spec.model == "host" {
         if !spec.features.is_empty() {
@@ -547,19 +576,11 @@ fn resolve_cpu_model(spec: &CpuSpec) -> Result<Vec<(SReg, u64)>, crate::board::E
         return Ok(Vec::new());
     }
 
-    let model = match CPU_MODELS.iter().find(|m| m.name == spec.model) {
-        Some(m) => m,
-        None => {
-            return error::InvalidCpuModel {
-                model: spec.model.clone(),
-            }
-            .fail();
-        }
-    };
+    let model = resolve_model(&spec.model)?;
 
     let mut regs = Vec::new();
     regs.push((SReg::MIDR_EL1, model.midr));
-    for &(reg, val) in model.id_regs {
+    for &(reg, val) in &model.id_regs {
         regs.push((reg, val));
     }
 

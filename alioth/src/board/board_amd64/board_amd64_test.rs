@@ -94,16 +94,45 @@ mod expand_tests {
         assert_ne!(out.ecx & (1 << 31), 0);
     }
 
+    fn create_test_model_file() -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let yaml_content = r#"
+name: "custom-test-model"
+level: 13
+xlevel: 2147483681
+vendor: [1753289025, 1769888869, 1145987171] # AMD
+family: 25
+model: 17
+stepping: 0
+model_id: "Custom Test Model"
+features:
+  - "sse2"
+  - "avx2"
+versions:
+  - version: 1
+    props: []
+  - version: 2
+    props:
+      - ["avx512f", true]
+    model_id: "Custom Test Model v2"
+"#;
+        temp_file.write_all(yaml_content.as_bytes()).unwrap();
+        temp_file
+    }
+
     #[test]
     fn test_expand_named_model_genuina_features() {
+        let file = create_test_model_file();
+        let path_str = file.path().to_str().unwrap();
         let host = mock_host_supported();
         let spec = CpuSpec {
-            model: "EPYC-Genoa-v1".to_owned(),
+            model: path_str.to_owned(),
             ..Default::default()
         };
         let res = expand_cpu_model(&spec, &host).unwrap();
 
-        // Genoa has sse2. Host has sse2. Should be enabled.
+        // Model has sse2. Host has sse2. Should be enabled.
         let leaf1 = CpuidIn {
             func: 1,
             index: None,
@@ -111,7 +140,7 @@ mod expand_tests {
         let out = res.get(&leaf1).unwrap();
         assert_ne!(out.edx & (1 << 26), 0);
 
-        // Genoa has avx2. Host has avx2. Should be enabled.
+        // Model has avx2. Host has avx2. Should be enabled.
         let leaf7 = CpuidIn {
             func: 7,
             index: Some(0),
@@ -119,13 +148,13 @@ mod expand_tests {
         let out = res.get(&leaf7).unwrap();
         assert_ne!(out.ebx & (1 << 5), 0);
 
-        // Genoa-v1 does NOT have avx512-bf16 in our definition. Should be disabled.
-        let leaf7_1 = CpuidIn {
+        // Model-v1 does NOT have avx512f. Should be disabled.
+        let leaf7_0 = CpuidIn {
             func: 7,
-            index: Some(1),
+            index: Some(0),
         };
-        if let Some(out) = res.get(&leaf7_1) {
-            assert_eq!(out.eax & (1 << 5), 0);
+        if let Some(out) = res.get(&leaf7_0) {
+            assert_eq!(out.ebx & (1 << 16), 0); // avx512f is bit 16 of EBX leaf 7 subleaf 0
         }
 
         // Verify model_id is encoded
@@ -135,7 +164,7 @@ mod expand_tests {
                 index: None,
             })
             .unwrap();
-        assert_ne!(brand1.eax, 0); // Should contain part of "AMD EPYC-Genoa..."
+        assert_ne!(brand1.eax, 0); // Should contain part of "Custom Test Model"
 
         // Verify hypervisor leaf is copied
         let hv_leaf = res
@@ -149,25 +178,29 @@ mod expand_tests {
 
     #[test]
     fn test_expand_named_model_versioning() {
+        let file = create_test_model_file();
+        let path_str = file.path().to_str().unwrap();
         let host = mock_host_supported();
-        // Genoa-v2 adds avx512-bf16
+        // v2 adds avx512f
         let spec = CpuSpec {
-            model: "EPYC-Genoa-v2".to_owned(),
+            model: format!("{}-v2", path_str),
             ..Default::default()
         };
         let res = expand_cpu_model(&spec, &host).unwrap();
 
-        // Genoa-v2 has avx512-bf16. Host has it. Should be enabled.
-        let leaf7_1 = CpuidIn {
+        // Model-v2 has avx512f. Host has it. Should be enabled.
+        let leaf7 = CpuidIn {
             func: 7,
-            index: Some(1),
+            index: Some(0),
         };
-        let out = res.get(&leaf7_1).unwrap();
-        assert_ne!(out.eax & (1 << 5), 0);
+        let out = res.get(&leaf7).unwrap();
+        assert_ne!(out.ebx & (1 << 16), 0); // avx512f
     }
 
     #[test]
     fn test_expand_named_model_unsupported() {
+        let file = create_test_model_file();
+        let path_str = file.path().to_str().unwrap();
         let mut host = mock_host_supported();
         // Disable avx2 on host
         let leaf7 = CpuidIn {
@@ -178,12 +211,12 @@ mod expand_tests {
         entry.ebx &= !(1 << 5);
 
         let spec = CpuSpec {
-            model: "EPYC-Genoa-v1".to_owned(),
+            model: path_str.to_owned(),
             ..Default::default()
         };
         let res = expand_cpu_model(&spec, &host);
 
-        // Genoa has avx2, but host doesn't. Should fail.
+        // Model has avx2, but host doesn't. Should fail.
         assert!(matches!(
             res,
             Err(crate::board::Error::UnsupportedCpuFeature { feature, .. }) if feature == "avx2"
@@ -192,6 +225,8 @@ mod expand_tests {
 
     #[test]
     fn test_expand_named_model_unsupported_but_disabled() {
+        let file = create_test_model_file();
+        let path_str = file.path().to_str().unwrap();
         let mut host = mock_host_supported();
         // Disable avx2 on host
         let leaf7 = CpuidIn {
@@ -201,9 +236,9 @@ mod expand_tests {
         let entry = host.get_mut(&leaf7).unwrap();
         entry.ebx &= !(1 << 5); // Clear avx2 bit
 
-        // Genoa has avx2, which is unsupported, but we explicitly disable it
+        // Model has avx2, which is unsupported, but we explicitly disable it
         let spec = CpuSpec {
-            model: "EPYC-Genoa-v1".to_owned(),
+            model: path_str.to_owned(),
             features: vec!["-avx2".to_owned()],
             ..Default::default()
         };
@@ -218,10 +253,12 @@ mod expand_tests {
 
     #[test]
     fn test_expand_customization() {
+        let file = create_test_model_file();
+        let path_str = file.path().to_str().unwrap();
         let host = mock_host_supported();
         let spec = CpuSpec {
-            model: "EPYC-Genoa-v1".to_owned(),
-            features: vec!["-avx2".to_owned(), "+avx512-bf16".to_owned()],
+            model: path_str.to_owned(),
+            features: vec!["-avx2".to_owned(), "+avx512f".to_owned()],
             ..Default::default()
         };
         let res = expand_cpu_model(&spec, &host).unwrap();
@@ -234,13 +271,8 @@ mod expand_tests {
         let out = res.get(&leaf7).unwrap();
         assert_eq!(out.ebx & (1 << 5), 0);
 
-        // avx512-bf16 explicitly enabled (host supports it)
-        let leaf7_1 = CpuidIn {
-            func: 7,
-            index: Some(1),
-        };
-        let out = res.get(&leaf7_1).unwrap();
-        assert_ne!(out.eax & (1 << 5), 0);
+        // avx512f explicitly enabled (host supports it)
+        assert_ne!(out.ebx & (1 << 16), 0);
     }
 
     #[test]
@@ -285,5 +317,59 @@ mod expand_tests {
             })
         );
         assert_eq!(lookup_feature("invalid_feat"), None);
+    }
+
+    #[test]
+    fn test_expand_custom_yaml_model() {
+        use std::io::Write;
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let yaml_content = r#"
+name: "custom-test-model"
+level: 13
+xlevel: 2147483681
+vendor: [1753289025, 1769888869, 1145987171] # AMD
+family: 25
+model: 17
+stepping: 0
+model_id: "Custom Test Model"
+features:
+  - "sse2"
+  - "avx2"
+versions:
+  - version: 1
+    props: []
+  - version: 2
+    props:
+      - ["avx512f", true]
+    model_id: "Custom Test Model v2"
+"#;
+        temp_file.write_all(yaml_content.as_bytes()).unwrap();
+        let path_str = temp_file.path().to_str().unwrap();
+
+        let host = mock_host_supported(); // has sse2, avx2, avx512f
+
+        // Test loading v1
+        let spec = CpuSpec {
+            count: 1,
+            model: format!("{}", path_str),
+            topology: Default::default(),
+            features: vec![],
+        };
+        let res = expand_cpu_model(&spec, &host).unwrap();
+        assert!(get_cpuid_bit(&res, &lookup_feature("sse2").unwrap()));
+        assert!(get_cpuid_bit(&res, &lookup_feature("avx2").unwrap()));
+        assert!(!get_cpuid_bit(&res, &lookup_feature("avx512f").unwrap())); // avx512f is v2 only
+
+        // Test loading v2
+        let spec_v2 = CpuSpec {
+            count: 1,
+            model: format!("{}-v2", path_str),
+            topology: Default::default(),
+            features: vec![],
+        };
+        let res_v2 = expand_cpu_model(&spec_v2, &host).unwrap();
+        assert!(get_cpuid_bit(&res_v2, &lookup_feature("sse2").unwrap()));
+        assert!(get_cpuid_bit(&res_v2, &lookup_feature("avx2").unwrap()));
+        assert!(get_cpuid_bit(&res_v2, &lookup_feature("avx512f").unwrap())); // avx512f is enabled in v2
     }
 }

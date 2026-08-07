@@ -17,7 +17,9 @@ mod tdx;
 
 use std::arch::x86_64::{__cpuid, CpuidResult};
 use std::collections::HashMap;
+use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 
@@ -30,8 +32,8 @@ use crate::arch::layout::{
     BIOS_DATA_END, EBDA_END, EBDA_START, IOAPIC_START, MEM_64_START, PORT_ACPI_RESET,
     PORT_ACPI_SLEEP_CONTROL, PORT_ACPI_TIMER, RAM_32_SIZE,
 };
-use crate::arch::x86_64::cpu_models::{CPU_MODELS, CpuModel};
-use crate::arch::x86_64::features::{CpuidReg, FEATURE_WORDS, CpuFeature};
+use crate::arch::x86_64::cpu_models::CpuModel;
+use crate::arch::x86_64::features::{CpuFeature, CpuidReg, FEATURE_WORDS};
 use crate::board::{Board, BoardSpec, CpuSpec, CpuTopology, PCIE_MMIO_64_SIZE, Result, error};
 use crate::device::ioapic::IoApic;
 use crate::firmware::acpi::bindings::{
@@ -382,27 +384,26 @@ fn parse_model_name(model_str: &str) -> Option<(&str, u32)> {
     None
 }
 
-fn resolve_model(model_str: &str) -> Result<(&CpuModel, u32), super::Error> {
-    if let Some((name, version)) = parse_model_name(model_str) {
-        if let Some(model) = CPU_MODELS.iter().find(|m| m.name == name) {
-            return Ok((model, version));
-        }
+fn resolve_model(model_str: &str) -> Result<(CpuModel, u32), super::Error> {
+    let (path_or_name, version) = parse_model_name(model_str).unwrap_or((model_str, 1));
+    let path = Path::new(path_or_name);
+    if path.exists() || path_or_name.ends_with(".yaml") || path_or_name.ends_with(".yml") {
+        let file = File::open(path).context(error::LoadCpuModel {
+            path: path_or_name.to_owned(),
+        })?;
+        let model: CpuModel = serde_yml::from_reader(file).context(error::ParseCpuModel {
+            path: path_or_name.to_owned(),
+        })?;
+        Ok((model, version))
     } else {
-        if let Some(model) = CPU_MODELS.iter().find(|m| m.name == model_str) {
-            return Ok((model, 1));
+        error::InvalidCpuModel {
+            model: model_str.to_owned(),
         }
+        .fail()
     }
-    error::InvalidCpuModel {
-        model: model_str.to_owned(),
-    }
-    .fail()
 }
 
-fn set_cpuid_bit(
-    cpuids: &mut HashMap<CpuidIn, CpuidResult>,
-    feat: &CpuFeature,
-    enable: bool,
-) {
+fn set_cpuid_bit(cpuids: &mut HashMap<CpuidIn, CpuidResult>, feat: &CpuFeature, enable: bool) {
     let leaf = CpuidIn {
         func: feat.func,
         index: feat.index,
@@ -573,7 +574,7 @@ fn expand_cpu_model(
     );
 
     // Populate base features
-    for &feat_name in model.features {
+    for feat_name in &model.features {
         if let Some(feat) = lookup_feature(feat_name) {
             set_cpuid_bit(&mut cpuids, &feat, true);
         } else {
@@ -581,17 +582,21 @@ fn expand_cpu_model(
         }
     }
 
+    let mut model_id = model.model_id.clone();
     // 2. Apply version properties (inheritance)
-    for vdef in model.versions {
+    for vdef in &model.versions {
         if vdef.version > version {
             break;
         }
-        for &(prop_name, enable) in vdef.props {
+        for (prop_name, enable) in &vdef.props {
             if let Some(feat) = lookup_feature(prop_name) {
-                set_cpuid_bit(&mut cpuids, &feat, enable);
+                set_cpuid_bit(&mut cpuids, &feat, *enable);
             } else {
                 panic!("Version property {} not found in registry", prop_name);
             }
+        }
+        if let Some(ref mid) = vdef.model_id {
+            model_id = mid.clone();
         }
     }
 
@@ -640,7 +645,7 @@ fn expand_cpu_model(
     }
 
     // Encode model_id into 0x8000_0002..4
-    let brand = encode_string_to_cpuid(model.model_id);
+    let brand = encode_string_to_cpuid(&model_id);
     for (i, res) in brand.into_iter().enumerate() {
         let func = 0x8000_0002 + i as u32;
         cpuids.insert(CpuidIn { func, index: None }, res);

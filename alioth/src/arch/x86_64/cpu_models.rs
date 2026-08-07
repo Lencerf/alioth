@@ -12,31 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod epyc_genoa;
-
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct CpuModel {
-    pub name: &'static str,
+    pub name: String,
     pub level: u32,
     pub xlevel: u32,
     pub vendor: [u32; 3],
     pub family: u32,
     pub model: u32,
     pub stepping: u32,
-    pub model_id: &'static str,
-    pub features: &'static [&'static str],
-    pub versions: &'static [CpuVersion],
+    pub model_id: String,
+    pub features: Vec<String>,
+    pub versions: Vec<CpuVersion>,
 }
 
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct CpuVersion {
     pub version: u32,
-    pub props: &'static [(&'static str, bool)], // Feature overrides
-    pub model_id: Option<&'static str>,
+    pub props: Vec<(String, bool)>,
+    pub model_id: Option<String>,
 }
-
-use self::epyc_genoa::EPYC_GENOA;
-
-pub const CPU_MODELS: &[CpuModel] = &[EPYC_GENOA];
-
-#[cfg(test)]
-#[path = "cpu_models_test.rs"]
-mod tests;

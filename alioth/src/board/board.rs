@@ -76,6 +76,12 @@ pub enum Error {
     InvalidCpuFeature { feature: String },
     #[snafu(display("Unsupported CPU feature {feature} on host"))]
     UnsupportedCpuFeature { feature: String },
+    #[snafu(display("Failed to load CPU model from {path}"))]
+    LoadCpuModel { path: String, error: std::io::Error },
+    #[snafu(display("Failed to parse CPU model from {path}"))]
+    ParseCpuModel { path: String, error: serde_yml::Error },
+    #[snafu(display("Invalid CPU model configuration in {path}: {reason}"))]
+    CpuModelConfig { path: String, reason: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;

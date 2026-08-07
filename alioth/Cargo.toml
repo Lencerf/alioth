@@ -17,6 +17,7 @@ log = "0.4"
 mio = { version = "1", features = ["net", "os-ext", "os-poll"] }
 parking_lot.workspace = true
 serde.workspace = true
+serde_yml.workspace = true
 serde-aco.workspace = true
 snafu.workspace = true
 zerocopy.workspace = true

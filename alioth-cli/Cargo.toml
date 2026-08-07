@@ -11,6 +11,7 @@ license.workspace = true
 name = "alioth"
 path = "src/main.rs"
 
+
 [dependencies]
 alioth.workspace = true
 clap = { version = "4", features = ["derive"] }
