@@ -110,6 +110,7 @@ consts! {
         MEM = 24;
         FILE_SYSTEM = 26;
         PMEM = 27;
+        PGALLOC = 46;
     }
 }
 

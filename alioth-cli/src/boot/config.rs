@@ -30,7 +30,9 @@ use alioth::virtio::dev::fs::shared_dir::SharedDirSpec;
 use alioth::virtio::dev::net::vmnet::VmnetSpec;
 use alioth::virtio::dev::vsock::UdsVsockSpec;
 #[cfg(target_os = "linux")]
-use alioth::virtio::dev::{fs::vu::VuFsSpec, net::tap::TapNetSpec, vsock::VhostVsockSpec};
+pub use alioth::virtio::dev::{
+    fs::vu::VuFsSpec, net::tap::TapNetSpec, pgalloc::PgallocSpec, vsock::VhostVsockSpec,
+};
 use serde::Deserialize;
 use serde_aco::Help;
 
@@ -104,6 +106,8 @@ pub struct VmSpec {
     pub blk: Vec<BlkSpec>,
     pub fs: Vec<FsSpec>,
     pub vsock: Option<VsockSpec>,
+    #[cfg(target_os = "linux")]
+    pub pgalloc: Option<PgallocSpec>,
     pub entropy: Option<EntropySpec>,
     pub balloon: Option<BalloonSpec>,
     pub pvpanic: bool,

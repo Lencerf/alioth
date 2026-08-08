@@ -19,6 +19,7 @@ pub mod entropy;
 pub mod fs;
 #[path = "net/net.rs"]
 pub mod net;
+pub mod pgalloc;
 #[path = "vsock/vsock.rs"]
 pub mod vsock;
 

@@ -24,10 +24,10 @@ use crate::mem::mapped::Ram;
 use crate::mem::{self, LayoutUpdated};
 use crate::sys::vhost::{
     MemoryMultipleRegion, MemoryRegion, VhostFeature, VirtqAddr, VirtqFile, VirtqState,
-    vhost_get_backend_features, vhost_get_features, vhost_set_backend_features, vhost_set_features,
-    vhost_set_mem_table, vhost_set_owner, vhost_set_virtq_addr, vhost_set_virtq_base,
-    vhost_set_virtq_call, vhost_set_virtq_err, vhost_set_virtq_kick, vhost_set_virtq_num,
-    vhost_vsock_set_guest_cid, vhost_vsock_set_running,
+    vhost_get_backend_features, vhost_get_features, vhost_pgalloc_set_running,
+    vhost_set_backend_features, vhost_set_features, vhost_set_mem_table, vhost_set_owner,
+    vhost_set_virtq_addr, vhost_set_virtq_base, vhost_set_virtq_call, vhost_set_virtq_err,
+    vhost_set_virtq_kick, vhost_set_virtq_num, vhost_vsock_set_guest_cid, vhost_vsock_set_running,
 };
 
 #[trace_error]
@@ -131,14 +131,20 @@ impl VhostDev {
         unsafe { vhost_vsock_set_running(&self.fd, &(val as _)) }?;
         Ok(())
     }
+
+    pub fn pgalloc_set_running(&self, val: bool) -> Result<()> {
+        unsafe { vhost_pgalloc_set_running(&self.fd, &(val as _)) }?;
+        Ok(())
+    }
 }
 
+/// Updates the vhost memory table upon guest RAM layout changes.
 #[derive(Debug)]
-pub struct UpdateVsockMem {
+pub struct UpdateVhostMem {
     pub dev: Arc<VhostDev>,
 }
 
-impl LayoutUpdated for UpdateVsockMem {
+impl LayoutUpdated for UpdateVhostMem {
     fn ram_updated(&self, ram: &Ram) -> mem::Result<()> {
         let mut table = MemoryMultipleRegion {
             num: 0,

@@ -179,6 +179,8 @@ fn test_parse_args() {
         balloon: Some(BalloonSpec {
             free_page_reporting: true,
         }),
+        #[cfg(target_os = "linux")]
+        pgalloc: None,
         pvpanic: true,
         #[cfg(target_arch = "x86_64")]
         fw_cfg: vec![

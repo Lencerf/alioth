@@ -47,7 +47,7 @@ use snafu::{ResultExt, Snafu};
 
 use crate::objects::{DOC_OBJECTS, parse_objects};
 
-use self::config::{BlkSpec, FsSpec, NetSpec, VmSpec, VsockSpec};
+use self::config::{BlkSpec, FsSpec, NetSpec, PgallocSpec, VmSpec, VsockSpec};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -156,6 +156,12 @@ pub struct BootArgs {
         help_text::<VsockSpec>("Add a VirtIO vsock device.")
     ))]
     vsock: Option<String>,
+
+    #[cfg(target_os = "linux")]
+    #[arg(long, help(help_text::<PgallocSpec>(
+        "Add a virtio-pgalloc device backed by the host kernel vhost-pgalloc module."
+    ) ))]
+    pgalloc: Option<String>,
 
     #[arg(long, help(
         help_text::<ConsoleSpec>("Configure guest console.")
@@ -328,6 +334,12 @@ fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<VmSpec
         spec.vsock = Some(param);
     }
 
+    #[cfg(target_os = "linux")]
+    if let Some(arg) = args.pgalloc {
+        let param = serde_aco::from_args(&arg, &objects).context(error::ParseArg { arg })?;
+        spec.pgalloc = Some(param);
+    }
+
     if let Some(arg) = args.console {
         let param = serde_aco::from_args(&arg, &objects).context(error::ParseArg { arg })?;
         spec.console = param;
@@ -363,6 +375,8 @@ fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<VmSpec
 }
 
 fn create<H: Hypervisor>(hypervisor: &H, spec: VmSpec) -> Result<Machine<H>, alioth::vm::Error> {
+    // Captured before spec.board is moved into the machine.
+    let mem_size = spec.board.mem.size;
     let vm = Machine::new(hypervisor, spec.board)?;
 
     #[cfg(target_arch = "x86_64")]
@@ -446,6 +460,14 @@ fn create<H: Hypervisor>(hypervisor: &H, spec: VmSpec) -> Result<Machine<H>, ali
                 vm.add_virtio_dev("vu-vsock", vu_spec)
             }
         }?;
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(mut pgalloc_spec) = spec.pgalloc {
+        if pgalloc_spec.region_size.is_none() {
+            pgalloc_spec.region_size = Some(mem_size);
+        }
+        vm.add_virtio_dev("vhost-pgalloc", pgalloc_spec)?;
     }
 
     if let Some(balloon_spec) = spec.balloon {

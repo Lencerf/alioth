@@ -1,4 +1,4 @@
-// Copyright 2024 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+//! Virtio-pgalloc device backed by the host kernel vhost-pgalloc module.
+//!
+//! The datapath (requestq/eventq) is fully offloaded to the kernel vhost
+//! driver; this device only emulates the transport: config space, feature
+//! negotiation and queue wiring (kicks via ioeventfd, interrupts via irqfd).
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
@@ -25,86 +31,130 @@ use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
 use serde::Deserialize;
 use serde_aco::Help;
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-use crate::ffi;
 use crate::hv::IoeventFd;
 use crate::mem::LayoutUpdated;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
 use crate::sys::vhost::{VHOST_FILE_UNBIND, VirtqAddr, VirtqFile, VirtqState};
-use crate::virtio::dev::vsock::{VsockConfig, VsockFeature};
 use crate::virtio::dev::{DevSpec, DeviceId, Virtio, WakeEvent};
 use crate::virtio::queue::{QueueReg, VirtQueue};
 use crate::virtio::vhost::{UpdateVhostMem, VhostDev, error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{IrqSender, Result, VirtioFeature};
+use crate::{bitflags, ffi, impl_mmio_for_zerocopy};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
-pub struct VhostVsockSpec {
-    /// Vsock context id.
-    pub cid: u32,
-    /// Path to the host device file. [default: /dev/vhost-vsock]
-    pub dev: Option<Box<Path>>,
+/// Default management unit size: 2 MiB page blocks.
+pub const PGALLOC_DEFAULT_PAGEBLOCK_SIZE: u64 = 1 << 21;
+
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Default, FromBytes, IntoBytes, Immutable)]
+pub struct PgallocConfig {
+    pub pageblock_size: u64,
+    pub addr: u64,
+    pub region_size: u64,
+    pub node_id: u16,
+    pub padding: [u8; 6],
 }
 
-impl DevSpec for VhostVsockSpec {
-    type Device = VhostVsock;
+impl_mmio_for_zerocopy!(PgallocConfig);
+
+bitflags! {
+    pub struct PgallocFeature(u128) {
+        PAGEBLOCK_SIZE = 1 << 0;
+        ACPI_PXM = 1 << 1;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+pub struct PgallocSpec {
+    /// Path to the host device file. [default: /dev/vhost-pgalloc]
+    pub dev: Option<Box<Path>>,
+    /// Size of the management unit in bytes. [default: 2 MiB]
+    pub pageblock_size: Option<u64>,
+    /// Guest physical address of the managed region start. [default: 0]
+    pub addr: Option<u64>,
+    /// Size of the managed region in bytes. [default: guest RAM size]
+    pub region_size: Option<u64>,
+    /// NUMA node id of the managed region. [default: 0]
+    pub node_id: Option<u16>,
+}
+
+impl DevSpec for PgallocSpec {
+    type Device = VhostPgalloc;
 
     fn build(self, name: impl Into<Arc<str>>) -> Result<Self::Device> {
-        VhostVsock::new(self, name)
+        VhostPgalloc::new(self, name)
+    }
+
+    fn needs_mem_shared_fd(&self) -> bool {
+        // The host backend will mark guest-freed pages discardable in the
+        // shmem file backing the guest RAM, which requires a shared memfd
+        // backend.
+        true
     }
 }
 
 #[derive(Debug)]
-pub struct VhostVsock {
+pub struct VhostPgalloc {
     name: Arc<str>,
     vhost_dev: Arc<VhostDev>,
-    config: VsockConfig,
+    config: Arc<PgallocConfig>,
     features: u64,
     error_fds: [Option<OwnedFd>; 2],
 }
 
-impl VhostVsock {
-    pub fn new(spec: VhostVsockSpec, name: impl Into<Arc<str>>) -> Result<VhostVsock> {
+impl VhostPgalloc {
+    pub fn new(spec: PgallocSpec, name: impl Into<Arc<str>>) -> Result<VhostPgalloc> {
         let name = name.into();
         let vhost_dev = match spec.dev {
             Some(dev) => VhostDev::new(dev),
-            None => VhostDev::new("/dev/vhost-vsock"),
+            None => VhostDev::new("/dev/vhost-pgalloc"),
         }?;
         vhost_dev.set_owner()?;
-        vhost_dev.vsock_set_guest_cid(spec.cid as _)?;
         if let Ok(backend_feature) = vhost_dev.get_backend_features() {
-            log::debug!("{name}: vhost-vsock backend feature: {backend_feature:x?}");
+            log::debug!("{name}: vhost-pgalloc backend feature: {backend_feature:x?}");
             vhost_dev.set_backend_features(&backend_feature)?;
         }
         let dev_feat = vhost_dev.get_features()? as u128;
         let known_feat = VirtioFeature::from_bits_truncate(dev_feat).bits()
-            | VsockFeature::from_bits_truncate(dev_feat).bits();
+            | PgallocFeature::from_bits_truncate(dev_feat).bits();
         if !VirtioFeature::from_bits_retain(known_feat).contains(VirtioFeature::VERSION_1) {
             return error::VhostMissingDeviceFeature {
                 feature: VirtioFeature::VERSION_1.bits(),
             }
             .fail()?;
         }
-        Ok(VhostVsock {
+        let node_id = spec.node_id.unwrap_or(0);
+        let config = PgallocConfig {
+            pageblock_size: spec
+                .pageblock_size
+                .unwrap_or(PGALLOC_DEFAULT_PAGEBLOCK_SIZE),
+            addr: spec.addr.unwrap_or(0),
+            region_size: spec.region_size.unwrap_or(0),
+            node_id,
+            padding: [0; 6],
+        };
+        if config.region_size == 0 {
+            log::warn!("{name}: region_size is 0; leave it unset to default to the guest RAM size");
+        }
+        Ok(VhostPgalloc {
             name,
             vhost_dev: Arc::new(vhost_dev),
-            config: VsockConfig {
-                guest_cid: spec.cid,
-                ..Default::default()
-            },
+            config: Arc::new(config),
             features: known_feat as u64,
             error_fds: [None, None],
         })
     }
 }
 
-impl Virtio for VhostVsock {
-    type Config = VsockConfig;
-    type Feature = VsockFeature;
+impl Virtio for VhostPgalloc {
+    type Config = PgallocConfig;
+    type Feature = PgallocFeature;
 
     fn id(&self) -> DeviceId {
-        DeviceId::SOCKET
+        DeviceId::PGALLOC
     }
 
     fn name(&self) -> &str {
@@ -112,11 +162,11 @@ impl Virtio for VhostVsock {
     }
 
     fn num_queues(&self) -> u16 {
-        3
+        2
     }
 
-    fn config(&self) -> Arc<VsockConfig> {
-        Arc::new(self.config)
+    fn config(&self) -> Arc<PgallocConfig> {
+        self.config.clone()
     }
 
     fn feature(&self) -> u128 {
@@ -124,10 +174,8 @@ impl Virtio for VhostVsock {
     }
 
     fn ioeventfd_offloaded(&self, q_index: u16) -> Result<bool> {
-        match q_index {
-            0 | 1 => Ok(true),
-            _ => Ok(false),
-        }
+        // Both queues are handled by the kernel vhost driver.
+        Ok(q_index < 2)
     }
 
     fn mem_update_callback(&self) -> Option<Box<dyn LayoutUpdated>> {
@@ -150,7 +198,7 @@ impl Virtio for VhostVsock {
     }
 }
 
-impl VirtioMio for VhostVsock {
+impl VirtioMio for VhostPgalloc {
     fn activate<'m, Q, S, E>(
         &mut self,
         feature: u128,
@@ -214,12 +262,12 @@ impl VirtioMio for VhostVsock {
             )?;
             *fd = Some(err_fd);
         }
-        self.vhost_dev.vsock_set_running(true)?;
+        self.vhost_dev.pgalloc_set_running(true)?;
         Ok(())
     }
 
     fn reset(&mut self, registry: &Registry) {
-        self.vhost_dev.vsock_set_running(false).unwrap();
+        self.vhost_dev.pgalloc_set_running(false).unwrap();
         for (index, error_fd) in self.error_fds.iter_mut().enumerate() {
             let Some(err_fd) = error_fd else {
                 continue;
@@ -249,7 +297,7 @@ impl VirtioMio for VhostVsock {
     {
         let q_index = event.token();
         error::VhostQueueErr {
-            dev: "vsock",
+            dev: "pgalloc",
             index: q_index.0 as u16,
         }
         .fail()?;
@@ -266,18 +314,16 @@ impl VirtioMio for VhostVsock {
         S: IrqSender,
         E: IoeventFd,
     {
-        match index {
-            0 | 1 => unreachable!("{}: queue 0 and 1 are offloaded to kernel", self.name),
-            2 => log::info!("{}: event queue buffer available", self.name),
-            _ => unreachable!(),
-        }
-        Ok(())
+        unreachable!(
+            "{}: queue {index} is offloaded to the kernel vhost driver",
+            self.name
+        );
     }
 }
 
-impl Drop for VhostVsock {
+impl Drop for VhostPgalloc {
     fn drop(&mut self) {
-        let ret = self.vhost_dev.vsock_set_running(false);
+        let ret = self.vhost_dev.pgalloc_set_running(false);
         if let Err(e) = ret {
             log::error!("{}: {e}", self.name)
         }

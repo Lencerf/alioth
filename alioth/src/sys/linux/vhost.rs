@@ -91,3 +91,5 @@ ioctl_read!(vhost_get_backend_features, VHOST_VIRTIO, 0x26, u64);
 
 ioctl_write_ptr!(vhost_vsock_set_guest_cid, VHOST_VIRTIO, 0x60, u64);
 ioctl_write_ptr!(vhost_vsock_set_running, VHOST_VIRTIO, 0x61, i32);
+
+ioctl_write_ptr!(vhost_pgalloc_set_running, VHOST_VIRTIO, 0x62, i32);
