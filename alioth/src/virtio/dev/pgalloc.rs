@@ -37,7 +37,7 @@ use crate::hv::IoeventFd;
 use crate::mem::LayoutUpdated;
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
-use crate::sys::vhost::{VHOST_FILE_UNBIND, VirtqAddr, VirtqFile, VirtqState};
+use crate::sys::vhost::{VHOST_FILE_UNBIND, VhostPgallocConfig, VirtqAddr, VirtqFile, VirtqState};
 use crate::virtio::dev::{DevSpec, DeviceId, Virtio, WakeEvent};
 use crate::virtio::queue::{QueueReg, VirtQueue};
 use crate::virtio::vhost::{UpdateVhostMem, VhostDev, error};
@@ -112,7 +112,22 @@ impl VhostPgalloc {
             Some(dev) => VhostDev::new(dev),
             None => VhostDev::new("/dev/vhost-pgalloc"),
         }?;
+        let node_id = spec.node_id.unwrap_or(0);
+        let config = PgallocConfig {
+            pageblock_size: spec
+                .pageblock_size
+                .unwrap_or(PGALLOC_DEFAULT_PAGEBLOCK_SIZE),
+            addr: spec.addr.unwrap_or(0),
+            region_size: spec.region_size.unwrap_or(0),
+            node_id,
+            padding: [0; 6],
+        };
         vhost_dev.set_owner()?;
+        vhost_dev.pgalloc_set_config(&VhostPgallocConfig {
+            pageblock_size: config.pageblock_size,
+            addr: config.addr,
+            region_size: config.region_size,
+        })?;
         if let Ok(backend_feature) = vhost_dev.get_backend_features() {
             log::debug!("{name}: vhost-pgalloc backend feature: {backend_feature:x?}");
             vhost_dev.set_backend_features(&backend_feature)?;
@@ -126,16 +141,6 @@ impl VhostPgalloc {
             }
             .fail()?;
         }
-        let node_id = spec.node_id.unwrap_or(0);
-        let config = PgallocConfig {
-            pageblock_size: spec
-                .pageblock_size
-                .unwrap_or(PGALLOC_DEFAULT_PAGEBLOCK_SIZE),
-            addr: spec.addr.unwrap_or(0),
-            region_size: spec.region_size.unwrap_or(0),
-            node_id,
-            padding: [0; 6],
-        };
         if config.region_size == 0 {
             log::warn!("{name}: region_size is 0; leave it unset to default to the guest RAM size");
         }

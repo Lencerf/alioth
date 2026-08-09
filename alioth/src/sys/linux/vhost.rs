@@ -93,3 +93,18 @@ ioctl_write_ptr!(vhost_vsock_set_guest_cid, VHOST_VIRTIO, 0x60, u64);
 ioctl_write_ptr!(vhost_vsock_set_running, VHOST_VIRTIO, 0x61, i32);
 
 ioctl_write_ptr!(vhost_pgalloc_set_running, VHOST_VIRTIO, 0x62, i32);
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct VhostPgallocConfig {
+    pub pageblock_size: u64,
+    pub addr: u64,
+    pub region_size: u64,
+}
+
+ioctl_write_ptr!(
+    vhost_pgalloc_set_config,
+    VHOST_VIRTIO,
+    0x63,
+    VhostPgallocConfig
+);

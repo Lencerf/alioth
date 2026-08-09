@@ -23,11 +23,12 @@ use crate::errors::{BoxTrace, DebugTrace, trace_error};
 use crate::mem::mapped::Ram;
 use crate::mem::{self, LayoutUpdated};
 use crate::sys::vhost::{
-    MemoryMultipleRegion, MemoryRegion, VhostFeature, VirtqAddr, VirtqFile, VirtqState,
-    vhost_get_backend_features, vhost_get_features, vhost_pgalloc_set_running,
-    vhost_set_backend_features, vhost_set_features, vhost_set_mem_table, vhost_set_owner,
-    vhost_set_virtq_addr, vhost_set_virtq_base, vhost_set_virtq_call, vhost_set_virtq_err,
-    vhost_set_virtq_kick, vhost_set_virtq_num, vhost_vsock_set_guest_cid, vhost_vsock_set_running,
+    MemoryMultipleRegion, MemoryRegion, VhostFeature, VhostPgallocConfig, VirtqAddr, VirtqFile,
+    VirtqState, vhost_get_backend_features, vhost_get_features, vhost_pgalloc_set_config,
+    vhost_pgalloc_set_running, vhost_set_backend_features, vhost_set_features, vhost_set_mem_table,
+    vhost_set_owner, vhost_set_virtq_addr, vhost_set_virtq_base, vhost_set_virtq_call,
+    vhost_set_virtq_err, vhost_set_virtq_kick, vhost_set_virtq_num, vhost_vsock_set_guest_cid,
+    vhost_vsock_set_running,
 };
 
 #[trace_error]
@@ -134,6 +135,11 @@ impl VhostDev {
 
     pub fn pgalloc_set_running(&self, val: bool) -> Result<()> {
         unsafe { vhost_pgalloc_set_running(&self.fd, &(val as _)) }?;
+        Ok(())
+    }
+
+    pub fn pgalloc_set_config(&self, cfg: &VhostPgallocConfig) -> Result<()> {
+        unsafe { vhost_pgalloc_set_config(&self.fd, cfg) }?;
         Ok(())
     }
 }
