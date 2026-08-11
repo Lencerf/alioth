@@ -164,6 +164,9 @@ impl<V: Vm> VcpuThread<V> {
         if let Some(fw) = payload.firmware.as_ref() {
             return self.setup_firmware(fw, payload);
         }
+        if let Some(igvm) = payload.igvm.as_ref() {
+            return self.setup_firmware(igvm, payload);
+        }
 
         let Some(exec) = &payload.executable else {
             return error::MissingPayload.fail();

@@ -15,6 +15,8 @@
 pub mod elf;
 #[path = "firmware/firmware.rs"]
 pub mod firmware;
+#[cfg(target_arch = "x86_64")]
+pub mod igvm;
 #[path = "linux/linux.rs"]
 pub mod linux;
 #[cfg(target_arch = "x86_64")]
@@ -38,6 +40,7 @@ use crate::mem::{MemRegionEntry, MemRegionType};
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct PayloadSpec {
     pub firmware: Option<Box<Path>>,
+    pub igvm: Option<Box<Path>>,
     pub executable: Option<Executable>,
     pub initramfs: Option<Box<Path>>,
     pub cmdline: Option<Box<str>>,
@@ -98,6 +101,12 @@ pub enum Error {
         min: u64,
         found: u64,
     },
+    #[snafu(display("Invalid IGVM file: {err}"))]
+    InvalidIgvm { err: String },
+    #[snafu(display("No matching IGVM platform configuration found"))]
+    NoIgvmPlatform,
+    #[snafu(display("Hypervisor error: {source}"))]
+    Hv { source: crate::hv::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

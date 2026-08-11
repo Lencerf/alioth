@@ -332,6 +332,10 @@ impl Ram {
     }
 
     pub fn write(&self, gpa: u64, buf: &[u8]) -> Result<()> {
+        log::info!("Ram::write: gpa={:#x}, buf.len={}", gpa, buf.len());
+        for (addr, pages) in self.inner.iter() {
+            log::info!("  Mapped region: {:#x} - {:#x}", addr, addr + pages.size() as u64);
+        }
         let len = buf.len() as u64;
         let host_ref = self.get_partial_slice_mut(gpa, len)?;
         if host_ref.len() == buf.len() {
@@ -414,8 +418,10 @@ impl RamBus {
     }
 
     pub(crate) fn add(&self, gpa: u64, user_mem: ArcMemPages) -> Result<(), Error> {
+        log::info!("RamBus::add: adding region at GPA {:#x}, size {}", gpa, user_mem.size());
         let mut ram = self.ram.write();
         ram.inner.add(gpa, user_mem)?;
+        log::info!("RamBus::add: successfully added GPA {:#x}", gpa);
         Ok(())
     }
 

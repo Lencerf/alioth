@@ -20,7 +20,7 @@ use std::path::Path;
 use crate::arch::msr::{MiscEnable, Msr};
 use crate::cpu::{Result, VcpuHandle, VcpuThread};
 use crate::hv::{CocoSpec, Vcpu, Vm};
-use crate::loader::{InitState, PayloadSpec, firmware};
+use crate::loader::{InitState, PayloadSpec, firmware, igvm};
 use crate::mem::mapped::ArcMemPages;
 
 impl<V: Vm> VcpuThread<V> {
@@ -99,8 +99,25 @@ impl<V: Vm> VcpuThread<V> {
     }
 
     pub(crate) fn setup_firmware(&self, fw: &Path, payload: &PayloadSpec) -> Result<InitState> {
+        if payload.igvm.is_some() {
+            return self.setup_igvm(fw, payload);
+        }
         let (init_state, mut rom) = firmware::load(&self.ctx.board.memory, fw)?;
         self.setup_coco(&mut rom)?;
+        self.ctx.board.setup_fw_cfg(payload)?;
+        Ok(init_state)
+    }
+
+    fn setup_igvm(&self, fw: &Path, payload: &PayloadSpec) -> Result<InitState> {
+        let mem_regions = self.ctx.board.memory.mem_region_entries();
+        let init_state = igvm::load(
+            &self.ctx.board.memory,
+            &mem_regions,
+            fw,
+            &*self.ctx.board.vm,
+            self.ctx.board.spec.coco.as_ref(),
+            self.ctx.board.spec.cpu.count,
+        )?;
         self.ctx.board.setup_fw_cfg(payload)?;
         Ok(init_state)
     }

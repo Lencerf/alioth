@@ -39,7 +39,15 @@ impl KvmVm {
             id: cmd,
             error: SevStatus::SUCCESS,
         };
-        unsafe { kvm_memory_encrypt_op(&self.vm.fd, &mut req) }.context(error::MemEncrypt)?;
+        if let Err(e) = unsafe { kvm_memory_encrypt_op(&self.vm.fd, &mut req) } {
+            log::error!(
+                "KVM SEV command {:?} failed: ioctl error: {}, PSP error: {:?}",
+                cmd,
+                e,
+                req.error
+            );
+            return Err(e).context(error::MemEncrypt);
+        }
         if req.error != SevStatus::SUCCESS {
             return error::SevErr { code: req.error }.fail();
         }
@@ -86,15 +94,27 @@ impl KvmVm {
 
     pub fn sev_launch_measure(&self) -> Result<Vec<u8>> {
         let mut empty = KvmSevLaunchMeasure { uaddr: 0, len: 0 };
-        let _ = self.sev_op(KvmSevCmdId::LAUNCH_MEASURE, Some(&mut empty));
-        assert_ne!(empty.len, 0);
-        let mut buf = vec![0u8; empty.len as usize];
-        let mut measure = KvmSevLaunchMeasure {
-            uaddr: buf.as_mut_ptr() as u64,
-            len: buf.len() as u32,
+        let sev_fd = self.vm.arch.sev_fd.as_ref().unwrap();
+        let mut req = KvmSevCmd {
+            sev_fd: sev_fd.as_fd().as_raw_fd() as u32,
+            data: &mut empty as *mut _ as _,
+            id: KvmSevCmdId::LAUNCH_MEASURE,
+            error: SevStatus::SUCCESS,
         };
-        self.sev_op(KvmSevCmdId::LAUNCH_MEASURE, Some(&mut measure))?;
-        Ok(buf)
+        let _ = unsafe { kvm_memory_encrypt_op(&self.vm.fd, &mut req) };
+        log::info!(
+            "LAUNCH_MEASURE query returned length: {}, PSP status: {:?}",
+            empty.len,
+            req.error
+        );
+        assert_ne!(empty.len, 0);
+        let mut measure = vec![0u8; empty.len as usize];
+        let mut measure_cmd = KvmSevLaunchMeasure {
+            uaddr: measure.as_mut_ptr() as u64,
+            len: empty.len,
+        };
+        self.sev_op(KvmSevCmdId::LAUNCH_MEASURE, Some(&mut measure_cmd))?;
+        Ok(measure)
     }
 
     pub fn sev_launch_finish(&self) -> Result<()> {

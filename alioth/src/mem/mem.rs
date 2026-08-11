@@ -337,7 +337,9 @@ impl Memory {
         let mut ram_updated = false;
         for range in &region.ranges {
             let gpa = addr + offset;
+            log::info!("Memory::add_region: processing range at GPA {:#x}", gpa);
             if let MemRange::Ram(pages) | MemRange::DevMem { pages, .. } = range {
+                log::info!("Memory::add_region: calling ram_bus.add at GPA {:#x}, size {}", gpa, pages.size());
                 self.ram_bus.add(gpa, pages.clone())?;
                 ram_updated = true;
             }

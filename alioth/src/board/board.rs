@@ -173,6 +173,7 @@ where
     V: Vm,
 {
     fn ram_added(&self, gpa: u64, pages: &ArcMemPages) -> mem::Result<()> {
+        log::info!("ChangeVmMemory::ram_added: gpa={:#x}, size={}", gpa, pages.size());
         let opt = MemMapOption {
             read: true,
             write: true,
@@ -194,6 +195,7 @@ where
         pages: &ArcMemPages,
         _: Option<BorrowedFd>,
     ) -> mem::Result<()> {
+        log::info!("ChangeVmMemory::dev_mem_added: gpa={:#x}, size={}", gpa, pages.size());
         self.ram_added(gpa, pages)
     }
 

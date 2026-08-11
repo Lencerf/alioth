@@ -20,6 +20,8 @@ serde.workspace = true
 serde-aco.workspace = true
 snafu.workspace = true
 zerocopy.workspace = true
+igvm = "0.3"
+igvm_defs = "0.3"
 
 [dev-dependencies]
 assert_matches.workspace = true

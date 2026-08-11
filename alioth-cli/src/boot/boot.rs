@@ -92,6 +92,10 @@ pub struct BootArgs {
     #[arg(long, short, value_name = "PATH")]
     firmware: Option<Box<Path>>,
 
+    /// Path to an IGVM file.
+    #[arg(long, value_name = "PATH")]
+    igvm: Option<Box<Path>>,
+
     /// Command line to pass to the kernel, e.g. `console=ttyS0`.
     #[arg(short, long, alias = "cmd-line", value_name = "ARGS")]
     cmdline: Option<Box<str>>,
@@ -268,6 +272,7 @@ fn parse_cpu_arg(
 fn parse_payload_arg(args: &mut BootArgs) -> PayloadSpec {
     let mut payload = PayloadSpec {
         firmware: args.firmware.take(),
+        igvm: args.igvm.take(),
         initramfs: args.initramfs.take(),
         cmdline: args.cmdline.take(),
         ..Default::default()
@@ -377,13 +382,13 @@ fn create<H: Hypervisor>(hypervisor: &H, spec: VmSpec) -> Result<Machine<H>, ali
     }
 
     #[cfg(target_arch = "x86_64")]
-    if spec.payload.firmware.is_some() {
+    if spec.payload.firmware.is_some() || spec.payload.igvm.is_some() {
         vm.add_cmos()?;
         vm.add_fw_dbg()?;
     }
 
     #[cfg(target_arch = "x86_64")]
-    if spec.payload.firmware.is_some() || !spec.fw_cfg.is_empty() {
+    if spec.payload.firmware.is_some() || spec.payload.igvm.is_some() || !spec.fw_cfg.is_empty() {
         vm.add_fw_cfg(spec.fw_cfg.into_iter())?;
     };
 
