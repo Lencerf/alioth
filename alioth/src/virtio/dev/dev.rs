@@ -274,6 +274,7 @@ where
     memory: Arc<RamBus>,
     event_rx: Receiver<WakeEvent<S, E>>,
     queue_regs: Arc<[QueueReg]>,
+    notifier: Arc<Notifier>,
     pub state: WorkerState,
 }
 
@@ -337,6 +338,9 @@ where
         B: ActiveBackend<D>,
     {
         if event.token() == TOKEN_WARKER {
+            // Drain before handling, so that a `notify` arriving while the
+            // events below are processed still leaves the notifier armed.
+            self.notifier.clear()?;
             self.handle_wake_events(backend)
         } else {
             backend.handle_event(&mut self.dev, event)
@@ -365,6 +369,7 @@ where
                 event_rx,
                 memory,
                 queue_regs,
+                notifier: notifier.clone(),
                 state: WorkerState::Pending,
             },
             backend,

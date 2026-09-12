@@ -49,6 +49,15 @@ impl Notifier {
         let _ = fd.write(&1u64.to_ne_bytes())?;
         Ok(())
     }
+
+    /// Consumes the pending notification.
+    ///
+    /// An `eventfd` counter needs no draining to keep delivering events, so
+    /// this is a no-op. It exists because the macOS implementation, which is
+    /// backed by a Mach port, does have to dequeue the message.
+    pub fn clear(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl Source for Notifier {
