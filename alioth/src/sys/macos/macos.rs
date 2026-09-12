@@ -15,6 +15,7 @@
 pub mod block;
 pub mod dispatch;
 pub mod hvf;
+pub mod mach;
 pub mod os;
 pub mod vmnet;
 pub mod xpc;
