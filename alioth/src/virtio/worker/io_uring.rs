@@ -53,6 +53,7 @@ pub trait VirtioIoUring: Virtio {
 
 const TOKEN_QUEUE: u64 = 1 << 62;
 const TOKEN_DESCRIPTOR: u64 = (1 << 62) | (1 << 61);
+const TOKEN_CANCEL: u64 = 1 << 63;
 
 pub struct IoUring {
     notifier: Arc<Notifier>,
@@ -144,19 +145,9 @@ where
             }
         }
 
-        'out: loop {
-            active_ring.ring.submit_and_wait(1)?;
-            loop {
-                let Some(entry) = active_ring.ring.completion().next() else {
-                    break;
-                };
-                context.handle_event(&entry, &mut active_ring)?;
-                if context.state != WorkerState::Running {
-                    break 'out;
-                }
-            }
-        }
-        Ok(())
+        let ret = active_ring.run(context);
+        let drained = active_ring.drain();
+        ret.and(drained)
     }
 }
 
@@ -188,6 +179,65 @@ where
     Q: VirtQueue,
     S: IrqSender,
 {
+    fn run<D>(&mut self, context: &mut Context<D, S>) -> Result<()>
+    where
+        D: VirtioIoUring,
+    {
+        loop {
+            self.ring.submit_and_wait(1)?;
+            loop {
+                let Some(entry) = self.ring.completion().next() else {
+                    break;
+                };
+                context.handle_event(&entry, self)?;
+                if context.state != WorkerState::Running {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    /// Cancels in-flight descriptor requests and waits for all of them to
+    /// complete.
+    ///
+    /// Requests like reading from a tap device may never complete by
+    /// themselves, and closing the ring does not wait for the kernel to
+    /// finish them. Without draining, the kernel could still write into
+    /// guest memory after the queues and the memory snapshots they pin are
+    /// dropped, e.g. into memory that is unplugged and reused.
+    ///
+    /// The results are discarded. The device is being reset or shut down,
+    /// so the guest does not expect the chains back.
+    fn drain(&mut self) -> Result<()> {
+        let mut in_flight: usize = self.submit_counts.iter().map(|c| *c as usize).sum();
+        if in_flight == 0 {
+            return Ok(());
+        }
+        for (q_index, q) in self.queues.iter().enumerate() {
+            let Some(q) = q else {
+                continue;
+            };
+            for id in q.deferred_ids() {
+                let token = ((id as u64) << 16) | q_index as u64 | TOKEN_DESCRIPTOR;
+                let cancel = opcode::AsyncCancel::new(token)
+                    .build()
+                    .user_data(TOKEN_CANCEL);
+                while unsafe { self.ring.submission().push(&cancel) }.is_err() {
+                    self.ring.submit()?;
+                }
+            }
+        }
+        while in_flight > 0 {
+            self.ring.submit_and_wait(1)?;
+            let done = (self.ring.completion())
+                .filter(|cqe| cqe.user_data() & TOKEN_DESCRIPTOR == TOKEN_DESCRIPTOR)
+                .count();
+            in_flight = in_flight.saturating_sub(done);
+        }
+        self.submit_counts.fill(0);
+        Ok(())
+    }
+
     fn submit_buffers<D>(&mut self, dev: &mut D, q_index: u16) -> Result<()>
     where
         D: VirtioIoUring,
@@ -268,3 +318,7 @@ where
         self.submit_buffers(dev, index)
     }
 }
+
+#[cfg(test)]
+#[path = "io_uring_test.rs"]
+mod tests;

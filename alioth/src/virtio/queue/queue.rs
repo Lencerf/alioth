@@ -203,6 +203,12 @@ where
         self.deferred.len()
     }
 
+    /// Head descriptor ids of the chains taken from the ring but not
+    /// returned yet.
+    pub fn deferred_ids(&self) -> impl Iterator<Item = u16> + '_ {
+        self.deferred.keys().copied()
+    }
+
     pub fn desc_avail(&self) -> bool {
         self.q.desc_avail(self.avail)
     }
