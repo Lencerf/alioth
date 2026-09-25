@@ -245,13 +245,13 @@ impl VirtioMio for Net {
         let _ = registry.deregister(&mut SourceFd(&self.tap_sockets[0].as_raw_fd()));
     }
 
-    fn activate<'m, Q, S>(
+    fn activate<Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         self.driver_feature = NetFeature::from_bits_retain(feature);
@@ -265,13 +265,13 @@ impl VirtioMio for Net {
         Ok(())
     }
 
-    fn handle_event<'a, 'm, Q, S>(
+    fn handle_event<'a, Q, S>(
         &mut self,
         event: &Event,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let token = event.token().0;
@@ -303,13 +303,13 @@ impl VirtioMio for Net {
         Ok(())
     }
 
-    fn handle_queue<'m, Q, S>(
+    fn handle_queue<Q, S>(
         &mut self,
         index: u16,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let Some(Some(queue)) = active_mio.queues.get_mut(index as usize) else {
@@ -337,14 +337,14 @@ impl VirtioMio for Net {
 }
 
 impl VirtioIoUring for Net {
-    fn activate<'m, Q, S>(
+    fn activate<Q, S>(
         &mut self,
         feature: u128,
-        _ring: &mut ActiveIoUring<'_, '_, 'm, Q, S>,
+        _ring: &mut ActiveIoUring<'_, '_, Q, S>,
     ) -> Result<()>
     where
         S: IrqSender,
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
     {
         self.driver_feature = NetFeature::from_bits_retain(feature);
         let socket = &mut self.tap_sockets[0];

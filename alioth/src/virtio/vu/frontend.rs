@@ -302,13 +302,13 @@ impl Virtio for VuFrontend {
 }
 
 impl VirtioMio for VuFrontend {
-    fn activate<'m, Q, S>(
+    fn activate<Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let name = &*self.name;
@@ -350,7 +350,7 @@ impl VirtioMio for VuFrontend {
             self.session.set_virtq_base(&virtq_base)?;
             log::trace!("{name}: queue-{index}: set base: {}", virtq_base.val);
 
-            let mem = active_mio.mem;
+            let mem = &active_mio.mem;
             let virtq_addr = VirtqAddr {
                 index: index as _,
                 flags: 0,
@@ -386,25 +386,17 @@ impl VirtioMio for VuFrontend {
         Ok(())
     }
 
-    fn handle_event<'a, 'm, Q, S>(
-        &mut self,
-        _: &Event,
-        _: &mut ActiveMio<'_, '_, 'm, Q, S>,
-    ) -> Result<()>
+    fn handle_event<'a, Q, S>(&mut self, _: &Event, _: &mut ActiveMio<'_, '_, Q, S>) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         unreachable!()
     }
 
-    fn handle_queue<'m, Q, S>(
-        &mut self,
-        index: u16,
-        _: &mut ActiveMio<'_, '_, 'm, Q, S>,
-    ) -> Result<()>
+    fn handle_queue<Q, S>(&mut self, index: u16, _: &mut ActiveMio<'_, '_, Q, S>) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         unreachable!(

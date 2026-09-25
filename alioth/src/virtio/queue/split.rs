@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::atomic::{Ordering, fence};
 
@@ -67,7 +66,7 @@ pub struct UsedElem {
 }
 
 #[derive(Debug)]
-pub struct SplitQueue<'m> {
+pub struct SplitQueue {
     size: u16,
     avail_hdr: *mut AvailHeader,
     avail_ring: *mut u16,
@@ -76,10 +75,9 @@ pub struct SplitQueue<'m> {
     used_ring: *mut UsedElem,
     avail_event: Option<*mut u16>,
     desc: *mut Desc,
-    _phantom: PhantomData<&'m ()>,
 }
 
-impl SplitQueue<'_> {
+impl SplitQueue {
     pub fn avail_index(&self) -> u16 {
         unsafe { &*self.avail_hdr }.idx
     }
@@ -119,8 +117,12 @@ impl SplitQueue<'_> {
     }
 }
 
-impl<'m> SplitQueue<'m> {
-    pub fn new(reg: &QueueReg, ram: &'m Ram, event_idx: bool) -> Result<Option<SplitQueue<'m>>> {
+impl SplitQueue {
+    /// Creates a split queue from the registers set by the driver.
+    ///
+    /// The returned queue caches host pointers into `ram`. The caller must
+    /// keep `ram` alive for as long as the queue is in use.
+    pub fn new(reg: &QueueReg, ram: &Ram, event_idx: bool) -> Result<Option<SplitQueue>> {
         if !reg.enabled.load(Ordering::Acquire) {
             return Ok(None);
         }
@@ -153,22 +155,25 @@ impl<'m> SplitQueue<'m> {
             used_ring: ram.get_ptr(used_ring_gpa)?,
             avail_event,
             desc: ram.get_ptr(desc)?,
-            _phantom: PhantomData,
         }))
     }
 }
 
-impl<'m> VirtQueue<'m> for SplitQueue<'m> {
+impl VirtQueue for SplitQueue {
     type Index = u16;
 
     const INIT_INDEX: u16 = 0;
+
+    fn new(reg: &QueueReg, ram: &Ram, event_idx: bool) -> Result<Option<Self>> {
+        SplitQueue::new(reg, ram, event_idx)
+    }
 
     fn desc_avail(&self, index: u16) -> bool {
         let avail_index = self.avail_index();
         index < avail_index || index - avail_index >= !(self.size - 1)
     }
 
-    fn get_avail(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
+    fn get_avail<'m>(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
         if !self.desc_avail(index) {
             return Ok(None);
         }

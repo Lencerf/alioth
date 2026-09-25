@@ -34,31 +34,31 @@ use crate::virtio::queue::{Queue, QueueReg, VirtQueue};
 use crate::virtio::{IrqSender, Result, error};
 
 pub trait VirtioMio: Virtio {
-    fn activate<'m, Q, S>(
+    fn activate<Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender;
 
-    fn handle_queue<'m, Q, S>(
+    fn handle_queue<Q, S>(
         &mut self,
         index: u16,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender;
 
-    fn handle_event<'m, Q, S>(
+    fn handle_event<Q, S>(
         &mut self,
         event: &Event,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender;
 
     fn reset(&mut self, registry: &Registry);
@@ -109,16 +109,16 @@ where
         Ok(())
     }
 
-    fn event_loop<'m, S, Q>(
+    fn event_loop<S, Q>(
         &mut self,
-        memory: &'m Ram,
+        memory: Arc<Ram>,
         context: &mut Context<D, S>,
-        queues: &mut [Option<Queue<'_, 'm, Q>>],
+        queues: &mut [Option<Queue<'_, Q>>],
         param: &StartParam<S>,
     ) -> Result<()>
     where
         S: IrqSender,
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
     {
         let mut events = Events::with_capacity(128);
         let mut active_mio = ActiveMio {
@@ -171,21 +171,21 @@ where
     }
 }
 
-pub struct ActiveMio<'a, 'r, 'm, Q, S>
+pub struct ActiveMio<'a, 'r, Q, S>
 where
-    Q: VirtQueue<'m>,
+    Q: VirtQueue,
 {
-    pub queues: &'a mut [Option<Queue<'r, 'm, Q>>],
+    pub queues: &'a mut [Option<Queue<'r, Q>>],
     pub irq_sender: &'a S,
     pub notifiers: &'a [Notifier],
     pub poll: &'a mut Poll,
-    pub mem: &'m Ram,
+    pub mem: Arc<Ram>,
 }
 
-impl<'m, D, Q, S> ActiveBackend<D> for ActiveMio<'_, '_, 'm, Q, S>
+impl<D, Q, S> ActiveBackend<D> for ActiveMio<'_, '_, Q, S>
 where
     D: VirtioMio,
-    Q: VirtQueue<'m>,
+    Q: VirtQueue,
     S: IrqSender,
 {
     type Event = Event;

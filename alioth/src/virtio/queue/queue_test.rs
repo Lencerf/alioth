@@ -15,11 +15,13 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
 use std::ptr::eq as ptr_eq;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use assert_matches::assert_matches;
 use flume::TryRecvError;
 
+use crate::mem::mapped::ArcMemPages;
 use crate::virtio::Error;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::{
@@ -27,13 +29,14 @@ use crate::virtio::queue::{
 };
 use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, fixture_queues, fixture_ram_bus};
 
+#[derive(Debug)]
 pub struct UsedDesc {
     pub id: u16,
     pub delta: u16,
     pub len: u32,
 }
 
-pub trait VirtQueueGuest<'m>: VirtQueue<'m> {
+pub trait VirtQueueGuest: VirtQueue {
     fn add_desc(
         &mut self,
         index: Self::Index,
@@ -46,9 +49,9 @@ pub trait VirtQueueGuest<'m>: VirtQueue<'m> {
     -> Option<UsedDesc>;
 }
 
-pub struct GuestQueue<'m, Q>
+pub struct GuestQueue<Q>
 where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     q: Q,
     avail: Q::Index,
@@ -58,9 +61,9 @@ where
     next_id: u16,
 }
 
-impl<'m, Q> GuestQueue<'m, Q>
+impl<Q> GuestQueue<Q>
 where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     pub fn new(q: Q, reg: &QueueReg) -> Self {
         let size = reg.size.load(Ordering::Acquire);
@@ -75,9 +78,9 @@ where
     }
 }
 
-impl<'m, Q> GuestQueue<'m, Q>
+impl<Q> GuestQueue<Q>
 where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     pub fn add_desc(&mut self, readable: &[(u64, u32)], writable: &[(u64, u32)]) -> u16 {
         let mut ids = vec![];
@@ -172,11 +175,9 @@ fn test_copy_from_reader() {
     let queues = fixture_queues(1);
     let ram = ram_bus.load();
     let reg = &queues[0];
-    let mut host_q = Queue::new(
-        SplitQueue::new(reg, &ram, false).unwrap().unwrap(),
-        reg,
-        &ram,
-    );
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram.clone(), false)
+        .unwrap()
+        .unwrap();
     let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
     assert!(ptr_eq(host_q.reg(), reg));
 
@@ -328,11 +329,9 @@ fn test_copy_to_writer() {
     let queues = fixture_queues(1);
     let ram = ram_bus.load();
     let reg = &queues[0];
-    let mut host_q = Queue::new(
-        SplitQueue::new(reg, &ram, false).unwrap().unwrap(),
-        reg,
-        &ram,
-    );
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram.clone(), false)
+        .unwrap()
+        .unwrap();
     let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
     let (irq_tx, irq_rx) = flume::unbounded();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
@@ -460,11 +459,9 @@ fn test_handle_deferred() {
     let queues = fixture_queues(1);
     let ram = ram_bus.load();
     let reg = &queues[0];
-    let mut host_q = Queue::new(
-        SplitQueue::new(reg, &ram, false).unwrap().unwrap(),
-        reg,
-        &ram,
-    );
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram.clone(), false)
+        .unwrap()
+        .unwrap();
     let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
     let (irq_tx, irq_rx) = flume::unbounded();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
@@ -519,4 +516,69 @@ fn test_handle_deferred() {
             Ok(0)
         })
         .unwrap();
+}
+
+#[test]
+fn test_update_ram() {
+    const EXTRA_GPA: u64 = 4 << 20;
+    const EXTRA_SIZE: usize = 1 << 20;
+
+    let ram_bus = fixture_ram_bus();
+    let extra = ArcMemPages::from_anonymous(EXTRA_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(EXTRA_GPA, extra)).unwrap();
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let ram = ram_bus.load();
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    // The first chain points into the extra slot and stays in flight.
+    let str_0 = "in flight across a memory update";
+    ram.write(EXTRA_GPA, str_0.as_bytes()).unwrap();
+    let id_0 = guest_q.add_desc(&[(EXTRA_GPA, str_0.len() as u32)], &[]);
+    host_q
+        .handle_desc(0, &irq_sender, |_| Ok(Status::Deferred))
+        .unwrap();
+    assert_eq!(host_q.num_deferred(), 1);
+
+    // Unplug the extra slot and move the queue to the new layout.
+    ram_bus.update(|ram| ram.remove(EXTRA_GPA)).unwrap();
+    let old_ram = Arc::downgrade(&ram);
+    drop(ram);
+    let new_ram = ram_bus.load();
+    host_q.update_ram(new_ram.clone()).unwrap();
+    assert!(Arc::ptr_eq(host_q.ram(), &new_ram));
+    // The deferred chain still pins the old snapshot.
+    assert!(old_ram.upgrade().is_some());
+
+    // A new chain is picked up at the right ring index, not from 0.
+    let str_1 = "after the update";
+    new_ram.write(DATA_ADDR, str_1.as_bytes()).unwrap();
+    let id_1 = guest_q.add_desc(&[(DATA_ADDR, str_1.len() as u32)], &[]);
+    let mut ids = vec![];
+    host_q
+        .handle_desc(0, &irq_sender, |chain| {
+            ids.push(chain.id());
+            assert_eq!(&*chain.readable[0], str_1.as_bytes());
+            Ok(Status::Done { len: 0 })
+        })
+        .unwrap();
+    assert_eq!(ids, [id_1]);
+    assert_eq!(irq_rx.try_recv(), Ok(0));
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id, .. }) if id == id_1);
+
+    // The buffer of the in-flight chain is still accessible.
+    host_q
+        .handle_deferred(id_0, 0, &irq_sender, |chain| {
+            assert_eq!(&*chain.readable[0], str_0.as_bytes());
+            Ok(0)
+        })
+        .unwrap();
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id, .. }) if id == id_0);
+    assert_eq!(host_q.num_deferred(), 0);
+    assert!(old_ram.upgrade().is_none());
 }

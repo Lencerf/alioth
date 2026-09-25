@@ -75,6 +75,8 @@ pub enum Error {
     InvalidMsixVector { vector: u16 },
     #[snafu(display("Invalid virtq buffer"))]
     InvalidBuffer,
+    #[snafu(display("Queue was disabled while the device is running"))]
+    QueueDisabled,
     #[cfg(target_os = "linux")]
     #[snafu(display("vhost-user error"), context(false))]
     Vu { source: Box<vu::Error> },

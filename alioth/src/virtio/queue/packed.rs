@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 
 use bitfield::bitfield;
@@ -84,17 +83,20 @@ struct DescEvent {
 }
 
 #[derive(Debug)]
-pub struct PackedQueue<'m> {
+pub struct PackedQueue {
     size: u16,
     desc: *mut Desc,
     enable_event_idx: bool,
     notification: *mut DescEvent,
     interrupt: *mut DescEvent,
-    _phantom: PhantomData<&'m ()>,
 }
 
-impl<'m> PackedQueue<'m> {
-    pub fn new(reg: &QueueReg, ram: &'m Ram, event_idx: bool) -> Result<Option<PackedQueue<'m>>> {
+impl PackedQueue {
+    /// Creates a packed queue from the registers set by the driver.
+    ///
+    /// The returned queue caches host pointers into `ram`. The caller must
+    /// keep `ram` alive for as long as the queue is in use.
+    pub fn new(reg: &QueueReg, ram: &Ram, event_idx: bool) -> Result<Option<PackedQueue>> {
         if !reg.enabled.load(Ordering::Acquire) {
             return Ok(None);
         }
@@ -110,7 +112,6 @@ impl<'m> PackedQueue<'m> {
             enable_event_idx: event_idx,
             notification,
             interrupt: ram.get_ptr(reg.driver.load(Ordering::Acquire))?,
-            _phantom: PhantomData,
         }))
     }
 
@@ -128,10 +129,14 @@ impl<'m> PackedQueue<'m> {
     }
 }
 
-impl<'m> VirtQueue<'m> for PackedQueue<'m> {
+impl VirtQueue for PackedQueue {
     type Index = WrappedIndex;
 
     const INIT_INDEX: WrappedIndex = WrappedIndex::INIT;
+
+    fn new(reg: &QueueReg, ram: &Ram, event_idx: bool) -> Result<Option<Self>> {
+        PackedQueue::new(reg, ram, event_idx)
+    }
 
     fn desc_avail(&self, index: WrappedIndex) -> bool {
         self.flag_is_avail(
@@ -140,7 +145,7 @@ impl<'m> VirtQueue<'m> for PackedQueue<'m> {
         )
     }
 
-    fn get_avail(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
+    fn get_avail<'m>(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
         if !self.desc_avail(index) {
             return Ok(None);
         }

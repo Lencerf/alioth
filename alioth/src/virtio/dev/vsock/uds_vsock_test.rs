@@ -95,8 +95,8 @@ fn guest_hdr(op: VsockOp, guest_port: u32, host_port: u32) -> VsockHeader {
 struct VsockTest<'m> {
     ram: &'m Ram,
     sock_path: PathBuf,
-    rx_q: GuestQueue<'m, SplitQueue<'m>>,
-    tx_q: GuestQueue<'m, SplitQueue<'m>>,
+    rx_q: GuestQueue<SplitQueue>,
+    tx_q: GuestQueue<SplitQueue>,
     tx: Sender<WakeEvent<FakeIrqSender>>,
     irq_rx: Receiver<u16>,
     notifier: Arc<Notifier>,

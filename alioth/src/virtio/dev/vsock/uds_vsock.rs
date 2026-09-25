@@ -159,16 +159,16 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn handle_conn_request<'m, Q, S>(
+    fn handle_conn_request<Q, S>(
         &mut self,
         token: Token,
         mut pending: PendingConn,
         registry: &Registry,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
         irq_sender: &S,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         // The socket is non-blocking, so a request line can arrive in pieces.
@@ -236,14 +236,14 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn respond_rst<'m, Q, S>(
+    fn respond_rst<Q, S>(
         &self,
         hdr: &VsockHeader,
         irq_sender: &S,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let resp = VsockHeader {
@@ -258,14 +258,14 @@ impl UdsVsock {
         self.respond(&resp, irq_sender, rx_q)
     }
 
-    fn respond<'m, Q, S>(
+    fn respond<Q, S>(
         &self,
         hdr: &VsockHeader,
         irq_sender: &S,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let mut hdr_buf = hdr.as_bytes();
@@ -287,15 +287,15 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn handle_tx_response<'m, Q, S>(
+    fn handle_tx_response<Q, S>(
         &mut self,
         hdr: &VsockHeader,
         registry: &Registry,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
         irq_sender: &S,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let host_port = hdr.dst_port;
@@ -380,15 +380,15 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn handle_tx_shutdown<'m, Q, S>(
+    fn handle_tx_shutdown<Q, S>(
         &mut self,
         hdr: &VsockHeader,
         registry: &Registry,
         irq_sender: &S,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let host_port = hdr.dst_port;
@@ -425,15 +425,15 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn handle_tx_request<'m, Q, S>(
+    fn handle_tx_request<Q, S>(
         &mut self,
         hdr: &VsockHeader,
         registry: &Registry,
         irq_sender: &S,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let host_port = hdr.dst_port;
@@ -491,15 +491,15 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn handle_tx_desc<'m, Q, S>(
+    fn handle_tx_desc<Q, S>(
         &mut self,
         desc: &mut DescChain,
         registry: &Registry,
         irq_sender: &S,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let name = &*self.name;
@@ -546,9 +546,9 @@ impl UdsVsock {
         }
     }
 
-    fn handle_tx<'m, Q, S>(&mut self, active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>) -> Result<()>
+    fn handle_tx<Q, S>(&mut self, active_mio: &mut ActiveMio<'_, '_, Q, S>) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let [Some(rx_q), Some(tx_q), ..] = active_mio.queues else {
@@ -563,15 +563,15 @@ impl UdsVsock {
         })
     }
 
-    fn transfer_rx_data<'m, Q, S>(
+    fn transfer_rx_data<Q, S>(
         &mut self,
         host_port: u32,
         guest_port: u32,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
         irq_sender: &S,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         fn copy_to_rx(
@@ -668,16 +668,16 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn process_rx_data<'m, Q, S>(
+    fn process_rx_data<Q, S>(
         &mut self,
         host_port: u32,
         guest_port: u32,
         registry: &Registry,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
         irq_sender: &S,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         self.transfer_rx_data(host_port, guest_port, rx_q, irq_sender)?;
@@ -701,14 +701,14 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn flush_rx_data<'m, Q, S>(
+    fn flush_rx_data<Q, S>(
         &mut self,
         registry: &Registry,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
         irq_sender: &S,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         if self.connections.is_empty() {
@@ -732,17 +732,17 @@ impl UdsVsock {
         Ok(())
     }
 
-    fn transfer_tx_data<'m, Q, S>(
+    fn transfer_tx_data<Q, S>(
         &mut self,
         hdr: &VsockHeader,
         body: &[u8],
         buffers: &[IoSlice],
         registry: &Registry,
-        rx_q: &mut Queue<'_, 'm, Q>,
+        rx_q: &mut Queue<'_, Q>,
         irq_sender: &S,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         fn copy_to_conn(
@@ -914,13 +914,13 @@ impl Virtio for UdsVsock {
 }
 
 impl VirtioMio for UdsVsock {
-    fn activate<'m, Q, S>(
+    fn activate<Q, S>(
         &mut self,
         _feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         active_mio.poll.registry().register(
@@ -931,13 +931,13 @@ impl VirtioMio for UdsVsock {
         Ok(())
     }
 
-    fn handle_event<'m, Q, S>(
+    fn handle_event<Q, S>(
         &mut self,
         event: &Event,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let token = event.token();
@@ -960,13 +960,13 @@ impl VirtioMio for UdsVsock {
         }
     }
 
-    fn handle_queue<'m, Q, S>(
+    fn handle_queue<Q, S>(
         &mut self,
         index: u16,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let index = VsockVirtq::from(index);

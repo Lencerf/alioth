@@ -149,13 +149,13 @@ impl Virtio for VhostVsock {
 }
 
 impl VirtioMio for VhostVsock {
-    fn activate<'m, Q, S>(
+    fn activate<Q, S>(
         &mut self,
         feature: u128,
-        active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         self.vhost_dev.set_features(&(feature as u64))?;
@@ -186,7 +186,7 @@ impl VirtioMio for VhostVsock {
             })?;
             self.vhost_dev
                 .set_virtq_base(&VirtqState { index, val: 0 })?;
-            let mem = active_mio.mem;
+            let mem = &active_mio.mem;
             let virtq_addr = VirtqAddr {
                 index,
                 flags: 0,
@@ -234,13 +234,13 @@ impl VirtioMio for VhostVsock {
         }
     }
 
-    fn handle_event<'a, 'm, Q, S>(
+    fn handle_event<'a, Q, S>(
         &mut self,
         event: &Event,
-        _active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        _active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         let q_index = event.token();
@@ -252,13 +252,13 @@ impl VirtioMio for VhostVsock {
         Ok(())
     }
 
-    fn handle_queue<'m, Q, S>(
+    fn handle_queue<Q, S>(
         &mut self,
         index: u16,
-        _active_mio: &mut ActiveMio<'_, '_, 'm, Q, S>,
+        _active_mio: &mut ActiveMio<'_, '_, Q, S>,
     ) -> Result<()>
     where
-        Q: VirtQueue<'m>,
+        Q: VirtQueue,
         S: IrqSender,
     {
         match index {
