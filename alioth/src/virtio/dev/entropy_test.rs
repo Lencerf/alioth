@@ -18,18 +18,19 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use assert_matches::assert_matches;
 use flume::{Receiver, Sender, TryRecvError};
 use tempfile::TempDir;
 
 use crate::ffi;
+use crate::mem::LayoutUpdated;
 use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::entropy::{EntropyConfig, EntropySpec};
-use crate::virtio::dev::{DevSpec, StartParam, Virtio, WakeEvent, WorkerParam};
+use crate::virtio::dev::{DevSpec, KickWorker, StartParam, Virtio, WakeEvent, WorkerParam};
 use crate::virtio::queue::QueueReg;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::tests::GuestQueue;
@@ -255,4 +256,37 @@ fn entropy_memory_hotplug_test() {
         ram_bus.read(gpa, &mut buf).unwrap();
         assert_eq!(buf, s.as_bytes());
     }
+}
+
+#[test]
+fn entropy_memory_kick_test() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let mut worker = EntropyWorker::start("entropy-kick", &ram_bus);
+
+    let pages = ArcMemPages::from_anonymous(HOTPLUG_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(HOTPLUG_GPA, pages)).unwrap();
+    let with_hotplug = Arc::downgrade(&ram_bus.load());
+    worker.request("using hot-plugged memory", HOTPLUG_GPA);
+
+    // An idle worker keeps the layout it last saw, and with it the removed
+    // memory.
+    ram_bus.update(|ram| ram.remove(HOTPLUG_GPA)).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(with_hotplug.upgrade().is_some());
+
+    // The kick moves it to the latest layout.
+    let kick = KickWorker {
+        name: "entropy-kick".into(),
+        notifier: Arc::downgrade(&worker.notifier),
+    };
+    kick.ram_updated(&ram_bus.load()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while with_hotplug.strong_count() > 0 {
+        assert!(Instant::now() < deadline, "old layout still in use");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    // A kick for a device that is gone is a no-op.
+    worker.shutdown();
+    kick.ram_updated(&ram_bus.load()).unwrap();
 }

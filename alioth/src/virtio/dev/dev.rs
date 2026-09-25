@@ -23,8 +23,9 @@ pub mod net;
 pub mod vsock;
 
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::io::ErrorKind;
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
+use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
 use bitflags::Flags;
@@ -32,8 +33,8 @@ use flume::{Receiver, Sender};
 use snafu::ResultExt;
 
 use crate::mem::emulated::Mmio;
-use crate::mem::mapped::RamBus;
-use crate::mem::{LayoutChanged, LayoutUpdated, MemRegion};
+use crate::mem::mapped::{Ram, RamBus};
+use crate::mem::{self, LayoutChanged, LayoutUpdated, MemRegion};
 use crate::sync::notifier::Notifier;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
@@ -240,6 +241,47 @@ where
             shared_mem_regions,
         };
         Ok(virtio_dev)
+    }
+
+    /// Returns a callback that kicks the worker after each guest memory
+    /// update.
+    pub fn mem_update_kick(&self) -> Box<dyn LayoutUpdated> {
+        Box::new(KickWorker {
+            name: self.name.clone(),
+            notifier: Arc::downgrade(&self.notifier),
+        })
+    }
+}
+
+/// Kicks a virtio worker after each guest memory update.
+///
+/// The worker switches to the latest layout before handling any event, so
+/// correctness does not depend on the kick. But an idle worker would keep
+/// its old snapshot, and with it removed guest memory, until the next
+/// event. The kick is a plain wake event and makes the worker drop the old
+/// snapshot right away.
+///
+/// The kick is asynchronous: memory updates never wait for workers.
+#[derive(Debug)]
+struct KickWorker {
+    name: Arc<str>,
+    notifier: Weak<Notifier>,
+}
+
+impl LayoutUpdated for KickWorker {
+    fn ram_updated(&self, _: &Ram) -> mem::Result<()> {
+        let Some(notifier) = self.notifier.upgrade() else {
+            return Ok(());
+        };
+        match notifier.notify() {
+            Ok(()) => {}
+            // The worker has not started its event loop, and will load the
+            // latest layout when it does.
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => log::error!("{}: failed to kick worker: {e:?}", self.name),
+        }
+        // Never fail the memory update.
+        Ok(())
     }
 }
 
