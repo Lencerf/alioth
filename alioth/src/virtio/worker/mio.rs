@@ -30,7 +30,7 @@ use crate::virtio::dev::{
     ActiveBackend, Backend, BackendEvent, Context, StartParam, Virtio, WakeEvent, Worker,
     WorkerState,
 };
-use crate::virtio::queue::{Queue, QueueReg, VirtQueue};
+use crate::virtio::queue::{Queue, QueueReg, VirtQueue, sync_ram};
 use crate::virtio::{IrqSender, Result, error};
 
 pub trait VirtioMio: Virtio {
@@ -189,6 +189,11 @@ where
     S: IrqSender,
 {
     type Event = Event;
+
+    fn sync_ram(&mut self, ram_bus: &RamBus) -> Result<()> {
+        sync_ram(ram_bus, &mut self.mem, self.queues)?;
+        Ok(())
+    }
 
     fn handle_event(&mut self, dev: &mut D, event: &Self::Event) -> Result<()> {
         let token = event.token().0 as u64;

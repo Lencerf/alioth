@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering, fence};
 
 use crate::bitflags;
-use crate::mem::mapped::Ram;
+use crate::mem::mapped::{Ram, RamBus};
 use crate::virtio::{IrqSender, Result, error};
 
 pub const QUEUE_SIZE_MAX: u16 = 256;
@@ -122,6 +122,7 @@ where
     reg: &'r QueueReg,
     event_idx: bool,
     deferred: HashMap<u16, DeferredChain>,
+    ram_bus: Option<Arc<RamBus>>,
     // Must be declared after `q` so it is dropped last.
     ram: Arc<Ram>,
 }
@@ -141,8 +142,34 @@ where
             reg,
             event_idx,
             deferred: HashMap::new(),
+            ram_bus: None,
             ram,
         }))
+    }
+
+    /// Lets the queue catch up with `ram_bus` by itself when a descriptor
+    /// cannot be translated with its current snapshot.
+    ///
+    /// Switching snapshots at the start of each event is not enough. The
+    /// driver may post a buffer in hot-plugged memory while the worker is
+    /// handling an event that started before the memory was published.
+    pub fn with_ram_bus(mut self, ram_bus: Arc<RamBus>) -> Self {
+        self.ram_bus = Some(ram_bus);
+        self
+    }
+
+    /// Moves to the latest snapshot of the attached [`RamBus`], if it is
+    /// newer than the current one.
+    fn catch_up(&mut self) -> Result<bool> {
+        let Some(ram_bus) = &self.ram_bus else {
+            return Ok(false);
+        };
+        if ram_bus.generation() == self.ram.generation() {
+            return Ok(false);
+        }
+        let latest = ram_bus.load();
+        self.update_ram(latest)?;
+        Ok(true)
     }
 
     pub fn reg(&self) -> &QueueReg {
@@ -212,13 +239,28 @@ where
     ) -> Result<()> {
         let mut send_irq = false;
         let mut ret = Ok(());
-        let ram = self.ram.clone();
+        let mut ram = self.ram.clone();
         'out: loop {
             if !self.q.desc_avail(self.avail) {
                 break;
             }
             self.q.enable_notification(false);
-            while let Some(mut chain) = self.q.get_avail(self.avail, &ram)? {
+            loop {
+                let mut chain = match self.q.get_avail(self.avail, &ram) {
+                    Ok(Some(chain)) => chain,
+                    Ok(None) => break,
+                    // The chain may point into memory plugged after the
+                    // snapshot was taken. With the grace period in memory
+                    // unplug, a stale snapshot may lack memory, but never
+                    // maps a GPA to memory that has been replaced.
+                    Err(e) => {
+                        if !self.catch_up()? {
+                            return Err(e);
+                        }
+                        ram = self.ram.clone();
+                        continue;
+                    }
+                };
                 let delta = chain.delta;
                 match op(&mut chain) {
                     Err(e) => {
@@ -253,6 +295,34 @@ where
         }
         ret
     }
+}
+
+/// Moves `ram` and all `queues` to the latest snapshot of `ram_bus`.
+///
+/// Returns `true` if the layout had changed. This is cheap when nothing
+/// changed: a single atomic load compares generations.
+pub fn sync_ram<Q>(
+    ram_bus: &RamBus,
+    ram: &mut Arc<Ram>,
+    queues: &mut [Option<Queue<'_, Q>>],
+) -> Result<bool>
+where
+    Q: VirtQueue,
+{
+    if ram_bus.generation() == ram.generation() {
+        return Ok(false);
+    }
+    let latest = ram_bus.load();
+    log::debug!(
+        "guest memory updated: generation {} -> {}",
+        ram.generation(),
+        latest.generation()
+    );
+    for queue in queues.iter_mut().flatten() {
+        queue.update_ram(latest.clone())?;
+    }
+    *ram = latest;
+    Ok(true)
 }
 
 pub fn copy_from_reader(mut reader: impl Read) -> impl FnMut(&mut DescChain) -> Result<Status> {

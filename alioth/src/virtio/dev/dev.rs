@@ -252,6 +252,8 @@ pub trait BackendEvent {
 
 pub trait ActiveBackend<D: Virtio> {
     type Event: BackendEvent;
+    /// Moves the event loop to the latest layout of `ram_bus`.
+    fn sync_ram(&mut self, ram_bus: &RamBus) -> Result<()>;
     fn handle_event(&mut self, dev: &mut D, event: &Self::Event) -> Result<()>;
     fn handle_queue(&mut self, dev: &mut D, index: u16) -> Result<()>;
 }
@@ -326,6 +328,13 @@ where
     where
         B: ActiveBackend<D>,
     {
+        // Between two events, a worker holds no reference to guest memory
+        // other than through the queues and deferred chains. This is the
+        // quiescent point where it switches to the latest layout, so any
+        // event caused by the driver after a layout change, e.g. a queue
+        // notification after memory hot-plug, is handled with the new
+        // layout.
+        backend.sync_ram(&self.memory)?;
         if event.token() == TOKEN_WARKER {
             self.handle_wake_events(backend)
         } else {
@@ -378,7 +387,11 @@ where
         );
         let ram = self.context.memory.load();
         let queue_regs = self.context.queue_regs.clone();
-        let new_queue = |reg| Queue::<Q>::new(reg, ram.clone(), event_idx);
+        let ram_bus = &self.context.memory;
+        let new_queue = |reg| {
+            let q = Queue::<Q>::new(reg, ram.clone(), event_idx)?;
+            Ok(q.map(|q| q.with_ram_bus(ram_bus.clone())))
+        };
         let mut queues = queue_regs
             .iter()
             .map(new_queue)

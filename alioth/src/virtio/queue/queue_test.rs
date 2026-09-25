@@ -582,3 +582,47 @@ fn test_update_ram() {
     assert_eq!(host_q.num_deferred(), 0);
     assert!(old_ram.upgrade().is_none());
 }
+
+#[test]
+fn test_catch_up_with_ram_bus() {
+    const EXTRA_GPA: u64 = 4 << 20;
+    const EXTRA_SIZE: usize = 1 << 20;
+
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let ram = ram_bus.load();
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    // The driver posts a buffer in memory plugged after the queue took its
+    // snapshot, e.g. while the worker is still handling an earlier event.
+    let extra = ArcMemPages::from_anonymous(EXTRA_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(EXTRA_GPA, extra)).unwrap();
+    let s = "in hot-plugged memory";
+    ram_bus.write(EXTRA_GPA, s.as_bytes()).unwrap();
+    let id = guest_q.add_desc(&[(EXTRA_GPA, s.len() as u32)], &[]);
+
+    // Without a RamBus, the queue cannot catch up.
+    assert_matches!(
+        host_q.handle_desc(0, &irq_sender, |_| Ok(Status::Done { len: 0 })),
+        Err(_)
+    );
+    assert!(Arc::ptr_eq(host_q.ram(), &ram));
+
+    // With a RamBus, it moves to the latest layout and retries.
+    let mut host_q = host_q.with_ram_bus(ram_bus.clone());
+    host_q
+        .handle_desc(0, &irq_sender, |chain| {
+            assert_eq!(&*chain.readable[0], s.as_bytes());
+            Ok(Status::Done { len: 0 })
+        })
+        .unwrap();
+    assert_eq!(host_q.ram().generation(), ram_bus.generation());
+    assert_eq!(irq_rx.try_recv(), Ok(0));
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id: used, .. }) if used == id);
+}
