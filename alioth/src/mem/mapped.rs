@@ -23,8 +23,9 @@ use std::mem::{align_of, size_of};
 use std::os::fd::FromRawFd;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::ptr::{NonNull, null_mut};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 use libc::{MADV_HUGEPAGE, MFD_CLOEXEC};
@@ -32,7 +33,7 @@ use libc::{
     MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, MAP_SHARED, MS_ASYNC, PROT_READ, PROT_WRITE, c_void,
     madvise, mmap, msync, munmap,
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use snafu::ResultExt;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -203,10 +204,30 @@ pub struct Ram {
 /// applies the change, and atomically publishes the result together with a
 /// new generation number. Readers can cheaply check whether their snapshot
 /// is stale by comparing [`Ram::generation`] against [`RamBus::generation`].
+///
+/// Like `synchronize_rcu()`, [`RamBus::synchronize`] waits until readers
+/// have dropped every snapshot older than the current one. Long-running
+/// readers register a watcher with [`RamBus::watch`] so that they can be
+/// kicked to a quiescent point after an update.
 #[derive(Debug, Default)]
 pub struct RamBus {
     ram: RwLock<Arc<Ram>>,
     generation: AtomicU64,
+    retired: Mutex<Vec<Weak<Ram>>>,
+    watchers: Watchers,
+}
+
+type Watcher = Box<dyn Fn() -> bool + Send + Sync>;
+
+#[derive(Default)]
+struct Watchers(Mutex<Vec<Watcher>>);
+
+impl Debug for Watchers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Watchers")
+            .field(&self.0.lock().len())
+            .finish()
+    }
 }
 
 struct Iter<'m> {
@@ -488,8 +509,54 @@ impl RamBus {
         let ret = f(&mut ram)?;
         ram.generation = current.generation + 1;
         self.generation.store(ram.generation, Ordering::Release);
-        *current = Arc::new(ram);
+        let old = std::mem::replace(&mut *current, Arc::new(ram));
+        drop(current);
+
+        let mut retired = self.retired.lock();
+        retired.retain(|r| r.strong_count() > 0);
+        retired.push(Arc::downgrade(&old));
+        drop(retired);
+        drop(old);
+
+        self.watchers.0.lock().retain(|watcher| watcher());
         Ok(ret)
+    }
+
+    /// Registers a callback that runs after every update.
+    ///
+    /// Readers that keep a snapshot for a long time use it to get kicked to
+    /// a quiescent point, where they switch to the latest layout and drop
+    /// the old one. The watcher is unregistered once it returns `false`.
+    pub fn watch(&self, watcher: impl Fn() -> bool + Send + Sync + 'static) {
+        self.watchers.0.lock().push(Box::new(watcher));
+    }
+
+    /// Waits until readers have dropped every snapshot older than the
+    /// current layout, i.e. a grace period has elapsed.
+    ///
+    /// Once it returns `true`, memory removed by earlier updates is no
+    /// longer accessed through this bus. It returns `false` if some old
+    /// snapshot is still alive after `timeout`.
+    ///
+    /// The caller must not hold an old snapshot itself, or it waits for
+    /// itself until the timeout.
+    pub fn synchronize(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut backoff = Duration::from_micros(10);
+        loop {
+            let mut retired = self.retired.lock();
+            retired.retain(|r| r.strong_count() > 0);
+            if retired.is_empty() {
+                return true;
+            }
+            drop(retired);
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            std::thread::sleep(backoff.min(deadline - now));
+            backoff = (backoff * 2).min(Duration::from_millis(1));
+        }
     }
 
     pub fn read(&self, gpa: u64, buf: &mut [u8]) -> Result<()> {

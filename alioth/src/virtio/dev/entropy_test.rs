@@ -244,3 +244,33 @@ fn entropy_memory_hotplug_test() {
         assert_eq!(buf, s.as_bytes());
     }
 }
+
+#[test]
+fn entropy_memory_grace_period_test() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let mut worker = EntropyWorker::start("entropy-grace-period", &ram_bus);
+
+    let pages = ArcMemPages::from_anonymous(HOTPLUG_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(HOTPLUG_GPA, pages)).unwrap();
+    worker.request("using hot-plugged memory", HOTPLUG_GPA);
+
+    // An idle worker keeps using the layout it last saw, so the removed
+    // memory is not quiescent yet.
+    ram_bus.update(|ram| ram.remove(HOTPLUG_GPA)).unwrap();
+    assert!(!ram_bus.synchronize(Duration::from_millis(50)));
+
+    // Any event is a quiescent point.
+    worker.notifier.notify().unwrap();
+    assert!(ram_bus.synchronize(Duration::from_secs(1)));
+
+    // With a watcher, the worker is kicked right after each update.
+    let notifier = Arc::downgrade(&worker.notifier);
+    ram_bus.watch(move || notifier.upgrade().is_some_and(|n| n.notify().is_ok()));
+    let pages = ArcMemPages::from_anonymous(HOTPLUG_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(HOTPLUG_GPA, pages)).unwrap();
+    worker.request("using hot-plugged memory again", HOTPLUG_GPA);
+    ram_bus.update(|ram| ram.remove(HOTPLUG_GPA)).unwrap();
+    assert!(ram_bus.synchronize(Duration::from_secs(1)));
+
+    worker.shutdown();
+}

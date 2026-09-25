@@ -20,6 +20,7 @@ use std::any::{Any, type_name};
 use std::fmt::Debug;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::{Mutex, RwLock};
 use serde::Deserialize;
@@ -279,6 +280,9 @@ fn ram_ranges(addr: u64, region: &MemRegion) -> impl Iterator<Item = (u64, &ArcM
     })
 }
 
+/// How long to wait for devices to stop accessing removed memory.
+const RAM_GRACE_PERIOD_TIMEOUT: Duration = Duration::from_secs(1);
+
 // lock order: region -> callbacks -> bus
 #[derive(Debug, Default)]
 pub struct Memory {
@@ -429,6 +433,12 @@ impl Memory {
             let ram = self.ram_bus.load();
             for callback in &callbacks.updated {
                 callback.ram_updated(&ram)?;
+            }
+            drop(ram);
+            // Make sure devices no longer access the removed memory before
+            // the caller can reuse it.
+            if !self.ram_bus.synchronize(RAM_GRACE_PERIOD_TIMEOUT) {
+                log::warn!("{addr:#x}: memory still in use after {RAM_GRACE_PERIOD_TIMEOUT:?}");
             }
         }
         let region_callbacks = region.callbacks.lock();

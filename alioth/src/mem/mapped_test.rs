@@ -14,6 +14,9 @@
 
 use std::io::{Read, Write};
 use std::mem::size_of;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use assert_matches::assert_matches;
 use libc::{PROT_READ, PROT_WRITE};
@@ -123,4 +126,35 @@ fn test_ram_bus_snapshot() {
     assert_eq!(bus.generation(), 2);
     assert_matches!(bus.read_t::<u32>(0x0), Err(_));
     assert_matches!(snapshot.read_t::<u32>(0x0), Ok(0xdeadbeef));
+}
+
+#[test]
+fn test_ram_bus_grace_period() {
+    let bus = RamBus::new();
+    let mem = ArcMemPages::from_anonymous(PAGE_SIZE as usize, None, None).unwrap();
+    bus.update(|ram| ram.add(0x0, mem)).unwrap();
+    assert!(bus.synchronize(Duration::ZERO));
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let watcher_calls = calls.clone();
+    bus.watch(move || watcher_calls.fetch_add(1, Ordering::Relaxed) == 0);
+
+    // A reader holding an old snapshot delays the grace period.
+    let reader = bus.load();
+    bus.update(|ram| ram.remove(0x0)).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(!bus.synchronize(Duration::from_millis(10)));
+
+    // The current snapshot does not.
+    let current = bus.load();
+    drop(reader);
+    assert!(bus.synchronize(Duration::from_millis(10)));
+    drop(current);
+
+    // The watcher returned false and was unregistered.
+    let mem = ArcMemPages::from_anonymous(PAGE_SIZE as usize, None, None).unwrap();
+    bus.update(|ram| ram.add(0x0, mem)).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    bus.update(|ram| ram.remove(0x0)).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
 }

@@ -199,7 +199,20 @@ where
 
         let shared_mem_regions = dev.shared_mem_regions();
         let (event_tx, event_rx) = flume::unbounded();
-        let (handle, notifier) = dev.spawn_worker(event_rx, memory, queue_regs.clone())?;
+        let (handle, notifier) = dev.spawn_worker(event_rx, memory.clone(), queue_regs.clone())?;
+        // Kick the worker after each memory update, so that it moves to the
+        // new layout and drops the old one even if the device is idle.
+        let weak_notifier = Arc::downgrade(&notifier);
+        let worker_name = name.clone();
+        memory.watch(move || {
+            let Some(notifier) = weak_notifier.upgrade() else {
+                return false;
+            };
+            if let Err(e) = notifier.notify() {
+                log::error!("{worker_name}: failed to notify memory update: {e:?}");
+            }
+            true
+        });
         log::debug!(
             "{name}: created with {:x?}, {:x?}",
             VirtioFeature::from_bits_retain(device_feature & !D::Feature::all().bits()),
