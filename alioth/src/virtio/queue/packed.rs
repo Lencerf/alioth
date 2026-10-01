@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use bitfield::bitfield;
@@ -20,7 +19,7 @@ use zerocopy::{FromBytes, IntoBytes};
 
 use crate::consts;
 use crate::mem::mapped::Ram;
-use crate::virtio::queue::{DescChain, DescFlag, QueueReg, VirtQueue};
+use crate::virtio::queue::{DescChain, DescFlag, QueueReg, RingAddrs, VirtQueue};
 use crate::virtio::{Result, error};
 
 #[repr(C, align(16))]
@@ -85,41 +84,42 @@ struct DescEvent {
 }
 
 #[derive(Debug)]
-pub struct PackedQueue<'m> {
+pub struct PackedQueue {
     size: u16,
     desc: *mut Desc,
     enable_event_idx: bool,
     notification: *mut DescEvent,
     interrupt: *mut DescEvent,
-    _phantom: PhantomData<&'m ()>,
 }
 
-impl<'m> PackedQueue<'m> {
-    pub fn new(reg: &QueueReg, ram: &'m Ram, event_idx: bool) -> Result<Option<PackedQueue<'m>>> {
-        if !reg.enabled.load(Ordering::Acquire) {
+impl PackedQueue {
+    /// Creates a packed queue from the registers set by the driver.
+    ///
+    /// The returned queue caches host pointers into `ram`. The caller must
+    /// keep `ram` alive for as long as the queue is in use.
+    pub fn new(reg: &QueueReg, ram: &Ram, event_idx: bool) -> Result<Option<PackedQueue>> {
+        let Some(addrs) = RingAddrs::load(reg) else {
             return Ok(None);
+        };
+        PackedQueue::with_addrs(&addrs, ram, event_idx).map(Some)
+    }
+
+    /// Creates a packed queue from its ring addresses.
+    ///
+    /// The returned queue caches host pointers into `ram`. The caller must
+    /// keep `ram` alive for as long as the queue is in use.
+    pub fn with_addrs(addrs: &RingAddrs, ram: &Ram, event_idx: bool) -> Result<PackedQueue> {
+        if addrs.size == 0 {
+            return error::InvalidQueueSize { size: addrs.size }.fail();
         }
-        let size = reg.size.load(Ordering::Acquire);
-        let desc = reg.desc.load(Ordering::Acquire);
-        let device = reg.device.load(Ordering::Acquire);
-        let driver = reg.driver.load(Ordering::Acquire);
-        // The registers may be cleared by a concurrent reset, which disables
-        // the queue first.
-        if !reg.enabled.load(Ordering::Acquire) {
-            return Ok(None);
-        }
-        if size == 0 {
-            return error::InvalidQueueSize { size }.fail();
-        }
-        let notification: *mut DescEvent = ram.get_ptr(device)?;
-        Ok(Some(PackedQueue {
-            size,
-            desc: ram.get_ptr(desc)?,
+        let notification: *mut DescEvent = ram.get_ptr(addrs.device)?;
+        Ok(PackedQueue {
+            size: addrs.size,
+            desc: ram.get_ptr(addrs.desc)?,
             enable_event_idx: event_idx,
             notification,
-            interrupt: ram.get_ptr(driver)?,
-            _phantom: PhantomData,
-        }))
+            interrupt: ram.get_ptr(addrs.driver)?,
+        })
     }
 
     fn flag_is_avail(&self, flag: DescFlag, wrap_counter: bool) -> bool {
@@ -136,10 +136,14 @@ impl<'m> PackedQueue<'m> {
     }
 }
 
-impl<'m> VirtQueue<'m> for PackedQueue<'m> {
+impl VirtQueue for PackedQueue {
     type Index = WrappedIndex;
 
     const INIT_INDEX: WrappedIndex = WrappedIndex::INIT;
+
+    fn new(addrs: &RingAddrs, ram: &Ram, event_idx: bool) -> Result<Self> {
+        PackedQueue::with_addrs(addrs, ram, event_idx)
+    }
 
     fn desc_avail(&self, index: WrappedIndex) -> bool {
         let flag =
@@ -147,7 +151,7 @@ impl<'m> VirtQueue<'m> for PackedQueue<'m> {
         self.flag_is_avail(DescFlag::from_bits_retain(flag), index.wrap_counter())
     }
 
-    fn get_avail(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
+    fn get_avail<'m>(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
         if !self.desc_avail(index) {
             return Ok(None);
         }
@@ -185,6 +189,7 @@ impl<'m> VirtQueue<'m> for PackedQueue<'m> {
             delta,
             readable: ram.translate_iov(&readable)?,
             writable: ram.translate_iov_mut(&writeable)?,
+            ram,
         }))
     }
 

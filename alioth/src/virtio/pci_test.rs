@@ -833,6 +833,7 @@ fn test_device_status_reset_without_driver_ok() {
     assert!(event_rx.is_empty());
     // self.reset() should still disable queues and reset MSI-X vectors
     assert!(!queues[0].enabled.load(Ordering::Acquire));
+    assert_eq!(queues[0].reset_counter.load(Ordering::Acquire), 1);
     assert_matches!(
         mmio.read(VirtioCommonCfg::OFFSET_CONFIG_MSIX_VECTOR as u64, 2),
         Ok(vector) if vector == VIRTIO_MSI_NO_VECTOR as u64
@@ -908,7 +909,8 @@ fn test_device_reset_queue_registers() {
     assert!(event_rx.is_empty());
 
     // Verify all queue registers are reset
-    for (q_index, _) in queues.iter().enumerate() {
+    for (q_index, q) in queues.iter().enumerate() {
+        assert_eq!(q.reset_counter.load(Ordering::Acquire), 1);
         assert_matches!(
             mmio.write(
                 VirtioCommonCfg::OFFSET_QUEUE_SELECT as u64,

@@ -40,7 +40,7 @@ use crate::pci::{self, Pci, PciBar};
 use crate::sync::notifier::Notifier;
 use crate::utils::{get_atomic_high32, get_atomic_low32, set_atomic_high32, set_atomic_low32};
 use crate::virtio::dev::{Register, StartParam, VirtioDevice, WakeEvent};
-use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg};
+use crate::virtio::queue::QueueReg;
 use crate::virtio::{DevStatus, DeviceId, IrqSender, Result, VirtioFeature, error};
 use crate::{consts, impl_mmio_for_zerocopy, mem};
 
@@ -223,14 +223,7 @@ where
         }
         self.irq_sender.msix_table.reset();
         for q in self.queues.iter() {
-            // Disable the queue before clearing its ring addresses, so that
-            // a reader that checks `enabled` after loading the addresses
-            // never accepts a partially cleared queue.
-            q.enabled.store(false, Ordering::Release);
-            q.size.store(QUEUE_SIZE_MAX, Ordering::Release);
-            q.desc.store(0, Ordering::Release);
-            q.driver.store(0, Ordering::Release);
-            q.device.store(0, Ordering::Release);
+            q.reset();
         }
     }
 
@@ -1015,9 +1008,9 @@ where
     }
 
     fn reset(&self) -> pci::Result<()> {
-        self.registers.wake_up_dev(WakeEvent::Reset);
         self.registers.reset();
         self.registers.reg.status.store(0, Ordering::Release);
+        self.registers.wake_up_dev(WakeEvent::Reset);
         Ok(())
     }
 }

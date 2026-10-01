@@ -15,27 +15,30 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
 use std::ptr::eq as ptr_eq;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use assert_matches::assert_matches;
 use flume::TryRecvError;
 use rstest::rstest;
 
+use crate::mem::mapped::{ArcMemPages, Ram};
 use crate::virtio::Error;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::{
     DescChain, Queue, QueueReg, Status, VirtQueue, copy_from_reader, copy_to_writer,
 };
-use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, fixture_queues, fixture_ram_bus};
+use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, MEM_SIZE, fixture_queues, fixture_ram_bus};
 
+#[derive(Debug)]
 pub struct UsedDesc {
     pub id: u16,
     pub delta: u16,
     pub len: u32,
 }
 
-pub trait VirtQueueGuest<'m>: VirtQueue<'m> {
+pub trait VirtQueueGuest: VirtQueue {
     fn add_desc(
         &mut self,
         index: Self::Index,
@@ -52,9 +55,9 @@ pub trait VirtQueueGuest<'m>: VirtQueue<'m> {
     fn enable_interrupt(&mut self, enabled: bool, index: Self::Index);
 }
 
-pub struct GuestQueue<'m, Q>
+pub struct GuestQueue<Q>
 where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     q: Q,
     avail: Q::Index,
@@ -64,9 +67,9 @@ where
     next_id: u16,
 }
 
-impl<'m, Q> GuestQueue<'m, Q>
+impl<Q> GuestQueue<Q>
 where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     pub fn new(q: Q, reg: &QueueReg) -> Self {
         let size = reg.size.load(Ordering::Acquire);
@@ -81,9 +84,9 @@ where
     }
 }
 
-impl<'m, Q> GuestQueue<'m, Q>
+impl<Q> GuestQueue<Q>
 where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     pub fn add_desc(&mut self, readable: &[(u64, u32)], writable: &[(u64, u32)]) -> u16 {
         let mut ids = vec![];
@@ -182,15 +185,13 @@ impl<'a> Read for Reader<'a> {
 
 #[test]
 fn test_copy_from_reader() {
-    let ram_bus = fixture_ram_bus();
+    let ram_bus = Arc::new(fixture_ram_bus());
     let queues = fixture_queues(1);
     let ram = ram_bus.load();
     let reg = &queues[0];
-    let mut host_q = Queue::new(
-        SplitQueue::new(reg, &ram, false).unwrap().unwrap(),
-        reg,
-        &ram,
-    );
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
     let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
     assert!(ptr_eq(host_q.reg(), reg));
 
@@ -341,15 +342,13 @@ impl<'a> Write for Writer<'a> {
 
 #[test]
 fn test_copy_to_writer() {
-    let ram_bus = fixture_ram_bus();
+    let ram_bus = Arc::new(fixture_ram_bus());
     let queues = fixture_queues(1);
     let ram = ram_bus.load();
     let reg = &queues[0];
-    let mut host_q = Queue::new(
-        SplitQueue::new(reg, &ram, false).unwrap().unwrap(),
-        reg,
-        &ram,
-    );
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
     let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
     let (irq_tx, irq_rx) = flume::unbounded();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
@@ -446,12 +445,14 @@ fn test_written_bytes() {
     let str_0 = "Hello, World!";
     let str_1 = "Goodbye, World!";
 
+    let ram = Ram::default();
     let mut buf = vec![0u8; str_0.len()];
     let mut chain = DescChain {
         id: 0,
         delta: 1,
         readable: vec![],
         writable: vec![IoSliceMut::new(buf.as_mut_slice())],
+        ram: &ram,
     };
     let reader = str_0.as_bytes();
     assert_matches!(
@@ -466,6 +467,7 @@ fn test_written_bytes() {
         delta: 1,
         readable: vec![IoSlice::new(str_1.as_bytes())],
         writable: vec![],
+        ram: &ram,
     };
     assert_matches!(
         copy_to_writer(&mut buf)(&mut chain),
@@ -474,12 +476,12 @@ fn test_written_bytes() {
     assert_eq!(buf.as_slice(), str_1.as_bytes());
 }
 
-fn check_handle_deferred<'m, Q>(
-    mut host_q: Queue<'_, 'm, Q>,
-    mut guest_q: GuestQueue<'m, Q>,
-    ram: &'m crate::mem::mapped::Ram,
+fn check_handle_deferred<Q>(
+    mut host_q: Queue<'_, Q>,
+    mut guest_q: GuestQueue<Q>,
+    ram: &crate::mem::mapped::Ram,
 ) where
-    Q: VirtQueueGuest<'m>,
+    Q: VirtQueueGuest,
 {
     let (irq_tx, irq_rx) = flume::unbounded();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
@@ -560,28 +562,241 @@ fn check_handle_deferred<'m, Q>(
 #[case(true, false)]
 #[case(true, true)]
 fn test_handle_deferred(#[case] packed: bool, #[case] event_idx: bool) {
-    let ram_bus = fixture_ram_bus();
+    let ram_bus = Arc::new(fixture_ram_bus());
     let queues = fixture_queues(1);
     let ram = ram_bus.load();
     let reg = &queues[0];
     if packed {
-        let host_q = Queue::new(
-            PackedQueue::new(reg, &ram, event_idx).unwrap().unwrap(),
-            reg,
-            &ram,
-        );
+        let host_q = Queue::<PackedQueue>::new(reg, ram_bus.clone(), event_idx)
+            .unwrap()
+            .unwrap();
         let guest_q = GuestQueue::new(
             PackedQueue::new(reg, &ram, event_idx).unwrap().unwrap(),
             reg,
         );
         check_handle_deferred(host_q, guest_q, &ram);
     } else {
-        let host_q = Queue::new(
-            SplitQueue::new(reg, &ram, event_idx).unwrap().unwrap(),
-            reg,
-            &ram,
-        );
+        let host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), event_idx)
+            .unwrap()
+            .unwrap();
         let guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, event_idx).unwrap().unwrap(), reg);
         check_handle_deferred(host_q, guest_q, &ram);
     }
+}
+
+#[test]
+fn test_sync_ram() {
+    const EXTRA_GPA: u64 = 4 << 20;
+    const EXTRA_SIZE: usize = 1 << 20;
+
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let extra = ArcMemPages::from_anonymous(EXTRA_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(EXTRA_GPA, extra)).unwrap();
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let ram = ram_bus.load();
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    // The first chain points into the extra slot and stays in flight.
+    let str_0 = "in flight across a memory update";
+    ram.write(EXTRA_GPA, str_0.as_bytes()).unwrap();
+    let id_0 = guest_q.add_desc(&[(EXTRA_GPA, str_0.len() as u32)], &[]);
+    host_q
+        .handle_desc(0, &irq_sender, |_| Ok(Status::Deferred))
+        .unwrap();
+    assert_eq!(host_q.num_deferred(), 1);
+
+    // Unplug the extra slot and move the queue to the new layout.
+    ram_bus.update(|ram| ram.remove(EXTRA_GPA)).unwrap();
+    let old_ram = Arc::downgrade(&ram);
+    drop(ram);
+    assert!(host_q.sync_ram().unwrap());
+    let new_ram = ram_bus.load();
+    assert!(Arc::ptr_eq(host_q.ram(), &new_ram));
+    // Nothing to do until the next update.
+    assert!(!host_q.sync_ram().unwrap());
+    // The deferred chain still pins the old snapshot.
+    assert!(old_ram.upgrade().is_some());
+
+    // A new chain is picked up at the right ring index, not from 0.
+    let str_1 = "after the update";
+    new_ram.write(DATA_ADDR, str_1.as_bytes()).unwrap();
+    let id_1 = guest_q.add_desc(&[(DATA_ADDR, str_1.len() as u32)], &[]);
+    let mut ids = vec![];
+    host_q
+        .handle_desc(0, &irq_sender, |chain| {
+            ids.push(chain.id());
+            assert_eq!(&*chain.readable[0], str_1.as_bytes());
+            Ok(Status::Done { len: 0 })
+        })
+        .unwrap();
+    assert_eq!(ids, [id_1]);
+    assert_eq!(irq_rx.try_recv(), Ok(0));
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id, .. }) if id == id_1);
+
+    // The buffer of the in-flight chain is still accessible.
+    host_q
+        .handle_deferred(id_0, 0, &irq_sender, |chain| {
+            assert_eq!(&*chain.readable[0], str_0.as_bytes());
+            Ok(0)
+        })
+        .unwrap();
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id, .. }) if id == id_0);
+    assert_eq!(host_q.num_deferred(), 0);
+    assert!(old_ram.upgrade().is_none());
+}
+
+#[test]
+fn test_sync_ram_stays_on_old_snapshot_on_reset() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let ram = ram_bus.load();
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    // A concurrent reset clears the registers before the worker sees the
+    // reset, while the memory layout changes.
+    reg.reset();
+    let extra = ArcMemPages::from_anonymous(1 << 20, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(4 << 20, extra)).unwrap();
+    // A reset is pending: the queue refuses to move to the new layout.
+    assert_matches!(host_q.sync_ram(), Ok(false));
+    assert!(Arc::ptr_eq(host_q.ram(), &ram));
+
+    // The queue still uses the snapshot and rings set up at activation.
+    let s = "after the registers were cleared";
+    ram.write(DATA_ADDR, s.as_bytes()).unwrap();
+    let id = guest_q.add_desc(&[(DATA_ADDR, s.len() as u32)], &[]);
+    host_q
+        .handle_desc(0, &irq_sender, |chain| {
+            assert_eq!(&*chain.readable[0], s.as_bytes());
+            Ok(Status::Done { len: 0 })
+        })
+        .unwrap();
+    assert_eq!(irq_rx.try_recv(), Ok(0));
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id: used, .. }) if used == id);
+}
+
+#[test]
+fn test_sync_ram_stays_on_old_snapshot_without_rings() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let ram = ram_bus.load();
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    // A chain stays in flight, e.g. as an io_uring request.
+    let id = guest_q.add_desc(&[], &[(DATA_ADDR, 16)]);
+    host_q
+        .handle_desc(0, &irq_sender, |_| Ok(Status::Deferred))
+        .unwrap();
+
+    // The memory of the rings goes away while the queue is still enabled,
+    // e.g. the guest unplugs it. No reset is pending, so the queue tries the
+    // new layout, but the rings cannot be rebuilt. The queue stays on its
+    // old snapshot, which keeps the memory alive.
+    ram_bus.update(|ram| ram.remove(0)).unwrap();
+    assert_matches!(host_q.sync_ram(), Err(_));
+    assert!(Arc::ptr_eq(host_q.ram(), &ram));
+    // The failed layout is not retried.
+    assert_matches!(host_q.sync_ram(), Ok(false));
+
+    // The in-flight chain completes into the old snapshot.
+    host_q
+        .handle_deferred(id, 0, &irq_sender, |chain| {
+            assert_eq!(chain.writable[0].len(), 16);
+            Ok(16)
+        })
+        .unwrap();
+    assert_eq!(irq_rx.try_recv(), Ok(0));
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id: used, .. }) if used == id);
+
+    // Once the memory comes back, the queue moves on.
+    let pages = ArcMemPages::from_anonymous(MEM_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(0, pages)).unwrap();
+    assert_matches!(host_q.sync_ram(), Ok(true));
+    assert!(Arc::ptr_eq(host_q.ram(), &ram_bus.load()));
+}
+
+#[test]
+fn test_leak_deferred() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let ram = ram_bus.load();
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, _irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    guest_q.add_desc(&[], &[(DATA_ADDR, 16)]);
+    host_q
+        .handle_desc(0, &irq_sender, |_| Ok(Status::Deferred))
+        .unwrap();
+    assert_eq!(host_q.num_deferred(), 1);
+
+    // The snapshot pinned by the chain outlives the queue and the bus.
+    let snapshot = Arc::downgrade(&ram);
+    drop(ram);
+    host_q.leak_deferred();
+    assert_eq!(host_q.num_deferred(), 0);
+    drop(host_q);
+    drop(ram_bus);
+    assert!(snapshot.upgrade().is_some());
+}
+
+#[test]
+fn test_queue_new_after_reset_and_layout_change() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+
+    // 1. Device reset clears registers and bumps the reset counter.
+    reg.reset();
+
+    // 2. Memory reset removes the old RAM where the initial rings were located.
+    ram_bus.update(|ram| ram.remove(0)).unwrap();
+
+    // 3. New boot creates fresh RAM at a different GPA where the old rings are not mapped.
+    const NEW_GPA: u64 = 4 << 20;
+    let fresh_pages = ArcMemPages::from_anonymous(MEM_SIZE, None, None).unwrap();
+    ram_bus.update(|ram| ram.add(NEW_GPA, fresh_pages)).unwrap();
+
+    // Queue::new observes enabled == false from the reset, returning Ok(None)
+    // rather than attempting to dereference unmapped ring addresses in the new RAM.
+    assert!(
+        Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+            .unwrap()
+            .is_none()
+    );
+
+    // 4. When Boot 2 enables the queue at valid addresses in the new RAM, Queue::new succeeds.
+    reg.size.store(16, Ordering::Release);
+    reg.desc.store(NEW_GPA, Ordering::Release);
+    reg.driver.store(NEW_GPA + 0x1000, Ordering::Release);
+    reg.device.store(NEW_GPA + 0x2000, Ordering::Release);
+    reg.enabled.store(true, Ordering::Release);
+
+    let host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_q.ram().generation(), ram_bus.generation());
+    assert_eq!(host_q.bus_generation, ram_bus.generation());
 }

@@ -23,7 +23,7 @@ use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg};
 use crate::virtio::{DevStatus, IrqSender, Result};
 
 pub const QUEUE_SIZE: u16 = QUEUE_SIZE_MAX;
-const MEM_SIZE: usize = 2 << 20;
+pub const MEM_SIZE: usize = 2 << 20;
 pub const DATA_ADDR: u64 = 0x0;
 const QUEUE_START: u64 = 1 << 20;
 
@@ -44,6 +44,7 @@ pub fn fixture_queues(count: u16) -> Box<[QueueReg]> {
                 driver: AtomicU64::new(base + 0x1000),
                 device: AtomicU64::new(base + 0x1400),
                 enabled: AtomicBool::new(true),
+                ..Default::default()
             }
         })
         .collect()

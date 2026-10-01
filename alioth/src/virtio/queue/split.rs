@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU16, Ordering, fence};
 
@@ -21,7 +20,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::bitflags;
 use crate::mem::mapped::Ram;
-use crate::virtio::queue::{DescChain, DescFlag, QueueReg, VirtQueue};
+use crate::virtio::queue::{DescChain, DescFlag, QueueReg, RingAddrs, VirtQueue};
 use crate::virtio::{Result, error};
 
 #[repr(C, align(16))]
@@ -67,7 +66,7 @@ pub struct UsedElem {
 }
 
 #[derive(Debug)]
-pub struct SplitQueue<'m> {
+pub struct SplitQueue {
     size: u16,
     avail_hdr: *mut AvailHeader,
     avail_ring: *mut u16,
@@ -76,10 +75,9 @@ pub struct SplitQueue<'m> {
     used_ring: *mut UsedElem,
     avail_event: Option<*mut AtomicU16>,
     desc: *mut Desc,
-    _phantom: PhantomData<&'m ()>,
 }
 
-impl SplitQueue<'_> {
+impl SplitQueue {
     pub fn avail_index(&self) -> u16 {
         unsafe { &*self.avail_hdr }.idx.load(Ordering::Acquire)
     }
@@ -122,23 +120,29 @@ impl SplitQueue<'_> {
     }
 }
 
-impl<'m> SplitQueue<'m> {
-    pub fn new(reg: &QueueReg, ram: &'m Ram, event_idx: bool) -> Result<Option<SplitQueue<'m>>> {
-        if !reg.enabled.load(Ordering::Acquire) {
+impl SplitQueue {
+    /// Creates a split queue from the registers set by the driver.
+    ///
+    /// The returned queue caches host pointers into `ram`. The caller must
+    /// keep `ram` alive for as long as the queue is in use.
+    pub fn new(reg: &QueueReg, ram: &Ram, event_idx: bool) -> Result<Option<SplitQueue>> {
+        let Some(addrs) = RingAddrs::load(reg) else {
             return Ok(None);
-        }
-        let size = reg.size.load(Ordering::Acquire) as u64;
-        let used = reg.device.load(Ordering::Acquire);
-        let avail = reg.driver.load(Ordering::Acquire);
-        let desc = reg.desc.load(Ordering::Acquire);
-        // The registers may be cleared by a concurrent reset, which disables
-        // the queue first.
-        if !reg.enabled.load(Ordering::Acquire) {
-            return Ok(None);
-        }
+        };
+        SplitQueue::with_addrs(&addrs, ram, event_idx).map(Some)
+    }
+
+    /// Creates a split queue from its ring addresses.
+    ///
+    /// The returned queue caches host pointers into `ram`. The caller must
+    /// keep `ram` alive for as long as the queue is in use.
+    pub fn with_addrs(addrs: &RingAddrs, ram: &Ram, event_idx: bool) -> Result<SplitQueue> {
+        let size = addrs.size as u64;
         if size == 0 || !size.is_power_of_two() {
-            return error::InvalidQueueSize { size: size as u16 }.fail();
+            return error::InvalidQueueSize { size: addrs.size }.fail();
         }
+        let used = addrs.device;
+        let avail = addrs.driver;
         let mut avail_event = None;
         let mut used_event = None;
         if event_idx {
@@ -152,31 +156,34 @@ impl<'m> SplitQueue<'m> {
         let used_hdr = ram.get_ptr::<UsedHeader>(used)?;
         let avail_ring_gpa = avail + size_of::<AvailHeader>() as u64;
         let used_ring_gpa = used + size_of::<UsedHeader>() as u64;
-        Ok(Some(SplitQueue {
-            size: size as u16,
+        Ok(SplitQueue {
+            size: addrs.size,
             avail_hdr: ram.get_ptr(avail)?,
             avail_ring: ram.get_ptr(avail_ring_gpa)?,
             used_event,
             used_hdr,
             used_ring: ram.get_ptr(used_ring_gpa)?,
             avail_event,
-            desc: ram.get_ptr(desc)?,
-            _phantom: PhantomData,
-        }))
+            desc: ram.get_ptr(addrs.desc)?,
+        })
     }
 }
 
-impl<'m> VirtQueue<'m> for SplitQueue<'m> {
+impl VirtQueue for SplitQueue {
     type Index = u16;
 
     const INIT_INDEX: u16 = 0;
+
+    fn new(addrs: &RingAddrs, ram: &Ram, event_idx: bool) -> Result<Self> {
+        SplitQueue::with_addrs(addrs, ram, event_idx)
+    }
 
     fn desc_avail(&self, index: u16) -> bool {
         let avail_index = self.avail_index();
         index < avail_index || index - avail_index >= !(self.size - 1)
     }
 
-    fn get_avail(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
+    fn get_avail<'m>(&self, index: Self::Index, ram: &'m Ram) -> Result<Option<DescChain<'m>>> {
         if !self.desc_avail(index) {
             return Ok(None);
         }
@@ -228,6 +235,7 @@ impl<'m> VirtQueue<'m> for SplitQueue<'m> {
             delta: 1,
             readable,
             writable,
+            ram,
         }))
     }
 

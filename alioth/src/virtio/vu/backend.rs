@@ -439,9 +439,23 @@ impl VuBackend {
                         let param = self.parse_init()?;
                         WakeEvent::Start { param }
                     } else {
+                        // Publish the reset before waking the worker. Once
+                        // DRIVER_OK is cleared, the frontend may change the
+                        // memory layout and set up the queues again, at the
+                        // same addresses, before the worker has handled
+                        // the reset. The bumped reset counter keeps the
+                        // worker's queues from following them.
+                        for q in &*self.dev.queue_regs {
+                            q.reset();
+                        }
                         WakeEvent::Reset
                     };
                     self.wake_up_dev(event);
+                } else if new.is_empty() {
+                    // Writing 0 resets the device, as on the PCI transport.
+                    for q in &*self.dev.queue_regs {
+                        q.reset();
+                    }
                 }
             }
             (VuFrontMsg::GET_CONFIG, 12..) => {
@@ -508,3 +522,7 @@ impl VuBackend {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "backend_test.rs"]
+mod tests;
