@@ -274,6 +274,11 @@ pub trait BackendEvent {
 
 pub trait ActiveBackend<D: Virtio> {
     type Event: BackendEvent;
+    /// Moves the queues of the event loop to the latest guest memory
+    /// layout, see [`sync_queues`].
+    ///
+    /// [`sync_queues`]: crate::virtio::queue::sync_queues
+    fn sync_ram(&mut self);
     fn handle_event(&mut self, dev: &mut D, event: &Self::Event) -> Result<()>;
     fn handle_queue(&mut self, dev: &mut D, index: u16) -> Result<()>;
 }
@@ -286,6 +291,11 @@ where
     pub dev: D,
     param: WorkerParam<S>,
     pub state: WorkerState,
+    /// The guest memory generation the queues were last moved to by
+    /// [`Context::handle_event`], or `None` at the start of an event loop.
+    /// It lets the common case of an unchanged layout cost one atomic load
+    /// per event instead of one per queue.
+    synced_generation: Option<u64>,
 }
 
 impl<D, S> Context<D, S>
@@ -325,6 +335,7 @@ where
                 WakeEvent::Reset => {}
                 WakeEvent::Start { param } => {
                     self.state = WorkerState::Running;
+                    self.synced_generation = None;
                     return Some(param);
                 }
                 #[cfg(target_os = "linux")]
@@ -346,6 +357,21 @@ where
     where
         B: ActiveBackend<D>,
     {
+        // Between two events, a worker holds no reference to guest memory
+        // other than through the queues and deferred chains. This is the
+        // quiescent point where it switches to the latest layout, so any
+        // event caused by the driver after a layout change, e.g. a queue
+        // notification after memory hot-plug, is handled with the new
+        // layout.
+        //
+        // The generation is loaded before the queues move, so a layout
+        // published while they move is caught at the next event. Queues
+        // that already moved to it then find nothing to do.
+        let generation = self.param.memory.generation();
+        if self.synced_generation != Some(generation) {
+            backend.sync_ram();
+            self.synced_generation = Some(generation);
+        }
         if event.token() == TOKEN_WARKER {
             self.handle_wake_events(backend)
         } else {
@@ -371,6 +397,7 @@ where
                 dev,
                 param,
                 state: WorkerState::Pending,
+                synced_generation: None,
             },
             backend,
         };

@@ -12,23 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::io::{PipeReader, PipeWriter, Read, Write};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use flume::Sender;
+use flume::{Receiver, Sender};
 use io_uring::cqueue::Entry as Cqe;
 use io_uring::opcode;
 use io_uring::types::Fd;
 
-use crate::ffi;
+use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::entropy::{EntropyConfig, EntropyFeature};
-use crate::virtio::dev::{StartParam, Virtio, WakeEvent, WorkerParam};
+use crate::virtio::dev::{ActiveBackend, StartParam, Virtio, WakeEvent, WorkerParam};
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::tests::GuestQueue;
 use crate::virtio::queue::{DescChain, Queue, QueueReg, VirtQueue};
@@ -40,14 +39,16 @@ use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, VirtioFeature
 
 /// A device that reads guest buffers from a pipe with io_uring.
 #[derive(Debug)]
-struct PipeReader {
-    reader: OwnedFd,
+struct PipeDev {
+    reader: PipeReader,
     config: Arc<EntropyConfig>,
+    /// Reports the id of every chain submitted to the ring.
     submitted: Sender<u16>,
+    /// Counts the chains whose read completed.
     completed: Arc<AtomicUsize>,
 }
 
-impl Virtio for PipeReader {
+impl Virtio for PipeDev {
     type Config = EntropyConfig;
     type Feature = EntropyFeature;
 
@@ -56,7 +57,7 @@ impl Virtio for PipeReader {
     }
 
     fn name(&self) -> &str {
-        "pipe-reader"
+        "pipe-dev"
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
@@ -79,7 +80,7 @@ impl Virtio for PipeReader {
     }
 }
 
-impl VirtioIoUring for PipeReader {
+impl VirtioIoUring for PipeDev {
     fn activate<Q, S>(
         &mut self,
         _feature: u128,
@@ -110,124 +111,151 @@ impl VirtioIoUring for PipeReader {
     }
 }
 
-fn pipe() -> (OwnedFd, File) {
-    let mut fds = [0; 2];
-    ffi!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }).unwrap();
-    let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    let writer = unsafe { File::from_raw_fd(fds[1]) };
-    (reader, writer)
+/// What a test writes to the pipe once the read should be gone.
+const AFTER_CANCEL: &[u8] = b"written after cancel";
+
+/// A guest with one queue, and the pipe its device reads from.
+///
+/// Nothing is written to the pipe while the device runs, so the read
+/// submitted for a posted buffer stays in flight until something cancels
+/// it. The fixture keeps a second handle to the read end of the pipe to
+/// check, once the device is done, that the read is really gone.
+struct Fixture {
+    ram_bus: Arc<RamBus>,
+    regs: Arc<[QueueReg]>,
+    irq_sender: Arc<FakeIrqSender>,
+    irq_rx: Receiver<u16>,
+    submitted_rx: Receiver<u16>,
+    completed: Arc<AtomicUsize>,
+    observer: PipeReader,
+}
+
+impl Fixture {
+    /// Returns the fixture, the device under test, and the write end of
+    /// the pipe.
+    fn new() -> (Self, PipeDev, PipeWriter) {
+        let (reader, writer) = std::io::pipe().unwrap();
+        let observer = reader.try_clone().unwrap();
+        let (submitted_tx, submitted_rx) = flume::unbounded();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let dev = PipeDev {
+            reader,
+            config: Arc::new(EntropyConfig),
+            submitted: submitted_tx,
+            completed: completed.clone(),
+        };
+        let (irq_tx, irq_rx) = flume::unbounded();
+        let fixture = Fixture {
+            ram_bus: Arc::new(fixture_ram_bus()),
+            regs: Arc::from(fixture_queues(1)),
+            irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
+            irq_rx,
+            submitted_rx,
+            completed,
+            observer,
+        };
+        (fixture, dev, writer)
+    }
+
+    /// Posts one writable buffer at `DATA_ADDR` and returns its chain id.
+    fn post_buffer(&self) -> u16 {
+        let ram = self.ram_bus.load();
+        let mut guest_q = GuestQueue::new(
+            SplitQueue::new(&self.regs[0], &ram, false)
+                .unwrap()
+                .unwrap(),
+            &self.regs[0],
+        );
+        guest_q.add_desc(&[], &[(DATA_ADDR, 4 << 10)])
+    }
+
+    /// Builds the queues of a worker's event loop.
+    fn queues(&self) -> [Option<Queue<'_, SplitQueue>>; 1] {
+        [Queue::new(&self.regs[0], self.ram_bus.clone(), false).unwrap()]
+    }
+
+    /// Builds the event loop state of a worker around `queues`, and
+    /// submits the posted buffer to the ring.
+    fn activate<'a, 'r>(
+        &'a self,
+        dev: &mut PipeDev,
+        queues: &'a mut [Option<Queue<'r, SplitQueue>>],
+    ) -> ActiveIoUring<'a, 'r, SplitQueue, FakeIrqSender> {
+        let mut active = ActiveIoUring {
+            ring: io_uring::IoUring::new(RING_SIZE as u32).unwrap(),
+            queues,
+            irq_sender: &*self.irq_sender,
+            notifiers: &[],
+            shared_count: RING_SIZE - 1,
+            submit_counts: Box::new([0]),
+        };
+        active.submit_buffers(dev, 0).unwrap();
+        active.ring.submit().unwrap();
+        active
+    }
+
+    /// Checks that the read is gone: what is written to the pipe now stays
+    /// there instead of landing in guest memory, no chain completed, and no
+    /// interrupt was sent.
+    fn assert_read_cancelled(&self, mut writer: PipeWriter) {
+        writer.write_all(AFTER_CANCEL).unwrap();
+        drop(writer);
+        let mut buf = Vec::new();
+        (&self.observer).read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, AFTER_CANCEL);
+        assert_eq!(self.completed.load(Ordering::Relaxed), 0);
+        assert!(self.irq_rx.try_recv().is_err());
+    }
 }
 
 #[test]
 fn io_uring_drain_test() {
-    let ram_bus = Arc::new(fixture_ram_bus());
-    let regs: Arc<[QueueReg]> = Arc::from(fixture_queues(1));
-
-    let (reader, mut writer) = pipe();
-    let observer = unsafe { File::from_raw_fd(libc::dup(reader.as_raw_fd())) };
-    let (submitted_tx, submitted_rx) = flume::unbounded();
-    let completed = Arc::new(AtomicUsize::new(0));
-    let dev = PipeReader {
-        reader,
-        config: Arc::new(EntropyConfig),
-        submitted: submitted_tx,
-        completed: completed.clone(),
-    };
-
+    let (f, dev, writer) = Fixture::new();
     let (tx, rx) = flume::unbounded();
     let (handle, notifier) = dev
         .spawn_worker(WorkerParam {
             event_rx: rx,
-            memory: ram_bus.clone(),
-            queue_regs: regs.clone(),
+            memory: f.ram_bus.clone(),
+            queue_regs: f.regs.clone(),
         })
         .unwrap();
-    let (irq_tx, irq_rx) = flume::unbounded();
     let start_param = StartParam {
         feature: VirtioFeature::VERSION_1.bits(),
-        irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
-        notifiers: Option::<Arc<[Notifier]>>::None,
+        irq_sender: f.irq_sender.clone(),
+        notifiers: None,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();
 
     // The pipe is empty, so the read stays in flight.
-    {
-        let ram = ram_bus.load();
-        let mut guest_q = GuestQueue::new(
-            SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(),
-            &regs[0],
-        );
-        let id = guest_q.add_desc(&[], &[(DATA_ADDR, 4 << 10)]);
-        tx.send(WakeEvent::Notify { q_index: 0 }).unwrap();
-        notifier.notify().unwrap();
-        assert_eq!(submitted_rx.recv_timeout(Duration::from_secs(1)), Ok(id));
-    }
+    let id = f.post_buffer();
+    tx.send(WakeEvent::Notify { q_index: 0 }).unwrap();
+    notifier.notify().unwrap();
+    assert_eq!(f.submitted_rx.recv_timeout(Duration::from_secs(1)), Ok(id));
 
     // Shutting down cancels and reaps the read, instead of hanging or
     // leaving it to the kernel after the worker releases guest memory.
     tx.send(WakeEvent::Shutdown).unwrap();
     notifier.notify().unwrap();
     handle.join().unwrap();
-    assert_eq!(completed.load(Ordering::Relaxed), 0);
-    assert!(irq_rx.try_recv().is_err());
 
     // Nobody reads from the pipe any more, so the data stays there and
     // never reaches guest memory.
-    let s = b"written after shutdown";
-    let sentinel = [0xa5u8; 22];
-    ram_bus.write(DATA_ADDR, &sentinel).unwrap();
-    writer.write_all(s).unwrap();
-    drop(writer);
-    let mut buf = Vec::new();
-    let mut observer = observer;
-    observer.read_to_end(&mut buf).unwrap();
-    assert_eq!(buf, s);
-    let mut guest_buf = [0u8; 22];
-    ram_bus.read(DATA_ADDR, &mut guest_buf).unwrap();
+    let sentinel = [0xa5u8; AFTER_CANCEL.len()];
+    f.ram_bus.write(DATA_ADDR, &sentinel).unwrap();
+    f.assert_read_cancelled(writer);
+    let mut guest_buf = [0u8; AFTER_CANCEL.len()];
+    f.ram_bus.read(DATA_ADDR, &mut guest_buf).unwrap();
     assert_eq!(guest_buf, sentinel);
 }
 
 #[test]
 fn io_uring_drain_cancels_pending_reads() {
-    let ram_bus = Arc::new(fixture_ram_bus());
-    let ram = ram_bus.load();
-    let regs = fixture_queues(1);
-    let mut guest_q = GuestQueue::new(
-        SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(),
-        &regs[0],
-    );
-    guest_q.add_desc(&[], &[(DATA_ADDR, 4 << 10)]);
-
-    let (reader, mut writer) = pipe();
-    let mut observer = unsafe { File::from_raw_fd(libc::dup(reader.as_raw_fd())) };
-    let (submitted_tx, submitted_rx) = flume::unbounded();
-    let completed = Arc::new(AtomicUsize::new(0));
-    let mut dev = PipeReader {
-        reader,
-        config: Arc::new(EntropyConfig),
-        submitted: submitted_tx,
-        completed: completed.clone(),
-    };
-
-    let (irq_tx, irq_rx) = flume::unbounded();
-    let irq_sender = FakeIrqSender { q_tx: irq_tx };
-    let mut queues = [Some(
-        Queue::<SplitQueue>::new(&regs[0], ram_bus.clone(), false)
-            .unwrap()
-            .unwrap(),
-    )];
-    let mut active = ActiveIoUring {
-        ring: io_uring::IoUring::new(RING_SIZE as u32).unwrap(),
-        queues: &mut queues,
-        irq_sender: &irq_sender,
-        notifiers: &[],
-        shared_count: RING_SIZE - 1,
-        submit_counts: Box::new([0]),
-    };
-    active.submit_buffers(&mut dev, 0).unwrap();
-    active.ring.submit().unwrap();
-    assert!(submitted_rx.try_recv().is_ok());
+    let (f, mut dev, writer) = Fixture::new();
+    let id = f.post_buffer();
+    let mut queues = f.queues();
+    let mut active = f.activate(&mut dev, &mut queues);
+    assert_eq!(f.submitted_rx.try_recv(), Ok(id));
     assert_eq!(active.submit_counts[0], 1);
 
     active.drain().unwrap();
@@ -235,14 +263,32 @@ fn io_uring_drain_cancels_pending_reads() {
 
     // The ring is still alive, but the read is gone: data written now
     // stays in the pipe.
-    let s = b"written after drain";
-    writer.write_all(s).unwrap();
-    drop(writer);
-    drop(dev);
-    let mut buf = Vec::new();
-    observer.read_to_end(&mut buf).unwrap();
-    assert_eq!(buf, s);
-    assert_eq!(completed.load(Ordering::Relaxed), 0);
-    assert!(irq_rx.try_recv().is_err());
+    f.assert_read_cancelled(writer);
     drop(active);
+}
+
+#[test]
+fn io_uring_drain_cancels_requests_of_stale_queue() {
+    let (f, mut dev, writer) = Fixture::new();
+    let id = f.post_buffer();
+    let mut queues = f.queues();
+    let mut active = f.activate(&mut dev, &mut queues);
+    assert_eq!(f.submitted_rx.try_recv(), Ok(id));
+
+    // All memory goes away while the read is in flight. The queue stays on
+    // its old snapshot, so the read's buffer stays pinned.
+    let old_ram = Arc::downgrade(&f.ram_bus.load());
+    f.ram_bus.update(|ram| ram.remove(0)).unwrap();
+    ActiveBackend::<PipeDev>::sync_ram(&mut active);
+    assert!(active.queues[0].is_some());
+    assert!(old_ram.upgrade().is_some());
+
+    // Draining cancels the read, and dropping the queue releases the memory.
+    active.drain().unwrap();
+    assert_eq!(active.submit_counts[0], 0);
+    drop(active);
+    drop(queues);
+    assert!(old_ram.upgrade().is_none());
+
+    f.assert_read_cancelled(writer);
 }

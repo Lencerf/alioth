@@ -318,6 +318,12 @@ where
         self.reg.reset_counter.load(Ordering::Acquire) != self.addrs.reset_counter
     }
 
+    /// Whether a device reset is pending or the queue stayed on an old
+    /// snapshot because its rings are not accessible in the latest layout.
+    fn is_stale(&self) -> bool {
+        self.reset_pending() || self.ram.generation() != self.bus_generation
+    }
+
     /// Number of chains taken from the ring but not returned yet.
     pub fn num_deferred(&self) -> usize {
         self.deferred.len()
@@ -373,13 +379,43 @@ where
     ) -> Result<()> {
         let mut send_irq = false;
         let mut ret = Ok(());
-        let ram = self.ram.clone();
+        let mut ram = self.ram.clone();
         'out: loop {
             if !self.q.desc_avail(self.avail) {
                 break;
             }
             self.q.enable_notification(false);
-            while let Some(mut chain) = self.q.get_avail(self.avail, &ram)? {
+            loop {
+                let mut chain = match self.q.get_avail(self.avail, &ram) {
+                    Ok(Some(chain)) => chain,
+                    Ok(None) => break,
+                    // The chain may point into memory plugged after the
+                    // snapshot was taken, e.g. while the worker was handling
+                    // an event that started before the memory was published.
+                    // A stale snapshot may also still map memory the guest
+                    // has just unplugged. That is memory safe, since the
+                    // snapshot keeps the pages alive, and a driver must not
+                    // unplug memory it has posted buffers in.
+                    Err(e) => {
+                        match self.sync_ram() {
+                            Ok(true) => {
+                                ram = self.ram.clone();
+                                continue;
+                            }
+                            // A device reset is pending, or the rings are
+                            // gone from the latest layout, so the queue
+                            // cannot follow the driver. Stop here and wait
+                            // for the device reset.
+                            Err(e) => log::warn!("{:x?}: cannot catch up: {e:?}", self.addrs),
+                            Ok(false) if self.is_stale() => {}
+                            Ok(false) => ret = Err(e),
+                        }
+                        // Chains completed so far still need their
+                        // interrupt.
+                        self.q.enable_notification(true);
+                        break 'out;
+                    }
+                };
                 let delta = chain.delta;
                 match op(&mut chain) {
                     Err(e) => {
@@ -415,6 +451,46 @@ where
             irq_sender.queue_irq(q_index);
         }
         ret
+    }
+}
+
+/// Moves all `queues` to the latest snapshot of their [`RamBus`].
+///
+/// Workers call this between two events, when they hold no reference to
+/// guest memory other than through the queues and their deferred chains.
+/// In RCU terms, this is their quiescent state. It is cheap when nothing
+/// changed: one atomic load per queue.
+///
+/// A queue whose rings are not accessible in the latest snapshot, or for
+/// which a device reset is pending, stays on its old one, see
+/// [`Queue::sync_ram`]. On a VM reboot, for example, all guest memory is
+/// removed and re-added before the worker sees the device reset that was
+/// queued just before it; the queue refuses to follow the bus into the new
+/// boot's memory and stays on its pinned snapshot until reset.
+pub fn sync_queues<Q>(queues: &mut [Option<Queue<'_, Q>>])
+where
+    Q: VirtQueue,
+{
+    for (index, queue) in queues.iter_mut().enumerate() {
+        let Some(queue) = queue else {
+            continue;
+        };
+        let tried = queue.bus_generation;
+        match queue.sync_ram() {
+            Ok(false) if queue.bus_generation != tried && queue.is_stale() => log::debug!(
+                "queue-{index}: device reset pending, staying on guest memory generation {}",
+                queue.ram().generation()
+            ),
+            Ok(false) => {}
+            Ok(true) => log::debug!(
+                "queue-{index}: moved to guest memory generation {}",
+                queue.ram().generation()
+            ),
+            Err(e) => log::warn!(
+                "queue-{index}: rings not accessible in the latest layout, staying on generation {}: {e:?}",
+                queue.ram().generation()
+            ),
+        }
     }
 }
 

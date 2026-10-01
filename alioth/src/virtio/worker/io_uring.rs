@@ -27,7 +27,7 @@ use crate::virtio::dev::{
     ActiveBackend, Backend, BackendEvent, Context, StartParam, Virtio, Worker, WorkerParam,
     WorkerState,
 };
-use crate::virtio::queue::{DescChain, Queue, Status, VirtQueue};
+use crate::virtio::queue::{DescChain, Queue, Status, VirtQueue, sync_queues};
 use crate::virtio::{IrqSender, Result};
 
 pub enum BufferAction {
@@ -310,6 +310,10 @@ where
     S: IrqSender,
 {
     type Event = Cqe;
+
+    fn sync_ram(&mut self) {
+        sync_queues(self.queues);
+    }
 
     fn handle_event(&mut self, dev: &mut D, event: &Self::Event) -> Result<()> {
         let token = event.user_data();
