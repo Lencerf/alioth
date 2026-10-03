@@ -65,8 +65,6 @@ pub enum Error {
     Convert { hva: u64 },
     #[snafu(display("invalid message {req:?} with payload size {size}"))]
     InvalidMsg { req: VuFrontMsg, size: u32 },
-    #[snafu(display("Cannot change memory layout at runtime"))]
-    ChangeMemoryLayout,
     #[snafu(display("Failed to send backend request channel to device"))]
     SendChannel,
 }
@@ -394,9 +392,6 @@ impl VuBackend {
                     return error::MissingFd { req: msg.request }.fail();
                 };
                 let region = &single.region;
-                if self.status.contains(DevStatus::DRIVER_OK) {
-                    return error::ChangeMemoryLayout.fail();
-                }
                 log::debug!("{name}: add mem: {region:x?}, fd: {}", fd.as_raw_fd());
                 let user_mem = ArcMemPages::from_file(
                     File::from(fd),
@@ -406,20 +401,30 @@ impl VuBackend {
                 )?;
                 self.memory.update(|ram| ram.add(region.gpa, user_mem))?;
                 self.init.regions.push(single.region);
+                if self.status.contains(DevStatus::DRIVER_OK)
+                    && let Err(e) = self.dev.notifier.notify()
+                {
+                    log::error!("{name}: failed to wake up device: {e}");
+                }
             }
             (VuFrontMsg::REM_MEM_REG, 40) => {
                 let single: MemorySingleRegion = self.session.recv_payload()?;
                 let region = &single.region;
-                if self.status.contains(DevStatus::DRIVER_OK) {
-                    return error::ChangeMemoryLayout.fail();
-                }
+                let mut removed = false;
                 for (index, r) in self.init.regions.iter().enumerate() {
                     if r.gpa == region.gpa && r.hva == region.hva && r.size == region.size {
                         log::info!("{name}: remove mem: {r:x?}");
                         self.init.regions.remove(index);
                         let _ = self.memory.update(|ram| ram.remove(region.gpa));
+                        removed = true;
                         break;
                     }
+                }
+                if removed
+                    && self.status.contains(DevStatus::DRIVER_OK)
+                    && let Err(e) = self.dev.notifier.notify()
+                {
+                    log::error!("{name}: failed to wake up device: {e}");
                 }
             }
             (VuFrontMsg::GET_STATUS, 0) => {
