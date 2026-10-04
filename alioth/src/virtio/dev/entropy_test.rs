@@ -17,6 +17,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -84,6 +85,7 @@ fn entropy_test() {
             event_rx: rx,
             memory: ram_bus.clone(),
             queue_regs: regs,
+            device_reset_counter: Arc::new(AtomicU64::new(0)),
         })
         .unwrap();
     let (irq_tx, irq_rx) = flume::unbounded();
@@ -92,6 +94,7 @@ fn entropy_test() {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender,
         notifiers: Option::<Arc<[Notifier]>>::None,
+        device_reset_counter: 0,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();
@@ -176,6 +179,7 @@ impl EntropyWorker {
                 event_rx: rx,
                 memory: ram_bus.clone(),
                 queue_regs: regs,
+                device_reset_counter: Arc::new(AtomicU64::new(0)),
             })
             .unwrap();
         let (irq_tx, irq_rx) = flume::unbounded();
@@ -183,6 +187,7 @@ impl EntropyWorker {
             feature: VirtioFeature::VERSION_1.bits(),
             irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
             notifiers: Option::<Arc<[Notifier]>>::None,
+            device_reset_counter: 0,
         };
         tx.send(WakeEvent::Start { param: start_param }).unwrap();
         notifier.notify().unwrap();

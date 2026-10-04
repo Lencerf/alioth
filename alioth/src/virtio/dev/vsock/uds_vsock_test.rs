@@ -17,6 +17,7 @@ use std::mem::size_of;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -133,6 +134,7 @@ impl<'m> VsockTest<'m> {
                 event_rx: rx,
                 memory: ram_bus.clone(),
                 queue_regs: regs,
+                device_reset_counter: Arc::new(AtomicU64::new(0)),
             })
             .unwrap();
         let (irq_tx, irq_rx) = flume::unbounded();
@@ -140,6 +142,7 @@ impl<'m> VsockTest<'m> {
             feature: VirtioFeature::VERSION_1.bits(),
             irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
             notifiers: Option::<Arc<[Notifier]>>::None,
+            device_reset_counter: 0,
         };
         tx.send(WakeEvent::Start { param: start_param }).unwrap();
 

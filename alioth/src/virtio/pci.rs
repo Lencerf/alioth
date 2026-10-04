@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use alioth_macros::Layout;
 use flume::Sender;
@@ -191,6 +191,7 @@ where
     name: Arc<str>,
     reg: Register,
     queues: Arc<[QueueReg]>,
+    pub device_reset_counter: Arc<AtomicU64>,
     irq_sender: Arc<PciIrqSender<M>>,
     notifiers: Option<Arc<[Notifier]>>,
     event_tx: Sender<WakeEvent<PciIrqSender<M>>>,
@@ -216,6 +217,7 @@ where
     }
 
     fn reset(&self) {
+        self.device_reset_counter.fetch_add(1, Ordering::Release);
         let config_msix = &self.irq_sender.msix_vector.config;
         config_msix.store(VIRTIO_MSI_NO_VECTOR, Ordering::Release);
         for q_vector in self.irq_sender.msix_vector.queues.iter() {
@@ -462,6 +464,7 @@ where
                         feature: reg.get_driver_feature(),
                         irq_sender: self.irq_sender.clone(),
                         notifiers: self.notifiers.clone(),
+                        device_reset_counter: self.device_reset_counter.load(Ordering::Acquire),
                     };
                     self.wake_up_dev(WakeEvent::Start { param });
                 }
@@ -943,6 +946,7 @@ where
             event_tx: dev.event_tx.clone(),
             notifier: dev.notifier.clone(),
             queues: dev.queue_regs.clone(),
+            device_reset_counter: dev.device_reset_counter.clone(),
             irq_sender: Arc::new(PciIrqSender {
                 msix_vector,
                 msix_table: msix_table.clone(),

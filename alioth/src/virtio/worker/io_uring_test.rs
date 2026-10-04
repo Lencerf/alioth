@@ -15,7 +15,7 @@
 use std::io::{PipeReader, PipeWriter, Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -217,12 +217,14 @@ fn io_uring_drain_test() {
             event_rx: rx,
             memory: f.ram_bus.clone(),
             queue_regs: f.regs.clone(),
+            device_reset_counter: Arc::new(AtomicU64::new(0)),
         })
         .unwrap();
     let start_param = StartParam {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender: f.irq_sender.clone(),
         notifiers: None,
+        device_reset_counter: 0,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();

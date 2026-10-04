@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bitflags::bitflags;
+use parking_lot::Mutex;
 
 use super::*;
 use crate::mem::emulated::{Action, Mmio};
+use crate::mem::mapped::RamBus;
+use crate::virtio::queue::{Queue, VirtQueue};
 use crate::virtio::tests::fixture_ram_bus;
 use crate::virtio::{IrqSender, Result};
 
@@ -162,6 +165,7 @@ fn test_handle_event_syncs_ram_once_per_layout() {
             event_rx: rx,
             memory: ram_bus.clone(),
             queue_regs: Arc::new([]),
+            device_reset_counter: Arc::new(AtomicU64::new(0)),
         },
         state: WorkerState::Running,
         synced_generation: None,
@@ -186,10 +190,115 @@ fn test_handle_event_syncs_ram_once_per_layout() {
             feature: 0,
             irq_sender: Arc::new(DummyIrqSender),
             notifiers: None,
+            device_reset_counter: 0,
         },
     })
     .unwrap();
     assert!(context.wait_start().is_some());
     context.handle_event(&DummyEvent, &mut backend).unwrap();
     assert_eq!(backend.syncs, 3);
+}
+
+#[derive(Debug, Default)]
+struct MockBackend {
+    activated_counters: Arc<Mutex<Vec<u64>>>,
+    resets: Arc<Mutex<usize>>,
+}
+
+impl Backend<DummyDev> for MockBackend {
+    fn register_notifier(&mut self, _: u64) -> Result<Arc<Notifier>> {
+        Ok(Arc::new(Notifier::new()?))
+    }
+
+    fn reset(&self, _: &mut DummyDev) -> Result<()> {
+        *self.resets.lock() += 1;
+        Ok(())
+    }
+
+    fn event_loop<S, Q>(
+        &mut self,
+        context: &mut Context<DummyDev, S>,
+        _queues: &mut [Option<Queue<'_, Q>>],
+        param: &StartParam<S>,
+    ) -> Result<()>
+    where
+        S: IrqSender,
+        Q: VirtQueue,
+    {
+        self.activated_counters
+            .lock()
+            .push(param.device_reset_counter);
+        context.state = WorkerState::Pending;
+        Ok(())
+    }
+}
+
+#[test]
+fn test_worker_drops_stale_start_param() {
+    let (tx, rx) = flume::unbounded();
+    let device_reset_counter = Arc::new(AtomicU64::new(0));
+    let ram_bus = Arc::new(RamBus::new());
+    let queue_regs = Arc::new([]);
+    let activated = Arc::new(Mutex::new(Vec::new()));
+    let resets = Arc::new(Mutex::new(0));
+    let backend = MockBackend {
+        activated_counters: activated.clone(),
+        resets: resets.clone(),
+    };
+
+    let mut worker = Worker {
+        context: Context {
+            dev: DummyDev,
+            param: WorkerParam {
+                event_rx: rx,
+                memory: ram_bus,
+                queue_regs,
+                device_reset_counter: device_reset_counter.clone(),
+            },
+            state: WorkerState::Pending,
+            synced_generation: None,
+        },
+        backend,
+    };
+
+    // 1. Enqueue stale Start event (counter = 0).
+    tx.send(WakeEvent::Start {
+        param: StartParam {
+            feature: 0,
+            irq_sender: Arc::new(DummyIrqSender),
+            notifiers: None,
+            device_reset_counter: 0,
+        },
+    })
+    .unwrap();
+
+    // 2. Transport resets device: bumps device_reset_counter to 1 and enqueues WakeEvent::Reset.
+    device_reset_counter.fetch_add(1, Ordering::Release);
+    tx.send(WakeEvent::Reset).unwrap();
+
+    // 3. New valid Start event with counter = 1.
+    tx.send(WakeEvent::Start {
+        param: StartParam {
+            feature: 0,
+            irq_sender: Arc::new(DummyIrqSender),
+            notifiers: None,
+            device_reset_counter: 1,
+        },
+    })
+    .unwrap();
+
+    // First call to loop_until_reset:
+    // Worker observes stale Start (param counter 0 != device counter 1),
+    // drops it, reverts state to Pending, and returns Ok(()).
+    worker.loop_until_reset().unwrap();
+    assert_eq!(worker.context.state, WorkerState::Pending);
+    assert_eq!(activated.lock().as_slice(), &[]);
+    assert_eq!(*resets.lock(), 0);
+
+    // Second call to loop_until_reset:
+    // Worker consumes WakeEvent::Reset, then processes valid Start (counter 1),
+    // enters event_loop on the backend, and finishes reset.
+    worker.loop_until_reset().unwrap();
+    assert_eq!(activated.lock().as_slice(), &[1]);
+    assert_eq!(*resets.lock(), 1);
 }

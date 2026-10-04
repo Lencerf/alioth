@@ -68,6 +68,7 @@ fn create_test_mmio(queues: Arc<[QueueReg]>) -> (TestMmio, TestWakeReceiver) {
             ..Default::default()
         },
         queues,
+        device_reset_counter: Arc::new(AtomicU64::new(0)),
         irq_sender,
         notifiers: None,
         event_tx,
@@ -628,6 +629,7 @@ fn test_device_status_valid_transitions() {
     assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Reset));
     assert!(event_rx.is_empty());
     assert!(!queues[0].enabled.load(Ordering::Acquire));
+    assert_eq!(mmio.device_reset_counter.load(Ordering::Acquire), 1);
     assert_matches!(
         mmio.read(VirtioCommonCfg::OFFSET_CONFIG_MSIX_VECTOR as u64, 2),
         Ok(vector) if vector == VIRTIO_MSI_NO_VECTOR as u64
@@ -834,6 +836,7 @@ fn test_device_status_reset_without_driver_ok() {
     // self.reset() should still disable queues and reset MSI-X vectors
     assert!(!queues[0].enabled.load(Ordering::Acquire));
     assert_eq!(queues[0].reset_counter.load(Ordering::Acquire), 1);
+    assert_eq!(mmio.device_reset_counter.load(Ordering::Acquire), 1);
     assert_matches!(
         mmio.read(VirtioCommonCfg::OFFSET_CONFIG_MSIX_VECTOR as u64, 2),
         Ok(vector) if vector == VIRTIO_MSI_NO_VECTOR as u64
@@ -1017,6 +1020,7 @@ fn test_notify_with_notifiers() {
             ..Default::default()
         },
         queues,
+        device_reset_counter: Arc::new(AtomicU64::new(0)),
         irq_sender,
         notifiers: Some(Arc::new([Notifier::new().unwrap()])),
         event_tx,
@@ -1113,6 +1117,7 @@ where
         device_config: Arc::new(TestDevConfig { size: config_size }),
         device_feature: (VirtioFeature::VERSION_1 | VirtioFeature::RING_PACKED).bits(),
         queue_regs,
+        device_reset_counter: Arc::new(AtomicU64::new(0)),
         shared_mem_regions: shared_mem,
         notifier,
         event_tx,

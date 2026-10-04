@@ -24,7 +24,7 @@ pub mod vsock;
 
 use std::fmt::Debug;
 use std::io::ErrorKind;
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
@@ -102,6 +102,7 @@ where
     pub(crate) feature: u128,
     pub(crate) irq_sender: Arc<S>,
     pub(crate) notifiers: Option<Arc<[Notifier]>>,
+    pub(crate) device_reset_counter: u64,
 }
 
 /// Parameters a transport hands to the worker thread of a virtio device.
@@ -122,6 +123,9 @@ where
     pub(crate) memory: Arc<RamBus>,
     /// Queue registers, shared with the transport.
     pub(crate) queue_regs: Arc<[QueueReg]>,
+    /// Device reset counter, shared with the transport. See
+    /// [`StartParam::device_reset_counter`].
+    pub(crate) device_reset_counter: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +173,7 @@ where
     pub device_config: Arc<dyn Mmio>,
     pub device_feature: u128,
     pub queue_regs: Arc<[QueueReg]>,
+    pub device_reset_counter: Arc<AtomicU64>,
     pub shared_mem_regions: Option<Arc<MemRegion>>,
     pub notifier: Arc<Notifier>,
     pub event_tx: Sender<WakeEvent<S>>,
@@ -218,10 +223,12 @@ where
 
         let shared_mem_regions = dev.shared_mem_regions();
         let (event_tx, event_rx) = flume::unbounded();
+        let device_reset_counter = Arc::new(AtomicU64::new(0));
         let param = WorkerParam {
             event_rx,
             memory,
             queue_regs: queue_regs.clone(),
+            device_reset_counter: device_reset_counter.clone(),
         };
         let (handle, notifier) = dev.spawn_worker(param)?;
         log::debug!(
@@ -234,6 +241,7 @@ where
             id,
             device_feature,
             queue_regs,
+            device_reset_counter,
             worker_handle: Some(handle),
             event_tx,
             notifier,
@@ -470,6 +478,13 @@ where
         let Some(param) = self.context.wait_start() else {
             return Ok(());
         };
+        let reset_counter = &self.context.param.device_reset_counter;
+        if param.device_reset_counter != reset_counter.load(Ordering::Acquire) {
+            // Device was reset after this StartParam was built; drop the stale
+            // Start and loop to consume the pending Reset.
+            self.context.state = WorkerState::Pending;
+            return Ok(());
+        }
         let feature = param.feature & !VirtioFeature::ACCESS_PLATFORM.bits();
         let feature = VirtioFeature::from_bits_retain(feature);
         log::debug!(

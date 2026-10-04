@@ -241,6 +241,7 @@ impl VuBackend {
             feature: self.init.drv_feat as u128,
             irq_sender: Arc::new(irq_sender),
             notifiers: Some(notifiers.into()),
+            device_reset_counter: self.dev.device_reset_counter.load(Ordering::Acquire),
         })
     }
 
@@ -450,6 +451,9 @@ impl VuBackend {
                         // same addresses, before the worker has handled
                         // the reset. The bumped reset counter keeps the
                         // worker's queues from following them.
+                        self.dev
+                            .device_reset_counter
+                            .fetch_add(1, Ordering::Release);
                         for q in &*self.dev.queue_regs {
                             q.reset();
                         }
@@ -458,6 +462,9 @@ impl VuBackend {
                     self.wake_up_dev(event);
                 } else if new.is_empty() {
                     // Writing 0 resets the device, as on the PCI transport.
+                    self.dev
+                        .device_reset_counter
+                        .fetch_add(1, Ordering::Release);
                     for q in &*self.dev.queue_regs {
                         q.reset();
                     }
