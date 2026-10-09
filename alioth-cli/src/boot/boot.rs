@@ -122,6 +122,11 @@ pub struct BootArgs {
     #[arg(long)]
     pvpanic: bool,
 
+    /// Enable ACPI on aarch64.
+    #[cfg(target_arch = "aarch64")]
+    #[arg(long)]
+    acpi: bool,
+
     #[cfg(target_arch = "x86_64")]
     #[arg(long, help(
         help_text::<FwCfgItemSpec>("Add an extra item to the fw_cfg device.")
@@ -294,6 +299,10 @@ fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<VmSpec
     };
     board_spec.mem = parse_mem_arg(args.memory, args.mem_size, &objects)?;
     board_spec.cpu = parse_cpu_arg(args.cpu, args.num_cpu, &objects)?;
+    #[cfg(target_arch = "aarch64")]
+    {
+        board_spec.acpi = args.acpi;
+    }
 
     let mut spec = VmSpec {
         board: board_spec,

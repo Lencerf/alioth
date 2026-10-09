@@ -55,6 +55,8 @@ fn test_parse_args() {
         cpu: Some("count=16,topology=id_topo".into()),
         memory: Some("size=128G,backend=anon,shared=true".into()),
         pvpanic: true,
+        #[cfg(target_arch = "aarch64")]
+        acpi: true,
         #[cfg(target_arch = "x86_64")]
         fw_cfg: vec![
             "name=item1,file=file1".into(),
@@ -120,7 +122,7 @@ fn test_parse_args() {
             },
             coco: None,
             #[cfg(target_arch = "aarch64")]
-            acpi: false,
+            acpi: true,
         },
         payload: PayloadSpec {
             executable: Some(Executable::Linux(Path::new("vmlinuz").into())),
