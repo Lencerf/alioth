@@ -72,3 +72,131 @@ pub struct HobResourceDesc {
     pub address: u64,
     pub len: u64,
 }
+
+pub const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
+pub const EFI_2_100_SYSTEM_TABLE_REVISION: u32 = (2 << 16) | 100;
+
+#[repr(C)]
+#[derive(Debug, Clone, Default, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct EfiTableHeader {
+    pub signature: u64,
+    pub revision: u32,
+    pub headersize: u32,
+    pub crc32: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct EfiGuid {
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
+}
+
+pub const ACPI_20_TABLE_GUID: EfiGuid = EfiGuid {
+    data1: 0x8868e871,
+    data2: 0xe4f1,
+    data3: 0x11d3,
+    data4: [0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81],
+};
+
+pub const EFI_RT_PROPERTIES_TABLE_GUID: EfiGuid = EfiGuid {
+    data1: 0xeb66918a,
+    data2: 0x7eef,
+    data3: 0x402a,
+    data4: [0x84, 0x2e, 0x93, 0x1d, 0x21, 0xc3, 0x8a, 0xe9],
+};
+
+#[repr(C)]
+#[derive(Debug, Clone, Default, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct EfiConfigTable64 {
+    pub guid: EfiGuid,
+    pub table: u64,
+}
+
+pub const EFI_RT_PROPERTIES_TABLE_VERSION: u16 = 0x1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Default, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct EfiRtPropertiesTable {
+    pub version: u16,
+    pub length: u16,
+    pub runtime_services_supported: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Default, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct EfiSystemTable64 {
+    pub hdr: EfiTableHeader,
+    pub fw_vendor: u64,
+    pub fw_revision: u32,
+    pub _pad: u32,
+    pub con_in_handle: u64,
+    pub con_in: u64,
+    pub con_out_handle: u64,
+    pub con_out: u64,
+    pub stderr_handle: u64,
+    pub stderr: u64,
+    pub runtime: u64,
+    pub boottime: u64,
+    pub nr_tables: u64,
+    pub tables: u64,
+}
+
+pub const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
+
+consts! {
+    pub struct EfiMemoryType(u32) {
+        RESERVED = 0;
+        LOADER_CODE = 1;
+        LOADER_DATA = 2;
+        BOOT_SERVICES_CODE = 3;
+        BOOT_SERVICES_DATA = 4;
+        RUNTIME_SERVICES_CODE = 5;
+        RUNTIME_SERVICES_DATA = 6;
+        CONVENTIONAL_MEMORY = 7;
+        UNUSABLE_MEMORY = 8;
+        ACPI_RECLAIM_MEMORY = 9;
+        ACPI_MEMORY_NVS = 10;
+        MMIO = 11;
+        MMIO_PORT_SPACE = 12;
+        PAL_CODE = 13;
+        PERSISTENT_MEMORY = 14;
+    }
+}
+
+bitflags! {
+    pub struct EfiMemoryAttribute(u64) {
+        UC = 1 << 0;
+        WC = 1 << 1;
+        WT = 1 << 2;
+        WB = 1 << 3;
+        UCE = 1 << 4;
+        WP = 1 << 12;
+        RP = 1 << 13;
+        XP = 1 << 14;
+        NV = 1 << 15;
+        MORE_RELIABLE = 1 << 16;
+        RO = 1 << 17;
+        SP = 1 << 18;
+        CPU_CRYPTO = 1 << 19;
+        RUNTIME = 1 << 63;
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Default, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct EfiMemoryDesc {
+    pub ty: EfiMemoryType,
+    pub pad: u32,
+    pub phys_addr: u64,
+    pub virt_addr: u64,
+    pub num_pages: u64,
+    pub attribute: EfiMemoryAttribute,
+}
+
+#[cfg(test)]
+#[path = "uefi_test.rs"]
+mod tests;

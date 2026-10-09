@@ -22,6 +22,10 @@ pub const SIG_XSDT: [u8; 4] = *b"XSDT";
 pub const SIG_FADT: [u8; 4] = *b"FACP";
 pub const SIG_MADT: [u8; 4] = *b"APIC";
 pub const SIG_MCFG: [u8; 4] = *b"MCFG";
+pub const SIG_GTDT: [u8; 4] = *b"GTDT";
+pub const SIG_IORT: [u8; 4] = *b"IORT";
+pub const SIG_SPCR: [u8; 4] = *b"SPCR";
+pub const SIG_PPTT: [u8; 4] = *b"PPTT";
 #[allow(dead_code)]
 pub const SIG_DSDT: [u8; 4] = *b"DSDT";
 
@@ -73,6 +77,20 @@ pub struct AcpiTableXsdt3 {
 
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiTableXsdt6 {
+    pub header: AcpiTableHeader,
+    pub entries: [[u32; 2]; 6],
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiTableXsdt7 {
+    pub header: AcpiTableHeader,
+    pub entries: [[u32; 2]; 7],
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
 pub struct AcpiGenericAddress {
     pub space_id: u8,
     pub bit_width: u8,
@@ -89,6 +107,13 @@ bitflags! {
         TMR_VAL_EXT = 1 << 8;
         RESET_REG_SUP = 1 << 10;
         HW_REDUCED_ACPI = 1 << 20;
+    }
+}
+
+bitflags! {
+    pub struct AcpiFadtArmBootFlag(u8) {
+        PSCI_COMPLIANT = 1 << 0;
+        PSCI_USE_HVC = 1 << 1;
     }
 }
 
@@ -167,6 +192,11 @@ pub struct AcpiTableMadt {
 
 pub const MADT_IO_APIC: u8 = 1;
 pub const MADT_LOCAL_X2APIC: u8 = 9;
+pub const MADT_GENERIC_INTERRUPT: u8 = 11;
+pub const MADT_GENERIC_DISTRIBUTOR: u8 = 12;
+pub const MADT_GENERIC_MSI_FRAME: u8 = 13;
+pub const MADT_GENERIC_REDISTRIBUTOR: u8 = 14;
+pub const MADT_GENERIC_TRANSLATOR: u8 = 15;
 
 #[repr(C)]
 #[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
@@ -193,6 +223,73 @@ pub struct AcpiMadtIoApic {
     pub reserved: u8,
     pub address: u32,
     pub global_irq_base: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiMadtGenericInterrupt {
+    pub header: AcpiSubtableHeader,
+    pub reserved: u16,
+    pub cpu_interface_number: u32,
+    pub uid: u32,
+    pub flags: u32,
+    pub parking_version: u32,
+    pub performance_interrupt: u32,
+    pub parked_address: [u32; 2],
+    pub base_address: [u32; 2],
+    pub gicv_base_address: [u32; 2],
+    pub gich_base_address: [u32; 2],
+    pub vgic_interrupt: u32,
+    pub gicr_base_address: [u32; 2],
+    pub arm_mpidr: [u32; 2],
+    pub efficiency_class: u8,
+    pub reserved2: u8,
+    pub spe_interrupt: u16,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiMadtGenericDistributor {
+    pub header: AcpiSubtableHeader,
+    pub reserved: u16,
+    pub gic_id: u32,
+    pub base_address: [u32; 2],
+    pub global_irq_base: u32,
+    pub version: u8,
+    pub reserved2: [u8; 3],
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiMadtGenericMsiFrame {
+    pub header: AcpiSubtableHeader,
+    pub reserved: u16,
+    pub msi_frame_id: u32,
+    pub base_address: [u32; 2],
+    pub flags: u32,
+    pub spi_count: u16,
+    pub spi_base: u16,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiMadtGenericRedistributor {
+    pub header: AcpiSubtableHeader,
+    pub flags: u8,
+    pub reserved: u8,
+    pub base_address: [u32; 2],
+    pub length: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiMadtGenericTranslator {
+    pub header: AcpiSubtableHeader,
+    pub flags: u8,
+    pub reserved: u8,
+    pub translation_id: u32,
+    pub base_address: [u32; 2],
+    pub reserved2: u32,
 }
 
 #[repr(C, align(4))]
@@ -229,6 +326,162 @@ pub struct AcpiTableMcfg3 {
     pub header: AcpiTableHeader,
     pub reserved: [u8; 8],
     pub allocations: [AcpiMcfgAllocation; 3],
+}
+
+pub const GTDT_REVISION: u8 = 3;
+
+bitflags! {
+    pub struct AcpiGtdtFlag(u32) {
+        INTERRUPT_MODE_EDGE = 1 << 0;
+        INTERRUPT_POLARITY_ACTIVE_LOW = 1 << 1;
+        ALWAYS_ON = 1 << 2;
+    }
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiTableGtdt {
+    pub header: AcpiTableHeader,
+    pub counter_block_address: [u32; 2],
+    pub reserved: u32,
+    pub secure_el1_interrupt: u32,
+    pub secure_el1_flags: AcpiGtdtFlag,
+    pub non_secure_el1_interrupt: u32,
+    pub non_secure_el1_flags: AcpiGtdtFlag,
+    pub virtual_timer_interrupt: u32,
+    pub virtual_timer_flags: AcpiGtdtFlag,
+    pub non_secure_el2_interrupt: u32,
+    pub non_secure_el2_flags: AcpiGtdtFlag,
+    pub counter_read_block_address: [u32; 2],
+    pub platform_timer_count: u32,
+    pub platform_timer_offset: u32,
+    pub virtual_el2_timer_gsiv: u32,
+    pub virtual_el2_timer_flags: AcpiGtdtFlag,
+}
+
+pub const IORT_REVISION: u8 = 5;
+pub const IORT_NODE_ITS_GROUP: u8 = 0x00;
+pub const IORT_NODE_PCI_ROOT_COMPLEX: u8 = 0x02;
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiTableIort {
+    pub header: AcpiTableHeader,
+    pub node_count: u32,
+    pub node_offset: u32,
+    pub reserved: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiIortNode {
+    pub type_: u8,
+    pub length: [u8; 2],
+    pub revision: u8,
+    pub identifier: u32,
+    pub mapping_count: u32,
+    pub mapping_offset: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiIortIdMapping {
+    pub input_base: u32,
+    pub id_count: u32,
+    pub output_base: u32,
+    pub output_reference: u32,
+    pub flags: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiIortMemoryAccess {
+    pub cache_coherency: u32,
+    pub hints: u8,
+    pub reserved: [u8; 2],
+    pub memory_flags: u8,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiIortItsGroup1 {
+    pub node: AcpiIortNode,
+    pub its_count: u32,
+    pub identifiers: [u32; 1],
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiIortRootComplex1 {
+    pub node: AcpiIortNode,
+    pub memory_properties: AcpiIortMemoryAccess,
+    pub ats_attribute: u32,
+    pub pci_segment_number: u32,
+    pub memory_address_limit: u8,
+    pub pasid_capabilities: [u8; 2],
+    pub reserved: u8,
+    pub flags: u32,
+    pub mappings: [AcpiIortIdMapping; 1],
+}
+
+pub const SPCR_REVISION: u8 = 2;
+pub const SPCR_INTERFACE_ARM_PL011: u8 = 0x03;
+pub const SPCR_INTERRUPT_TYPE_GIC: u8 = 1 << 3;
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiTableSpcr {
+    pub header: AcpiTableHeader,
+    pub interface_type: u8,
+    pub reserved: [u8; 3],
+    pub serial_port: AcpiGenericAddress,
+    pub interrupt_type: u8,
+    pub pc_interrupt: u8,
+    pub interrupt: [u8; 4],
+    pub baud_rate: u8,
+    pub parity: u8,
+    pub stop_bits: u8,
+    pub flow_control: u8,
+    pub terminal_type: u8,
+    pub language: u8,
+    pub pci_device_id: u16,
+    pub pci_vendor_id: u16,
+    pub pci_bus: u8,
+    pub pci_device: u8,
+    pub pci_function: u8,
+    pub pci_flags: [u8; 4],
+    pub pci_segment: u8,
+    pub uart_clk_freq: [u8; 4],
+}
+
+pub const PPTT_REVISION: u8 = 2;
+pub const PPTT_TYPE_PROCESSOR: u8 = 0;
+
+bitflags! {
+    pub struct AcpiPpttFlag(u32) {
+        PHYSICAL_PACKAGE = 1 << 0;
+        ACPI_PROCESSOR_ID_VALID = 1 << 1;
+        ACPI_PROCESSOR_IS_THREAD = 1 << 2;
+        ACPI_LEAF_NODE = 1 << 3;
+        ACPI_IDENTICAL = 1 << 4;
+    }
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiTablePptt {
+    pub header: AcpiTableHeader,
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes)]
+pub struct AcpiPpttProcessor {
+    pub header: AcpiSubtableHeader,
+    pub reserved: u16,
+    pub flags: AcpiPpttFlag,
+    pub parent: u32,
+    pub acpi_processor_id: u32,
+    pub number_of_priv_resources: u32,
 }
 
 bitfield! {
