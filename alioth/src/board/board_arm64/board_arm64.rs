@@ -13,21 +13,49 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::mem::{offset_of, size_of, size_of_val};
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
+
 use crate::arch::layout::{
-    DEVICE_TREE_LIMIT, DEVICE_TREE_START, GIC_DIST_START, GIC_MSI_START,
-    GIC_V2_CPU_INTERFACE_START, GIC_V3_REDIST_START, IO_END, IO_START, MEM_64_START,
-    PCIE_CONFIG_START, PCIE_MMIO_32_NON_PREFETCHABLE_END, PCIE_MMIO_32_NON_PREFETCHABLE_START,
-    PCIE_MMIO_32_PREFETCHABLE_END, PCIE_MMIO_32_PREFETCHABLE_START, PL011_START, PL031_START,
-    RAM_32_SIZE, RAM_32_START,
+    ACPI_START, DEVICE_TREE_LIMIT, DEVICE_TREE_START, GIC_DIST_START, GIC_MSI_START,
+    GIC_V2_CPU_INTERFACE_START, GIC_V3_REDIST_START, IO_END, IO_START, KERNEL_IMAGE_START,
+    MEM_64_START, PCIE_CONFIG_START, PCIE_MMIO_32_NON_PREFETCHABLE_END,
+    PCIE_MMIO_32_NON_PREFETCHABLE_START, PCIE_MMIO_32_PREFETCHABLE_END,
+    PCIE_MMIO_32_PREFETCHABLE_START, PL011_START, PL031_START, RAM_32_SIZE, RAM_32_START,
+    UEFI_START,
 };
 use crate::arch::reg::MpidrEl1;
 use crate::board::{Board, BoardSpec, CpuTopology, PCIE_MMIO_64_SIZE, Result};
+use crate::firmware::acpi::bindings::{
+    AcpiTableFadt, AcpiTableHeader, AcpiTableRsdp, AcpiTableXsdt6, AcpiTableXsdt7,
+};
+use crate::firmware::acpi::{
+    AcpiTable, GicVersion, MsiController, create_fadt, create_gtdt, create_iort, create_madt,
+    create_mcfg, create_pptt, create_rsdp, create_spcr, create_xsdt6, create_xsdt7,
+};
 use crate::firmware::dt::{DeviceTree, Node, PropVal};
+use crate::firmware::uefi::{
+    ACPI_20_TABLE_GUID, EFI_2_100_SYSTEM_TABLE_REVISION, EFI_MEMORY_DESCRIPTOR_VERSION,
+    EFI_RT_PROPERTIES_TABLE_GUID, EFI_RT_PROPERTIES_TABLE_VERSION, EFI_SYSTEM_TABLE_SIGNATURE,
+    EfiConfigTable64, EfiMemoryAttribute, EfiMemoryDesc, EfiMemoryType, EfiRtPropertiesTable,
+    EfiSystemTable64, EfiTableHeader,
+};
 use crate::hv::{GicV2, GicV2m, GicV3, Hypervisor, Its, Vm};
 use crate::loader::{Executable, InitState};
-use crate::mem::{MemRegion, MemRegionType};
+use crate::mem::{MemRange, MemRegion, MemRegionEntry, MemRegionType};
+use crate::utils::wrapping_sum;
+
+#[repr(C)]
+#[derive(Debug, Clone, FromBytes, Immutable, IntoBytes)]
+struct StaticUefiTables {
+    systab: EfiSystemTable64,
+    rt_prop: EfiRtPropertiesTable,
+    fw_vendor: [u16; 8],
+    config_tables: [EfiConfigTable64; 2],
+}
 
 enum Gic<V>
 where
@@ -99,6 +127,216 @@ fn encode_mpidr(topology: &CpuTopology, index: u16) -> MpidrEl1 {
     mpidr
 }
 
+fn create_dsdt(spec: &BoardSpec) -> Vec<u8> {
+    let mut dsdt = Vec::from(DSDT_TEMPLATE);
+    let pcie_mmio_64_start = spec.pcie_mmio_64_start();
+    let pcie_mmio_64_max = pcie_mmio_64_start - 1 + PCIE_MMIO_64_SIZE;
+    dsdt[DSDT_OFFSET_PCI_QWORD_MEM..(DSDT_OFFSET_PCI_QWORD_MEM + 8)]
+        .copy_from_slice(&pcie_mmio_64_start.to_le_bytes());
+    dsdt[(DSDT_OFFSET_PCI_QWORD_MEM + 8)..(DSDT_OFFSET_PCI_QWORD_MEM + 16)]
+        .copy_from_slice(&pcie_mmio_64_max.to_le_bytes());
+    for index in 0..spec.cpu.count {
+        let mut cpu_aml = AML_CPU_TEMPLATE;
+        let name = format!("C{index:03X}");
+        cpu_aml[8..12].copy_from_slice(name.as_bytes());
+        cpu_aml[33..35].copy_from_slice(&index.to_le_bytes());
+        dsdt.extend_from_slice(&cpu_aml);
+    }
+    let len = dsdt.len() as u32;
+    let len_offset = offset_of!(AcpiTableHeader, length);
+    dsdt[len_offset..(len_offset + 4)].copy_from_slice(&len.to_le_bytes());
+    let checksum_offset = offset_of!(AcpiTableHeader, checksum);
+    dsdt[checksum_offset] = 0;
+    let sum = wrapping_sum(&dsdt);
+    dsdt[checksum_offset] = 0u8.wrapping_sub(sum);
+    dsdt
+}
+
+fn create_acpi(
+    spec: &BoardSpec,
+    gic: GicVersion,
+    msi: Option<MsiController>,
+) -> AcpiTable {
+    let mut table_bytes = Vec::new();
+    let mut pointers = vec![];
+    let mut checksums = vec![];
+    let has_its = msi == Some(MsiController::Its);
+
+    let offset_xsdt = 0;
+    if has_its {
+        let xsdt = AcpiTableXsdt7::new_zeroed();
+        table_bytes.extend(xsdt.as_bytes());
+    } else {
+        let xsdt = AcpiTableXsdt6::new_zeroed();
+        table_bytes.extend(xsdt.as_bytes());
+    }
+
+    let offset_dsdt = table_bytes.len();
+    let dsdt = create_dsdt(spec);
+    table_bytes.extend(dsdt);
+    table_bytes.resize(table_bytes.len().next_multiple_of(4), 0);
+
+    let offset_fadt = table_bytes.len();
+    debug_assert_eq!(offset_fadt % 4, 0);
+    let fadt = create_fadt(offset_dsdt as u64);
+    let pointer_fadt_to_dsdt = offset_fadt + offset_of!(AcpiTableFadt, xdsdt);
+    table_bytes.extend(fadt.as_bytes());
+    pointers.push(pointer_fadt_to_dsdt);
+    checksums.push((offset_fadt, size_of_val(&fadt)));
+
+    let offset_madt = table_bytes.len();
+    debug_assert_eq!(offset_madt % 4, 0);
+    let mpidrs: Vec<u64> = (0..spec.cpu.count)
+        .map(|index| encode_mpidr(&spec.cpu.topology, index).0)
+        .collect();
+    let (madt, madt_subtables) = create_madt(&mpidrs, gic, msi);
+    table_bytes.extend(madt.as_bytes());
+    table_bytes.extend(madt_subtables);
+
+    let offset_mcfg = table_bytes.len();
+    debug_assert_eq!(offset_mcfg % 4, 0);
+    let mcfg = create_mcfg();
+    table_bytes.extend(mcfg.as_bytes());
+
+    let offset_gtdt = table_bytes.len();
+    debug_assert_eq!(offset_gtdt % 4, 0);
+    let gtdt = create_gtdt();
+    table_bytes.extend(gtdt.as_bytes());
+
+    let offset_spcr = table_bytes.len();
+    debug_assert_eq!(offset_spcr % 4, 0);
+    let spcr = create_spcr();
+    table_bytes.extend(spcr.as_bytes());
+
+    let offset_pptt = table_bytes.len();
+    debug_assert_eq!(offset_pptt % 4, 0);
+    let (pptt, pptt_nodes) = create_pptt(&spec.cpu.topology);
+    table_bytes.extend(pptt.as_bytes());
+    for node in pptt_nodes {
+        table_bytes.extend(node.as_bytes());
+    }
+
+    if has_its {
+        let offset_iort = table_bytes.len();
+        debug_assert_eq!(offset_iort % 4, 0);
+        let (iort, its_group, rc) = create_iort();
+        table_bytes.extend(iort.as_bytes());
+        table_bytes.extend(its_group.as_bytes());
+        table_bytes.extend(rc.as_bytes());
+
+        let xsdt_entries = [
+            offset_fadt as u64,
+            offset_madt as u64,
+            offset_mcfg as u64,
+            offset_gtdt as u64,
+            offset_spcr as u64,
+            offset_pptt as u64,
+            offset_iort as u64,
+        ];
+        let xsdt = create_xsdt7(xsdt_entries);
+        xsdt.write_to_prefix(&mut table_bytes).unwrap();
+        for index in 0..xsdt_entries.len() {
+            pointers.push(offset_xsdt + offset_of!(AcpiTableXsdt7, entries) + index * 8);
+        }
+        checksums.push((offset_xsdt, size_of_val(&xsdt)));
+    } else {
+        let xsdt_entries = [
+            offset_fadt as u64,
+            offset_madt as u64,
+            offset_mcfg as u64,
+            offset_gtdt as u64,
+            offset_spcr as u64,
+            offset_pptt as u64,
+        ];
+        let xsdt = create_xsdt6(xsdt_entries);
+        xsdt.write_to_prefix(&mut table_bytes).unwrap();
+        for index in 0..xsdt_entries.len() {
+            pointers.push(offset_xsdt + offset_of!(AcpiTableXsdt6, entries) + index * 8);
+        }
+        checksums.push((offset_xsdt, size_of_val(&xsdt)));
+    }
+
+    let rsdp = create_rsdp(offset_xsdt as u64);
+
+    AcpiTable {
+        rsdp,
+        tables: table_bytes,
+        table_checksums: checksums,
+        table_pointers: pointers,
+    }
+}
+
+fn create_uefi(mem_regions: &[(u64, MemRegionEntry)]) -> (StaticUefiTables, Vec<EfiMemoryDesc>) {
+    let tables = StaticUefiTables {
+        systab: EfiSystemTable64 {
+            hdr: EfiTableHeader {
+                signature: EFI_SYSTEM_TABLE_SIGNATURE,
+                revision: EFI_2_100_SYSTEM_TABLE_REVISION,
+                headersize: size_of::<EfiSystemTable64>() as u32,
+                crc32: 0,
+                reserved: 0,
+            },
+            fw_vendor: UEFI_START + offset_of!(StaticUefiTables, fw_vendor) as u64,
+            fw_revision: 1,
+            _pad: 0,
+            con_in_handle: 0,
+            con_in: 0,
+            con_out_handle: 0,
+            con_out: 0,
+            stderr_handle: 0,
+            stderr: 0,
+            runtime: 0,
+            boottime: 0,
+            nr_tables: 2,
+            tables: UEFI_START + offset_of!(StaticUefiTables, config_tables) as u64,
+        },
+        rt_prop: EfiRtPropertiesTable {
+            version: EFI_RT_PROPERTIES_TABLE_VERSION,
+            length: size_of::<EfiRtPropertiesTable>() as u16,
+            runtime_services_supported: 0,
+        },
+        fw_vendor: [
+            b'A' as u16,
+            b'l' as u16,
+            b'i' as u16,
+            b'o' as u16,
+            b't' as u16,
+            b'h' as u16,
+            0,
+            0,
+        ],
+        config_tables: [
+            EfiConfigTable64 {
+                guid: ACPI_20_TABLE_GUID,
+                table: ACPI_START,
+            },
+            EfiConfigTable64 {
+                guid: EFI_RT_PROPERTIES_TABLE_GUID,
+                table: UEFI_START + offset_of!(StaticUefiTables, rt_prop) as u64,
+            },
+        ],
+    };
+
+    let mut mmap = Vec::new();
+    for (start, entry) in mem_regions {
+        let ty = match entry.type_ {
+            MemRegionType::Ram => EfiMemoryType::CONVENTIONAL_MEMORY,
+            MemRegionType::Acpi => EfiMemoryType::ACPI_RECLAIM_MEMORY,
+            _ => continue,
+        };
+        mmap.push(EfiMemoryDesc {
+            ty,
+            pad: 0,
+            phys_addr: *start,
+            virt_addr: *start,
+            num_pages: entry.size >> 12,
+            attribute: EfiMemoryAttribute::WB,
+        });
+    }
+
+    (tables, mmap)
+}
+
 impl<V> Board<V>
 where
     V: Vm,
@@ -113,10 +351,26 @@ where
 
         let low_mem_size = std::cmp::min(mem_size, RAM_32_SIZE);
         let pages_low = self.create_ram_pages(low_mem_size, c"ram-low")?;
-        memory.add_region(
-            RAM_32_START,
-            Arc::new(MemRegion::with_ram(pages_low, MemRegionType::Ram)),
-        )?;
+        let acpi_size = KERNEL_IMAGE_START - RAM_32_START;
+        let region_low = if self.spec.acpi && low_mem_size > acpi_size {
+            MemRegion {
+                ranges: vec![MemRange::Ram(pages_low)],
+                entries: vec![
+                    MemRegionEntry {
+                        size: acpi_size,
+                        type_: MemRegionType::Acpi,
+                    },
+                    MemRegionEntry {
+                        size: low_mem_size - acpi_size,
+                        type_: MemRegionType::Ram,
+                    },
+                ],
+                callbacks: Mutex::new(vec![]),
+            }
+        } else {
+            MemRegion::with_ram(pages_low, MemRegionType::Ram)
+        };
+        memory.add_region(RAM_32_START, Arc::new(region_low))?;
 
         let high_mem_size = mem_size.saturating_sub(RAM_32_SIZE);
         if high_mem_size > 0 {
@@ -147,7 +401,7 @@ where
         Ok(())
     }
 
-    fn create_chosen_node(&self, init_state: &InitState, root: &mut Node) {
+    fn create_chosen_node(&self, init_state: &InitState, uefi_mmap_size: Option<usize>, root: &mut Node) {
         let payload = self.payload.read();
         let Some(payload) = payload.as_ref() else {
             return;
@@ -163,15 +417,33 @@ where
         if let Some(initramfs_range) = &init_state.initramfs {
             node.props.insert(
                 "linux,initrd-start",
-                PropVal::U32(initramfs_range.start as u32),
+                PropVal::U64(initramfs_range.start),
             );
             node.props
-                .insert("linux,initrd-end", PropVal::U32(initramfs_range.end as u32));
+                .insert("linux,initrd-end", PropVal::U64(initramfs_range.end));
         }
-        node.props.insert(
-            "stdout-path",
-            PropVal::String(format!("/pl011@{PL011_START:x}")),
-        );
+        if let Some(mmap_size) = uefi_mmap_size {
+            let mmap_start = UEFI_START + size_of::<StaticUefiTables>() as u64;
+            node.props
+                .insert("linux,uefi-system-table", PropVal::U64(UEFI_START));
+            node.props
+                .insert("linux,uefi-mmap-start", PropVal::U64(mmap_start));
+            node.props
+                .insert("linux,uefi-mmap-size", PropVal::U32(mmap_size as u32));
+            node.props.insert(
+                "linux,uefi-mmap-desc-size",
+                PropVal::U32(size_of::<EfiMemoryDesc>() as u32),
+            );
+            node.props.insert(
+                "linux,uefi-mmap-desc-ver",
+                PropVal::U32(EFI_MEMORY_DESCRIPTOR_VERSION),
+            );
+        } else {
+            node.props.insert(
+                "stdout-path",
+                PropVal::String(format!("/pl011@{PL011_START:x}")),
+            );
+        }
         root.nodes.push(("chosen".to_owned(), node));
     }
 
@@ -496,31 +768,74 @@ where
     }
 
     pub fn create_firmware_data(&self, init_state: &InitState) -> Result<()> {
+        let ram = self.memory.ram_bus();
         let mut device_tree = DeviceTree::new();
         let root = &mut device_tree.root;
         root.props.insert("#address-cells", PropVal::U32(2));
         root.props.insert("#size-cells", PropVal::U32(2));
-        root.props.insert("model", PropVal::Str("linux,dummy-virt"));
-        root.props
-            .insert("compatible", PropVal::Str("linux,dummy-virt"));
-        root.props
-            .insert("interrupt-parent", PropVal::PHandle(PHANDLE_GIC));
 
-        self.create_chosen_node(init_state, root);
-        self.create_pl011_node(root);
-        self.create_pl031_node(root);
-        self.create_memory_node(root);
-        self.create_cpu_nodes(root);
-        self.create_gic_node(root);
-        if self.arch.msi.is_some() {
-            self.create_pci_bridge_node(root);
+        if self.spec.acpi {
+            let gic = match self.arch.gic {
+                Gic::V2(_) => GicVersion::V2,
+                Gic::V3(_) => GicVersion::V3,
+            };
+            let msi = match &self.arch.msi {
+                Some(Msi::Its(_)) => Some(MsiController::Its),
+                Some(Msi::V2m(_)) => Some(MsiController::GicV2m),
+                None => None,
+            };
+            let mut acpi_table = create_acpi(&self.spec, gic, msi);
+            let tables_gpa = ACPI_START + size_of::<AcpiTableRsdp>() as u64;
+            assert!(tables_gpa + acpi_table.tables().len() as u64 <= UEFI_START);
+            acpi_table.relocate(tables_gpa);
+            acpi_table.update_checksums();
+            ram.write_range(
+                ACPI_START,
+                size_of::<AcpiTableRsdp>() as u64,
+                acpi_table.rsdp().as_bytes(),
+            )?;
+            ram.write_range(
+                tables_gpa,
+                acpi_table.tables().len() as u64,
+                acpi_table.tables(),
+            )?;
+
+            let mem_regions = self.memory.mem_region_entries();
+            let (uefi_tables, mmap) = create_uefi(&mem_regions);
+            let mmap_gpa = UEFI_START + size_of::<StaticUefiTables>() as u64;
+            let mmap_bytes = mmap.as_bytes();
+            assert!(mmap_gpa + mmap_bytes.len() as u64 <= KERNEL_IMAGE_START);
+            ram.write_range(
+                UEFI_START,
+                size_of::<StaticUefiTables>() as u64,
+                uefi_tables.as_bytes(),
+            )?;
+            ram.write_range(mmap_gpa, mmap_bytes.len() as u64, mmap_bytes)?;
+
+            self.create_chosen_node(init_state, Some(mmap_bytes.len()), root);
+        } else {
+            root.props.insert("model", PropVal::Str("linux,dummy-virt"));
+            root.props
+                .insert("compatible", PropVal::Str("linux,dummy-virt"));
+            root.props
+                .insert("interrupt-parent", PropVal::PHandle(PHANDLE_GIC));
+
+            self.create_chosen_node(init_state, None, root);
+            self.create_pl011_node(root);
+            self.create_pl031_node(root);
+            self.create_memory_node(root);
+            self.create_cpu_nodes(root);
+            self.create_gic_node(root);
+            if self.arch.msi.is_some() {
+                self.create_pci_bridge_node(root);
+            }
+            self.create_clock_node(root);
+            self.create_timer_node(root);
+            self.create_psci_node(root);
         }
-        self.create_clock_node(root);
-        self.create_timer_node(root);
-        self.create_psci_node(root);
+
         log::debug!("device tree: {device_tree:#x?}");
         let blob = device_tree.to_blob();
-        let ram = self.memory.ram_bus();
         assert!(blob.len() as u64 <= DEVICE_TREE_LIMIT);
         ram.write_range(DEVICE_TREE_START, blob.len() as u64, &*blob)?;
         Ok(())
@@ -531,6 +846,43 @@ const PHANDLE_GIC: u32 = 1;
 const PHANDLE_CLOCK: u32 = 2;
 const PHANDLE_MSI: u32 = 3;
 const PHANDLE_CPU: u32 = 1 << 31;
+
+const DSDT_TEMPLATE: [u8; 363] = [
+    0x44, 0x53, 0x44, 0x54, 0x6B, 0x01, 0x00, 0x00, 0x02, 0xCD, 0x41, 0x4C, 0x49, 0x4F, 0x54, 0x48,
+    0x41, 0x4C, 0x49, 0x4F, 0x54, 0x48, 0x56, 0x4D, 0x01, 0x00, 0x00, 0x00, 0x49, 0x4E, 0x54, 0x4C,
+    0x12, 0x12, 0x25, 0x20, 0x5B, 0x82, 0x47, 0x04, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x43, 0x4F, 0x4D,
+    0x30, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0D, 0x41, 0x52, 0x4D, 0x48, 0x30, 0x30, 0x31, 0x31, 0x00,
+    0x08, 0x5F, 0x55, 0x49, 0x44, 0x00, 0x08, 0x5F, 0x53, 0x54, 0x41, 0x0A, 0x0F, 0x08, 0x5F, 0x43,
+    0x52, 0x53, 0x11, 0x1A, 0x0A, 0x17, 0x86, 0x09, 0x00, 0x01, 0x00, 0xF0, 0xFF, 0x2F, 0x00, 0x10,
+    0x00, 0x00, 0x89, 0x06, 0x00, 0x03, 0x01, 0x21, 0x00, 0x00, 0x00, 0x79, 0x00, 0x5B, 0x82, 0x4C,
+    0x0F, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x50, 0x43, 0x49, 0x30, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C,
+    0x41, 0xD0, 0x0A, 0x08, 0x08, 0x5F, 0x43, 0x49, 0x44, 0x0C, 0x41, 0xD0, 0x0A, 0x03, 0x08, 0x5F,
+    0x53, 0x45, 0x47, 0x00, 0x08, 0x5F, 0x55, 0x49, 0x44, 0x00, 0x08, 0x5F, 0x43, 0x43, 0x41, 0x01,
+    0x14, 0x32, 0x5F, 0x44, 0x53, 0x4D, 0x04, 0xA0, 0x29, 0x93, 0x68, 0x11, 0x13, 0x0A, 0x10, 0xD0,
+    0x37, 0xC9, 0xE5, 0x53, 0x35, 0x7A, 0x4D, 0x91, 0x17, 0xEA, 0x4D, 0x19, 0xC3, 0x43, 0x4D, 0xA0,
+    0x09, 0x93, 0x6A, 0x00, 0xA4, 0x11, 0x03, 0x01, 0x21, 0xA0, 0x07, 0x93, 0x6A, 0x0A, 0x05, 0xA4,
+    0x00, 0xA4, 0x00, 0x08, 0x5F, 0x43, 0x52, 0x53, 0x11, 0x42, 0x09, 0x0A, 0x8E, 0x88, 0x0D, 0x00,
+    0x02, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x87, 0x17, 0x00,
+    0x00, 0x0C, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xFF, 0xFF, 0xFF, 0xDF, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x87, 0x17, 0x00, 0x00, 0x0C, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0xE0, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x20, 0x8A, 0x2B, 0x00, 0x00, 0x0C, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x87,
+    0x17, 0x00, 0x01, 0x0C, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00,
+    0x00, 0x00, 0x00, 0xFF, 0x0F, 0x00, 0x00, 0x01, 0x00, 0x79, 0x00,
+];
+
+const DSDT_OFFSET_PCI_QWORD_MEM: usize = 0x12f;
+
+const AML_CPU_TEMPLATE: [u8; 42] = [
+    0x5B, 0x82, 0x28, 0x2E, 0x5F, 0x53, 0x42, 0x5F, // Device (_SB.C000)
+    0x43, 0x30, 0x30, 0x30, // "C000"
+    0x08, 0x5F, 0x48, 0x49, 0x44, 0x0D, 0x41, 0x43, 0x50, 0x49, 0x30, 0x30, 0x30, 0x37,
+    0x00, // Name (_HID, "ACPI0007")
+    0x08, 0x5F, 0x55, 0x49, 0x44, 0x0B, 0x00, 0x00, // Name (_UID, 0x0000)
+    0x08, 0x5F, 0x53, 0x54, 0x41, 0x0A, 0x0F, // Name (_STA, 0x0F)
+];
 
 #[cfg(test)]
 #[path = "board_arm64_test.rs"]

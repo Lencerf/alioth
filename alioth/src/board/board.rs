@@ -148,6 +148,9 @@ pub struct BoardSpec {
     pub mem: MemSpec,
     pub cpu: CpuSpec,
     pub coco: Option<CocoSpec>,
+    #[cfg(target_arch = "aarch64")]
+    #[serde(default)]
+    pub acpi: bool,
 }
 
 impl BoardSpec {

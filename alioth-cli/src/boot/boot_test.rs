@@ -119,6 +119,8 @@ fn test_parse_args() {
                 transparent_hugepage: false,
             },
             coco: None,
+            #[cfg(target_arch = "aarch64")]
+            acpi: false,
         },
         payload: PayloadSpec {
             executable: Some(Executable::Linux(Path::new("vmlinuz").into())),
