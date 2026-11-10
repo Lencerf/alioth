@@ -41,7 +41,8 @@ fn spawn_waiters(
     let handles = (0..n)
         .map(|_| {
             let sync = sync.clone();
-            thread::spawn(move || barrier(&sync.0, &sync.1, count))
+            // Only the last vCPU to arrive completes the barrier.
+            thread::spawn(move || barrier(&sync.0, &sync.1, count, |_| unreachable!()))
         })
         .collect();
     while sync.0.lock().count < n {
@@ -64,11 +65,23 @@ fn test_barrier() {
         assert!(waiters.iter().all(|w| !w.is_finished()));
 
         // The last vCPU releases them.
-        barrier(&sync.0, &sync.1, 3).unwrap();
+        barrier(&sync.0, &sync.1, 3, |_| {}).unwrap();
         for waiter in waiters {
             waiter.join().unwrap().unwrap();
         }
     }
+}
+
+#[test]
+fn test_barrier_complete() {
+    let sync = fixture_sync();
+    let waiters = spawn_waiters(&sync, 2, 3);
+
+    barrier(&sync.0, &sync.1, 3, |s| s.state = State::Stopped).unwrap();
+    for waiter in waiters {
+        waiter.join().unwrap().unwrap();
+    }
+    assert_eq!(sync.0.lock().state, State::Stopped);
 }
 
 #[test]
@@ -82,5 +95,8 @@ fn test_barrier_fatal() {
     for waiter in waiters {
         assert_matches!(waiter.join().unwrap(), Err(Error::PeerFailure { .. }));
     }
-    assert_matches!(barrier(&sync.0, &sync.1, 3), Err(Error::PeerFailure { .. }));
+    assert_matches!(
+        barrier(&sync.0, &sync.1, 3, |_| {}),
+        Err(Error::PeerFailure { .. })
+    );
 }

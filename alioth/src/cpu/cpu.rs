@@ -63,10 +63,18 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
-    Paused,
+    /// The vCPU threads wait for the VM to boot.
+    Stopped,
+    /// The guest runs.
     Running,
-    Shutdown,
+    /// The guest is paused.
+    Paused,
+    /// The VM is being reset, and boots again afterwards.
     RebootPending,
+    /// The VM is being reset, and stops afterwards.
+    ShutdownPending,
+    /// The vCPU threads exit.
+    Terminated,
 }
 
 pub(crate) struct MpSync {
@@ -95,7 +103,7 @@ impl<V: Vm> Context<V> {
             board,
             vcpus: RwLock::new(Vec::new()),
             sync: Mutex::new(MpSync {
-                state: State::Paused,
+                state: State::Stopped,
                 fatal: false,
                 count: 0,
                 generation: 0,
@@ -112,16 +120,12 @@ struct VcpuThread<V: Vm> {
     vcpu: <V as Vm>::Vcpu,
 }
 
-fn notify_vmm(event_tx: &Sender<u16>, index: u16) -> Result<()> {
-    if event_tx.send(index).is_err() {
-        error::NotifyVmm.fail()
-    } else {
-        Ok(())
-    }
-}
-
-/// Blocks until `count` vCPUs arrive, or a vCPU fails.
-fn barrier(sync: &Mutex<MpSync>, cond: &Condvar, count: u16) -> Result<()> {
+/// Blocks until `count` vCPUs arrive, or a vCPU fails. The last vCPU to
+/// arrive calls `complete` before it releases the others.
+fn barrier<F>(sync: &Mutex<MpSync>, cond: &Condvar, count: u16, complete: F) -> Result<()>
+where
+    F: FnOnce(&mut MpSync),
+{
     let mut sync = sync.lock();
     if sync.fatal {
         return error::PeerFailure.fail();
@@ -131,6 +135,7 @@ fn barrier(sync: &Mutex<MpSync>, cond: &Condvar, count: u16) -> Result<()> {
     if sync.count == count {
         sync.count = 0;
         sync.generation = sync.generation.wrapping_add(1);
+        complete(&mut sync);
         cond.notify_all();
     } else {
         // The condition variable also signals state changes.
@@ -159,11 +164,27 @@ impl<V: Vm> VcpuThread<V> {
     }
 
     fn notify_vmm(&self) -> Result<()> {
-        notify_vmm(&self.event_tx, self.index)
+        if self.event_tx.send(self.index).is_err() {
+            error::NotifyVmm.fail()
+        } else {
+            Ok(())
+        }
     }
 
     fn sync_vcpus(&self, vcpus: &[VcpuHandle]) -> Result<()> {
-        barrier(&self.ctx.sync, &self.ctx.cond, vcpus.len() as u16)
+        barrier(&self.ctx.sync, &self.ctx.cond, vcpus.len() as u16, |_| {})
+    }
+
+    /// Waits for all vCPUs to finish the reset, and completes the request
+    /// that caused it.
+    fn sync_reset(&self, vcpus: &[VcpuHandle]) -> Result<()> {
+        barrier(&self.ctx.sync, &self.ctx.cond, vcpus.len() as u16, |s| {
+            s.state = match s.state {
+                State::RebootPending => State::Running,
+                State::ShutdownPending => State::Stopped,
+                state => state,
+            }
+        })
     }
 
     fn load_payload(&self) -> Result<InitState> {
@@ -223,16 +244,18 @@ impl<V: Vm> VcpuThread<V> {
                 #[cfg(target_arch = "x86_64")]
                 VmExit::Io { port, write, size } => memory.handle_io(port, write, size)?,
                 VmExit::Mmio { addr, write, size } => memory.handle_mmio(addr, write, size)?,
-                VmExit::Shutdown => break Ok(State::Shutdown),
+                VmExit::Shutdown => break Ok(State::ShutdownPending),
                 VmExit::Reboot => break Ok(State::RebootPending),
                 VmExit::Paused => break Ok(State::Paused),
                 VmExit::Interrupted => {
                     let state = self.ctx.sync.lock();
                     match state.state {
-                        State::Shutdown => VmEntry::Shutdown,
-                        State::RebootPending => VmEntry::Reboot,
-                        State::Paused => VmEntry::Pause,
                         State::Running => VmEntry::None,
+                        State::Paused => VmEntry::Pause,
+                        State::RebootPending => VmEntry::Reboot,
+                        State::ShutdownPending | State::Stopped | State::Terminated => {
+                            VmEntry::Shutdown
+                        }
                     }
                 }
                 VmExit::ConvertMemory { gpa, size, private } => {
@@ -250,10 +273,11 @@ impl<V: Vm> VcpuThread<V> {
             let mut sync = self.ctx.sync.lock();
             loop {
                 match sync.state {
-                    State::Paused => self.ctx.cond.wait(&mut sync),
-                    State::Running => break,
-                    State::Shutdown => break 'reboot Ok(()),
-                    State::RebootPending => sync.state = State::Running,
+                    State::Stopped | State::Paused => self.ctx.cond.wait(&mut sync),
+                    // A reset requested before this vCPU boots is handled
+                    // after the boot, together with the other vCPUs.
+                    State::Running | State::RebootPending | State::ShutdownPending => break,
+                    State::Terminated => break 'reboot Ok(()),
                 }
             }
             drop(sync);
@@ -269,7 +293,7 @@ impl<V: Vm> VcpuThread<V> {
                     sync.state = match request {
                         Ok(State::RebootPending) => State::RebootPending,
                         Ok(State::Paused) => State::Paused,
-                        _ => State::Shutdown,
+                        _ => State::ShutdownPending,
                     };
                     log::trace!("VCPU-{}: change state to {:?}", self.index, sync.state);
                     stop_vcpus(&self.ctx.board, Some(self.index), &vcpus)?;
@@ -278,7 +302,10 @@ impl<V: Vm> VcpuThread<V> {
                     match sync.state {
                         State::Paused => self.ctx.cond.wait(&mut sync),
                         State::Running => break,
-                        State::RebootPending | State::Shutdown => break 'pause request,
+                        State::RebootPending
+                        | State::ShutdownPending
+                        | State::Stopped
+                        | State::Terminated => break 'pause request,
                     }
                 }
             };
@@ -293,7 +320,7 @@ impl<V: Vm> VcpuThread<V> {
             request?;
 
             let vcpus = self.ctx.vcpus.read();
-            self.sync_vcpus(&vcpus)?;
+            self.sync_reset(&vcpus)?;
         }
     }
 }
@@ -305,9 +332,7 @@ fn vcpu_thread_<V: Vm>(index: u16, ctx: Arc<Context<V>>, event_tx: Sender<u16>) 
 }
 
 pub fn vcpu_thread<V: Vm>(index: u16, ctx: Arc<Context<V>>, event_tx: Sender<u16>) -> Result<()> {
-    let ret = vcpu_thread_(index, ctx.clone(), event_tx.clone());
-
-    let _ = notify_vmm(&event_tx, index);
+    let ret = vcpu_thread_(index, ctx.clone(), event_tx);
 
     if matches!(ret, Ok(_) | Err(Error::PeerFailure { .. })) {
         return Ok(());
@@ -316,9 +341,8 @@ pub fn vcpu_thread<V: Vm>(index: u16, ctx: Arc<Context<V>>, event_tx: Sender<u16
     log::warn!("VCPU-{index} reported error {ret:?}, unblocking other VCPUs...");
     let mut sync = ctx.sync.lock();
     sync.fatal = true;
-    if sync.count > 0 {
-        ctx.cond.notify_all();
-    }
+    sync.state = State::Terminated;
+    ctx.cond.notify_all();
     ret
 }
 

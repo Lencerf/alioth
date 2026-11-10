@@ -18,10 +18,9 @@ use std::io::ErrorKind;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
+use std::{mem, thread};
 
-use flume::{Receiver, Sender};
 #[cfg(target_os = "linux")]
 use parking_lot::Mutex;
 use snafu::{ResultExt, Snafu};
@@ -120,7 +119,10 @@ pub enum Error {
     #[snafu(display("{name:?} does not exist"))]
     NotExist { name: Box<str> },
     #[snafu(display("Unexpected state: {state:?}, want {want:?}"))]
-    UnexpectedState { state: State, want: State },
+    UnexpectedState {
+        state: State,
+        want: &'static [State],
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -130,8 +132,6 @@ where
     H: Hypervisor,
 {
     ctx: Arc<Context<H::Vm>>,
-    event_rx: Receiver<u16>,
-    _event_tx: Sender<u16>,
 
     #[cfg(target_os = "linux")]
     iommu: Mutex<Option<Arc<Iommu>>>,
@@ -148,33 +148,9 @@ where
     H: Hypervisor,
 {
     pub fn new(hv: &H, spec: BoardSpec) -> Result<Self> {
-        let ctx = Arc::new(Context::new(Board::new(hv, spec)?));
-
-        let (event_tx, event_rx) = flume::unbounded();
-
-        let mut vcpus = ctx.vcpus.write();
-        for index in 0..ctx.board.spec.cpu.count {
-            let event_tx = event_tx.clone();
-            let ctx = ctx.clone();
-            let handle = thread::Builder::new()
-                .name(format!("vcpu_{index}"))
-                .spawn(move || vcpu_thread(index, ctx, event_tx))
-                .context(error::CreateVcpu { index })?;
-            if event_rx.recv_timeout(Duration::from_secs(2)).is_err() {
-                let err = std::io::ErrorKind::TimedOut.into();
-                Err(err).context(error::CreateVcpu { index })?;
-            }
-            let handle = VcpuHandle { thread: handle };
-            vcpus.push(handle);
-        }
-        drop(vcpus);
-
-        ctx.board.arch_init()?;
-
+        // On errors, dropping `vm` ends the vCPU threads created so far.
         let vm = Machine {
-            ctx,
-            event_rx,
-            _event_tx: event_tx,
+            ctx: Arc::new(Context::new(Board::new(hv, spec)?)),
             #[cfg(target_os = "linux")]
             iommu: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -182,6 +158,23 @@ where
             #[cfg(target_os = "linux")]
             vfio_containers: Mutex::new(HashMap::new()),
         };
+
+        let (event_tx, event_rx) = flume::unbounded();
+        for index in 0..vm.ctx.board.spec.cpu.count {
+            let event_tx = event_tx.clone();
+            let ctx = vm.ctx.clone();
+            let handle = thread::Builder::new()
+                .name(format!("vcpu_{index}"))
+                .spawn(move || vcpu_thread(index, ctx, event_tx))
+                .context(error::CreateVcpu { index })?;
+            vm.ctx.vcpus.write().push(VcpuHandle { thread: handle });
+            if event_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+                let err = std::io::ErrorKind::TimedOut.into();
+                Err(err).context(error::CreateVcpu { index })?;
+            }
+        }
+
+        vm.ctx.board.arch_init()?;
 
         Ok(vm)
     }
@@ -628,19 +621,23 @@ impl<H> Machine<H>
 where
     H: Hypervisor,
 {
+    /// Returns the state of the VM.
+    pub fn state(&self) -> State {
+        self.ctx.sync.lock().state
+    }
+
+    /// Boots a stopped VM.
     pub fn boot(&self) -> Result<()> {
-        self.resume()
+        let mut sync = self.ctx.sync.lock();
+        check_state(sync.state, &[State::Stopped])?;
+        sync.state = State::Running;
+        self.ctx.cond.notify_all();
+        Ok(())
     }
 
     pub fn resume(&self) -> Result<()> {
         let mut sync = self.ctx.sync.lock();
-        if !matches!(sync.state, State::Paused) {
-            return error::UnexpectedState {
-                state: sync.state,
-                want: State::Paused,
-            }
-            .fail();
-        }
+        check_state(sync.state, &[State::Paused])?;
         sync.state = State::Running;
         self.ctx.cond.notify_all();
         Ok(())
@@ -649,28 +646,64 @@ where
     pub fn pause(&self) -> Result<()> {
         let vcpus = self.ctx.vcpus.read();
         let mut sync = self.ctx.sync.lock();
-        if !matches!(sync.state, State::Running) {
-            return error::UnexpectedState {
-                state: sync.state,
-                want: State::Running,
-            }
-            .fail();
-        }
+        check_state(sync.state, &[State::Running])?;
         sync.state = State::Paused;
         stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
         Ok(())
     }
 
-    pub fn wait(&self) -> Result<()> {
-        self.event_rx.recv().unwrap();
+    /// Powers off the VM. The VM is reset and stops afterwards.
+    pub fn shutdown(&self) -> Result<()> {
+        let want = &[
+            State::Running,
+            State::Paused,
+            State::RebootPending,
+            State::ShutdownPending,
+        ];
+        self.request_reset(want, State::ShutdownPending)
+    }
+
+    /// Reboots the VM. The VM is reset and boots again afterwards.
+    pub fn reboot(&self) -> Result<()> {
+        let want = &[State::Running, State::Paused, State::RebootPending];
+        self.request_reset(want, State::RebootPending)
+    }
+
+    fn request_reset(&self, want: &'static [State], next: State) -> Result<()> {
         let vcpus = self.ctx.vcpus.read();
-        for _ in 1..vcpus.len() {
-            self.event_rx.recv().unwrap();
+        let mut sync = self.ctx.sync.lock();
+        let state = sync.state;
+        check_state(state, want)?;
+        sync.state = next;
+        if state == State::Running {
+            stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
+        } else {
+            self.ctx.cond.notify_all();
         }
-        drop(vcpus);
-        let mut vcpus = self.ctx.vcpus.write();
+        Ok(())
+    }
+
+    /// Blocks until the VM stops, or its vCPU threads exit.
+    pub fn wait_stopped(&self) {
+        let mut sync = self.ctx.sync.lock();
+        self.ctx.cond.wait_while(&mut sync, |s| {
+            !matches!(s.state, State::Stopped | State::Terminated)
+        });
+    }
+
+    /// Ends the vCPU threads of a stopped VM.
+    ///
+    /// Returns the first error that the vCPU threads reported.
+    pub fn terminate(&self) -> Result<()> {
+        let mut sync = self.ctx.sync.lock();
+        check_state(sync.state, &[State::Stopped, State::Terminated])?;
+        sync.state = State::Terminated;
+        self.ctx.cond.notify_all();
+        drop(sync);
+
+        let vcpus = mem::take(&mut *self.ctx.vcpus.write());
         let mut ret = Ok(());
-        for (index, handle) in vcpus.drain(..).enumerate() {
+        for (index, handle) in vcpus.into_iter().enumerate() {
             let Ok(r) = handle.thread.join() else {
                 log::error!("Cannot join VCPU-{index}");
                 continue;
@@ -684,3 +717,36 @@ where
         ret
     }
 }
+
+impl<H> Drop for Machine<H>
+where
+    H: Hypervisor,
+{
+    fn drop(&mut self) {
+        match self.shutdown() {
+            Ok(()) => {}
+            Err(Error::UnexpectedState {
+                state: State::Stopped | State::Terminated,
+                ..
+            }) => {}
+            Err(e) => log::error!("Failed to shut down the VM: {e:?}"),
+        }
+        self.wait_stopped();
+        if let Err(e) = self.terminate() {
+            log::error!("Failed to terminate the VM: {e:?}");
+        }
+    }
+}
+
+#[track_caller]
+fn check_state(state: State, want: &'static [State]) -> Result<()> {
+    if want.contains(&state) {
+        Ok(())
+    } else {
+        error::UnexpectedState { state, want }.fail()
+    }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "vm_test.rs"]
+mod tests;

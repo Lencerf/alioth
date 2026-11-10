@@ -398,7 +398,8 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
     let vm = Machine::create(&hypervisor, spec).context(error::CreateVm)?;
 
     vm.boot().context(error::BootVm)?;
-    vm.wait().context(error::WaitVm)?;
+    vm.wait_stopped();
+    vm.terminate().context(error::WaitVm)?;
     Ok(())
 }
 
