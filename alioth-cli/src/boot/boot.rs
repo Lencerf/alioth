@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod config;
-
 use std::collections::HashMap;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -29,27 +27,22 @@ use alioth::errors::{DebugTrace, trace_error};
 use alioth::hv::Hvf;
 #[cfg(target_os = "linux")]
 use alioth::hv::Kvm;
-use alioth::hv::{CocoSpec, HvSpec, Hypervisor};
+use alioth::hv::{CocoSpec, HvSpec};
 use alioth::loader::{Executable, PayloadSpec};
 use alioth::mem::{MemBackend, MemSpec};
 #[cfg(target_os = "linux")]
 use alioth::vfio::{VfioCdevSpec, VfioContainerSpec, VfioGroupSpec, VfioIoasSpec, VfioUserSpec};
-#[cfg(target_os = "linux")]
-use alioth::virtio::DeviceId;
 use alioth::virtio::dev::balloon::BalloonSpec;
 use alioth::virtio::dev::blk::BlkFileSpec;
 use alioth::virtio::dev::entropy::EntropySpec;
-#[cfg(target_os = "linux")]
-use alioth::virtio::vu::frontend::VuFrontendSpec;
 use alioth::virtio::worker::WorkerApi;
 use alioth::vm::Machine;
+use alioth::vm::config::{BlkSpec, FsSpec, NetSpec, VmSpec, VsockSpec};
 use clap::Args;
 use serde_aco::help_text;
 use snafu::{ResultExt, Snafu};
 
 use crate::objects::{DOC_OBJECTS, parse_objects};
-
-use self::config::{BlkSpec, FsSpec, NetSpec, VmSpec, VsockSpec};
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -384,124 +377,6 @@ fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<VmSpec
     Ok(spec)
 }
 
-fn create<H: Hypervisor>(hypervisor: &H, spec: VmSpec) -> Result<Machine<H>, alioth::vm::Error> {
-    let vm = Machine::new(hypervisor, spec.board)?;
-
-    #[cfg(target_arch = "x86_64")]
-    vm.add_com1(&spec.console)?;
-    #[cfg(target_arch = "aarch64")]
-    vm.add_pl011(&spec.console)?;
-    #[cfg(target_arch = "aarch64")]
-    vm.add_pl031();
-
-    if spec.pvpanic {
-        vm.add_pvpanic()?;
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    vm.add_cmos()?;
-    #[cfg(target_arch = "x86_64")]
-    if spec.payload.firmware.is_some() {
-        vm.add_fw_dbg()?;
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    if spec.payload.firmware.is_some() || !spec.fw_cfg.is_empty() {
-        vm.add_fw_cfg(spec.fw_cfg.into_iter())?;
-    };
-
-    if let Some(entropy_spec) = spec.entropy {
-        vm.add_virtio_dev("virtio-entropy", entropy_spec)?;
-    }
-
-    for (index, net_spec) in spec.net.into_iter().enumerate() {
-        match net_spec {
-            #[cfg(target_os = "linux")]
-            NetSpec::Tap(tap_spec) => vm.add_virtio_dev(format!("virtio-net-{index}"), tap_spec),
-            #[cfg(target_os = "linux")]
-            NetSpec::Vu(sock) => {
-                let vu_spec = VuFrontendSpec {
-                    id: DeviceId::NET,
-                    socket: sock.socket,
-                };
-                vm.add_virtio_dev(format!("vu-net-{index}"), vu_spec)
-            }
-            #[cfg(target_os = "macos")]
-            NetSpec::Vmnet(vmnet_spec) => {
-                vm.add_virtio_dev(format!("virtio-net-{index}"), vmnet_spec)
-            }
-        }?;
-    }
-
-    for (index, blk_spec) in spec.blk.into_iter().enumerate() {
-        match blk_spec {
-            BlkSpec::File(file_spec) => vm.add_virtio_dev(format!("virtio-blk-{index}"), file_spec),
-            #[cfg(target_os = "linux")]
-            BlkSpec::Vu(s) => {
-                let vu_spec = VuFrontendSpec {
-                    id: DeviceId::BLOCK,
-                    socket: s.socket,
-                };
-                vm.add_virtio_dev(format!("vu-blk-{index}"), vu_spec)
-            }
-        }?;
-    }
-
-    for (index, fs_spec) in spec.fs.into_iter().enumerate() {
-        match fs_spec {
-            FsSpec::Dir(dir_spec) => vm.add_virtio_dev(format!("virtio-fs-{index}"), dir_spec),
-            #[cfg(target_os = "linux")]
-            FsSpec::Vu(vu_fs_spec) => vm.add_virtio_dev(format!("vu-fs-{index}"), vu_fs_spec),
-        }?;
-    }
-
-    if let Some(vsock_spec) = spec.vsock {
-        match vsock_spec {
-            #[cfg(target_os = "linux")]
-            VsockSpec::Vhost(vhost_spec) => vm.add_virtio_dev("vhost-vsock", vhost_spec),
-            VsockSpec::Uds(uds_spec) => vm.add_virtio_dev("uds-vsock", uds_spec),
-            #[cfg(target_os = "linux")]
-            VsockSpec::Vu(s) => {
-                let vu_spec = VuFrontendSpec {
-                    id: DeviceId::SOCKET,
-                    socket: s.socket,
-                };
-                vm.add_virtio_dev("vu-vsock", vu_spec)
-            }
-        }?;
-    }
-
-    if let Some(balloon_spec) = spec.balloon {
-        vm.add_virtio_dev("virtio-balloon", balloon_spec)?;
-    }
-
-    #[cfg(target_os = "linux")]
-    for ioas_spec in spec.vfio_ioas.into_iter() {
-        vm.add_vfio_ioas(ioas_spec)?;
-    }
-    #[cfg(target_os = "linux")]
-    for (index, cdev_spec) in spec.vfio_cdev.into_iter().enumerate() {
-        vm.add_vfio_cdev(format!("vfio-{index}").into(), cdev_spec)?;
-    }
-    #[cfg(target_os = "linux")]
-    for (index, user_spec) in spec.vfio_user.into_iter().enumerate() {
-        vm.add_vfio_user_dev(format!("vfio-user-{index}").into(), user_spec)?;
-    }
-
-    #[cfg(target_os = "linux")]
-    for container_spec in spec.vfio_container.into_iter() {
-        vm.add_vfio_container(container_spec)?;
-    }
-    #[cfg(target_os = "linux")]
-    for (index, group_spec) in spec.vfio_group.into_iter().enumerate() {
-        vm.add_vfio_devs_in_group(&index.to_string(), group_spec)?;
-    }
-
-    vm.add_payload(spec.payload);
-
-    Ok(vm)
-}
-
 pub fn boot(mut args: BootArgs) -> Result<(), Error> {
     let object_args = mem::take(&mut args.objects);
     let objects = parse_objects(&object_args)?;
@@ -520,7 +395,7 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
 
     let spec = parse_args(args, objects)?;
 
-    let vm = create(&hypervisor, spec).context(error::CreateVm)?;
+    let vm = Machine::create(&hypervisor, spec).context(error::CreateVm)?;
 
     vm.boot().context(error::BootVm)?;
     vm.wait().context(error::WaitVm)?;

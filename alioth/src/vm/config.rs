@@ -15,24 +15,25 @@
 #[cfg(target_os = "linux")]
 use std::path::Path;
 
-use alioth::board::BoardSpec;
-use alioth::device::console::ConsoleSpec;
-#[cfg(target_arch = "x86_64")]
-use alioth::device::fw_cfg::FwCfgItemSpec;
-use alioth::loader::PayloadSpec;
-#[cfg(target_os = "linux")]
-use alioth::vfio::{VfioCdevSpec, VfioContainerSpec, VfioGroupSpec, VfioIoasSpec, VfioUserSpec};
-use alioth::virtio::dev::balloon::BalloonSpec;
-use alioth::virtio::dev::blk::BlkFileSpec;
-use alioth::virtio::dev::entropy::EntropySpec;
-use alioth::virtio::dev::fs::shared_dir::SharedDirSpec;
-#[cfg(target_os = "macos")]
-use alioth::virtio::dev::net::vmnet::VmnetSpec;
-use alioth::virtio::dev::vsock::UdsVsockSpec;
-#[cfg(target_os = "linux")]
-use alioth::virtio::dev::{fs::vu::VuFsSpec, net::tap::TapNetSpec, vsock::VhostVsockSpec};
 use serde::Deserialize;
 use serde_aco::Help;
+
+use crate::board::BoardSpec;
+use crate::device::console::ConsoleSpec;
+#[cfg(target_arch = "x86_64")]
+use crate::device::fw_cfg::FwCfgItemSpec;
+use crate::loader::PayloadSpec;
+#[cfg(target_os = "linux")]
+use crate::vfio::{VfioCdevSpec, VfioContainerSpec, VfioGroupSpec, VfioIoasSpec, VfioUserSpec};
+use crate::virtio::dev::balloon::BalloonSpec;
+use crate::virtio::dev::blk::BlkFileSpec;
+use crate::virtio::dev::entropy::EntropySpec;
+use crate::virtio::dev::fs::shared_dir::SharedDirSpec;
+#[cfg(target_os = "macos")]
+use crate::virtio::dev::net::vmnet::VmnetSpec;
+use crate::virtio::dev::vsock::UdsVsockSpec;
+#[cfg(target_os = "linux")]
+use crate::virtio::dev::{fs::vu::VuFsSpec, net::tap::TapNetSpec, vsock::VhostVsockSpec};
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
