@@ -193,13 +193,17 @@ pub struct PlatformSpec {
     pub acpi: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct BoardSpec {
+    /// The memory of the guest.
     #[serde(default)]
     pub mem: MemSpec,
+    /// The vCPUs of the guest.
     #[serde(default)]
     pub cpu: CpuSpec,
+    /// Confidential computing supported by the host platform.
     pub coco: Option<CocoSpec>,
+    /// The platform of the guest.
     #[serde(default)]
     pub platform: PlatformSpec,
 }

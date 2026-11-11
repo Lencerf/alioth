@@ -38,6 +38,7 @@ use crate::virtio::dev::{fs::vu::VuFsSpec, net::tap::TapNetSpec, vsock::VhostVso
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VuSocket {
+    /// Path to the vhost-user UNIX domain socket.
     pub socket: Box<Path>,
 }
 
@@ -61,7 +62,7 @@ pub enum NetSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 #[serde(rename_all = "snake_case")]
 pub enum BlkSpec {
-    /// VirtIO block device backed a disk image file.
+    /// VirtIO block device backed by a disk image file.
     #[serde(alias = "file")]
     File(BlkFileSpec),
     #[cfg(target_os = "linux")]
@@ -98,45 +99,61 @@ pub enum VsockSpec {
     Vu(VuSocket),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VmSpec {
+    /// The memory, vCPUs, and platform of the guest.
     #[serde(default)]
     pub board: BoardSpec,
 
+    /// What the guest boots.
     pub payload: PayloadSpec,
 
+    /// The guest console. [default: pty]
     // A deserialized spec, e.g. from an API request, defaults to a PTY
     // console, since a VMM serving many VMs has no terminal for them.
     #[serde(default = "default_console")]
     pub console: ConsoleSpec,
+    /// VirtIO net devices.
     #[serde(default)]
     pub net: Vec<NetSpec>,
+    /// VirtIO block devices.
     #[serde(default)]
     pub blk: Vec<BlkSpec>,
+    /// VirtIO filesystem devices.
     #[serde(default)]
     pub fs: Vec<FsSpec>,
+    /// A VirtIO vsock device.
     pub vsock: Option<VsockSpec>,
+    /// A VirtIO entropy device.
     pub entropy: Option<EntropySpec>,
+    /// A VirtIO balloon device.
     pub balloon: Option<BalloonSpec>,
+    /// Add a pvpanic device.
     #[serde(default)]
     pub pvpanic: bool,
 
+    /// Extra items of the fw_cfg device.
     #[cfg(target_arch = "x86_64")]
     #[serde(default)]
     pub fw_cfg: Vec<FwCfgItemSpec>,
 
+    /// Host PCI devices assigned to the guest using the IOMMUFD API.
     #[cfg(target_os = "linux")]
     #[serde(default)]
     pub vfio_cdev: Vec<VfioCdevSpec>,
+    /// IO address spaces of IOMMUFD.
     #[cfg(target_os = "linux")]
     #[serde(default)]
     pub vfio_ioas: Vec<VfioIoasSpec>,
+    /// Host PCI devices assigned to the guest using the legacy VFIO API.
     #[cfg(target_os = "linux")]
     #[serde(default)]
     pub vfio_group: Vec<VfioGroupSpec>,
+    /// VFIO containers.
     #[cfg(target_os = "linux")]
     #[serde(default)]
     pub vfio_container: Vec<VfioContainerSpec>,
+    /// vfio-user devices assigned to the guest.
     #[cfg(target_os = "linux")]
     #[serde(default)]
     pub vfio_user: Vec<VfioUserSpec>,

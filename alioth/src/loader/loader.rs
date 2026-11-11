@@ -25,6 +25,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use serde_aco::Help;
 use snafu::Snafu;
 
 #[cfg(target_arch = "x86_64")]
@@ -35,18 +36,24 @@ use crate::arch::reg::{Reg, SReg};
 use crate::errors::{DebugTrace, trace_error};
 use crate::mem::{MemRegionEntry, MemRegionType};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct PayloadSpec {
+    /// Path to a firmware image.
     pub firmware: Option<Box<Path>>,
+    /// A kernel to boot.
     pub executable: Option<Executable>,
+    /// Path to an initramfs image.
     pub initramfs: Option<Box<Path>>,
+    /// Command line to pass to the kernel, e.g. `console=ttyS0`.
     pub cmdline: Option<Box<str>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 #[serde(rename_all = "snake_case")]
 pub enum Executable {
+    /// Path to a Linux kernel image.
     Linux(Box<Path>),
+    /// Path to an ELF kernel with PVH note.
     #[cfg(target_arch = "x86_64")]
     Pvh(Box<Path>),
 }

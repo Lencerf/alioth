@@ -50,7 +50,7 @@ pub trait Console: Debug + Send + Sync + 'static {
 pub struct LogConsoleSpec {
     /// Path to the log file.
     pub path: Box<Path>,
-    /// Append logs to the file if it already exits.
+    /// Append logs to the file if it already exists.
     #[serde(default)]
     pub append: bool,
 }

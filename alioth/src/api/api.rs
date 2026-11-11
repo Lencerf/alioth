@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use serde_aco::Help;
 
 use crate::cpu::State;
 use crate::device::console::ConsoleSpec;
@@ -33,14 +34,21 @@ use crate::vm::config::VmSpec;
 use crate::vm::{self, Machine};
 
 /// Canonical error codes, see AIP-193.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Help)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Code {
+    /// The request is invalid, e.g. a malformed VM spec.
     InvalidArgument,
+    /// The request does not fit the current state, e.g. booting a running
+    /// VM.
     FailedPrecondition,
+    /// The VM does not exist.
     NotFound,
+    /// A VM with the requested ID already exists.
     AlreadyExists,
+    /// The method is not supported, e.g. Create by `alioth boot --api`.
     Unimplemented,
+    /// alioth failed to handle the request.
     Internal,
 }
 
@@ -58,11 +66,13 @@ impl Code {
 }
 
 /// An error, in the shape of the `error` object of AIP-193.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Help)]
 pub struct Error {
     /// The HTTP status code.
     pub code: u16,
+    /// A developer-facing message that explains the error.
     pub message: String,
+    /// The canonical error code.
     pub status: Code,
 }
 
@@ -111,7 +121,7 @@ impl From<vm::Error> for Error {
 }
 
 /// The state of a VM, see AIP-216.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Help)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum VmState {
     /// The VM is not running. It can boot.
@@ -152,33 +162,41 @@ impl Display for VmState {
 }
 
 /// A VM resource.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Help)]
 pub struct Vm {
     /// The resource name, e.g. `vms/vm0`.
     pub name: String,
+    /// The state of the VM.
     pub state: VmState,
     #[serde(flatten)]
     pub spec: VmSpec,
 }
 
 /// The query of a Create request.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Help)]
 pub struct CreateVmRequest {
     /// The ID of the VM. If omitted, the first free one of `vm0`, `vm1`, ...
     pub vm_id: Option<String>,
 }
 
 /// The query of a List request, see AIP-158.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Help)]
 #[serde(default)]
 pub struct ListVmsRequest {
+    /// The maximum number of VMs to return. 0 means the default of 50, and
+    /// the most is 1000.
     pub page_size: u32,
+    /// The `next_page_token` of the previous List response, or empty for the
+    /// first page.
     pub page_token: String,
 }
 
-#[derive(Debug, Serialize)]
+/// The response of a List request.
+#[derive(Debug, Serialize, Help)]
 pub struct ListVmsResponse {
+    /// The VMs of the page, in the order of their IDs.
     pub vms: Vec<Vm>,
+    /// The token of the next page, or empty if this page is the last one.
     pub next_page_token: String,
 }
 
