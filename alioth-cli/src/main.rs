@@ -17,6 +17,8 @@ mod api;
 mod boot;
 mod img;
 mod objects;
+#[cfg(test)]
+mod openapi;
 mod server;
 #[cfg(target_os = "linux")]
 mod vu;

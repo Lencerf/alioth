@@ -36,6 +36,7 @@ use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::Serialize;
+use serde_aco::Help;
 use tokio::net::{TcpListener, UnixListener};
 use tokio::signal::unix::{self, SignalKind};
 
@@ -81,8 +82,9 @@ impl FromStr for ApiAddr {
 #[derive(Debug)]
 struct ApiError(Error);
 
-#[derive(Serialize)]
-struct ErrorBody {
+#[derive(Serialize, Help)]
+pub(crate) struct ErrorBody {
+    /// The error.
     error: Error,
 }
 
@@ -112,8 +114,8 @@ macro_rules! invalid_argument_from {
 invalid_argument_from!(JsonRejection, PathRejection, QueryRejection);
 
 /// The response of Delete, an empty message.
-#[derive(Serialize)]
-struct Empty {}
+#[derive(Serialize, Help)]
+pub(crate) struct Empty {}
 
 type Manager<V> = Arc<VmManager<V>>;
 

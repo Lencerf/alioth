@@ -1,0 +1,845 @@
+components:
+  parameters:
+    vm:
+      description: "The ID of the VM, e.g. `vm0`."
+      in: path
+      name: vm
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      content:
+        application/json:
+          schema:
+            "$ref": "#/components/schemas/ErrorBody"
+      description: "An error, as defined by AIP-193."
+  schemas:
+    BalloonSpec:
+      properties:
+        free_page_reporting:
+          description: "Enable free page reporting. [default: false]"
+          type: boolean
+      type: object
+    BlkFileSpec:
+      properties:
+        api:
+          "$ref": "#/components/schemas/WorkerApi"
+          description: "System API for asynchronous IO."
+        path:
+          description: "Path to a raw-formatted disk image."
+          type: string
+        readonly:
+          description: "Set the device as readonly. [default: false]"
+          type: boolean
+      required:
+        - path
+      type: object
+    BlkSpec:
+      oneOf:
+        - description: "VirtIO block device backed by a disk image file."
+          properties:
+            file:
+              "$ref": "#/components/schemas/BlkFileSpec"
+          required:
+            - file
+          type: object
+        - description: "vhost-user block device over a Unix domain socket."
+          properties:
+            vu:
+              "$ref": "#/components/schemas/VuSocket"
+          required:
+            - vu
+          type: object
+    BoardSpec:
+      properties:
+        coco:
+          anyOf:
+            - "$ref": "#/components/schemas/CocoSpec"
+            - type: "null"
+          description: "Confidential computing supported by the host platform."
+        cpu:
+          "$ref": "#/components/schemas/CpuSpec"
+          description: "The vCPUs of the guest."
+        mem:
+          "$ref": "#/components/schemas/MemSpec"
+          description: "The memory of the guest."
+        platform:
+          "$ref": "#/components/schemas/PlatformSpec"
+          description: "The platform of the guest."
+      type: object
+    CocoSpec:
+      oneOf:
+        - description: "Enable AMD SEV or SEV-ES."
+          properties:
+            amd_sev:
+              properties:
+                policy:
+                  description: |-
+                    SEV policy, 0x1 for SEV, 0x5 for SEV-ES.
+                    SEV API Ver 0.24, Rev 3.24, Ch.2, Table 2.
+                  type: integer
+              required:
+                - policy
+              type: object
+          required:
+            - amd_sev
+          type: object
+        - description: "Enable AMD SEV-SNP."
+          properties:
+            amd_snp:
+              properties:
+                policy:
+                  description: |-
+                    SEV-SNP policy, e.g. 0x30000.
+                    SNP Firmware ABI Spec, Rev 1.55, Sec.4.3, Table 9.
+                  type: integer
+              required:
+                - policy
+              type: object
+          required:
+            - amd_snp
+          type: object
+        - description: "Enable Intel TDX."
+          properties:
+            intel_tdx:
+              properties:
+                attr:
+                  description: |-
+                    TD attribute,
+                    Intel TDX Module ABI Spec, Sec.3.4.1, Table 3.22.
+                  type: integer
+              required:
+                - attr
+              type: object
+          required:
+            - intel_tdx
+          type: object
+    Code:
+      oneOf:
+        - const: INVALID_ARGUMENT
+          description: "The request is invalid, e.g. a malformed VM spec."
+          type: string
+        - const: FAILED_PRECONDITION
+          description: |-
+            The request does not fit the current state, e.g. booting a running
+            VM.
+          type: string
+        - const: NOT_FOUND
+          description: "The VM does not exist."
+          type: string
+        - const: ALREADY_EXISTS
+          description: "A VM with the requested ID already exists."
+          type: string
+        - const: UNIMPLEMENTED
+          description: "The method is not supported, e.g. Create by `alioth boot --api`."
+          type: string
+        - const: INTERNAL
+          description: "alioth failed to handle the request."
+          type: string
+    ConsoleSpec:
+      oneOf:
+        - const: stdio
+          description: "Redirect guest console to host stdio (requires TTY)."
+          type: string
+        - description: "Redirect guest console to a log file."
+          properties:
+            log:
+              "$ref": "#/components/schemas/LogConsoleSpec"
+          required:
+            - log
+          type: object
+        - description: "Redirect guest console to a pseudo-terminal (PTY)."
+          properties:
+            pty:
+              "$ref": "#/components/schemas/PtyConsoleSpec"
+          required:
+            - pty
+          type: object
+    CpuSpec:
+      properties:
+        count:
+          description: "Number of VCPUs assigned to the guest. [default: 1]"
+          type: integer
+        topology:
+          "$ref": "#/components/schemas/CpuTopology"
+          description: "Architecture specific CPU topology."
+      type: object
+    CpuTopology:
+      properties:
+        cores:
+          description: "Number of cores per socket."
+          type: integer
+        smt:
+          description: "Enable SMT (Hyperthreading)."
+          type: boolean
+        sockets:
+          description: "Number of sockets."
+          type: integer
+        thread_contiguous:
+          description: "Use thread-contiguous logical CPU ID mapping when SMT is on."
+          type: boolean
+      type: object
+    Empty:
+      type: object
+    EntropySpec:
+      properties:
+        source:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Source of entropy [default: /dev/urandom]"
+      type: object
+    Error:
+      properties:
+        code:
+          description: "The HTTP status code."
+          type: integer
+        message:
+          description: "A developer-facing message that explains the error."
+          type: string
+        status:
+          "$ref": "#/components/schemas/Code"
+          description: "The canonical error code."
+      required:
+        - code
+        - message
+        - status
+      type: object
+    ErrorBody:
+      properties:
+        error:
+          "$ref": "#/components/schemas/Error"
+          description: "The error."
+      required:
+        - error
+      type: object
+    Executable:
+      oneOf:
+        - description: "Path to a Linux kernel image."
+          properties:
+            linux:
+              type: string
+          required:
+            - linux
+          type: object
+        - description: "Path to an ELF kernel with PVH note."
+          properties:
+            pvh:
+              type: string
+          required:
+            - pvh
+          type: object
+    FsSpec:
+      oneOf:
+        - description: "VirtIO FS device backed by a shared directory."
+          properties:
+            dir:
+              "$ref": "#/components/schemas/SharedDirSpec"
+          required:
+            - dir
+          type: object
+        - description: "VirtIO FS device backed by a vhost-user process, e.g. virtiofsd."
+          properties:
+            vu:
+              "$ref": "#/components/schemas/VuFsSpec"
+          required:
+            - vu
+          type: object
+    FwCfgContentSpec:
+      oneOf:
+        - description: "Path to a file with binary contents."
+          properties:
+            file:
+              type: string
+          required:
+            - file
+          type: object
+        - description: "A UTF-8 encoded string."
+          properties:
+            string:
+              type: string
+          required:
+            - string
+          type: object
+    FwCfgItemSpec:
+      allOf:
+        - properties:
+            name:
+              description: "Selector key of an item."
+              type: string
+          required:
+            - name
+          type: object
+        - "$ref": "#/components/schemas/FwCfgContentSpec"
+    ListVmsResponse:
+      properties:
+        next_page_token:
+          description: "The token of the next page, or empty if this page is the last one."
+          type: string
+        vms:
+          description: "The VMs of the page, in the order of their IDs."
+          items:
+            "$ref": "#/components/schemas/Vm"
+          type: array
+      required:
+        - vms
+        - next_page_token
+      type: object
+    LogConsoleSpec:
+      properties:
+        append:
+          description: "Append logs to the file if it already exists."
+          type: boolean
+        path:
+          description: "Path to the log file."
+          type: string
+      required:
+        - path
+      type: object
+    MemBackend:
+      oneOf:
+        - const: anonymous
+          description: "Anonymous memory by MAP_ANONYMOUS."
+          type: string
+        - const: memfd
+          description: "Anonymous file by memfd_create(). Always uses MAP_SHARED."
+          type: string
+    MemSpec:
+      properties:
+        backend:
+          "$ref": "#/components/schemas/MemBackend"
+          description: "Host backend [default: anon]"
+        shared:
+          description: |-
+            mmap() guest memory with MAP_SHARED or MAP_PRIVATE.
+            [default: false]
+          type: boolean
+        size:
+          description: "Total guest memory size in bytes. [default: 1G]"
+          type: integer
+        transparent_hugepage:
+          description: "Enable transparent hugepage. [default: false]"
+          type: boolean
+      type: object
+    NetSpec:
+      oneOf:
+        - description: "VirtIO net device backed by TUN/TAP, MacVTap, or IPVTap."
+          properties:
+            tap:
+              "$ref": "#/components/schemas/TapNetSpec"
+          required:
+            - tap
+          type: object
+        - description: "vhost-user net device over a Unix domain socket."
+          properties:
+            vu:
+              "$ref": "#/components/schemas/VuSocket"
+          required:
+            - vu
+          type: object
+    PayloadSpec:
+      properties:
+        cmdline:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Command line to pass to the kernel, e.g. `console=ttyS0`."
+        executable:
+          anyOf:
+            - "$ref": "#/components/schemas/Executable"
+            - type: "null"
+          description: "A kernel to boot."
+        firmware:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Path to a firmware image."
+        initramfs:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Path to an initramfs image."
+      type: object
+    PlatformSpec:
+      type: object
+    PtyConsoleSpec:
+      properties:
+        link:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Path to a symbolic link to the PTY. An existing symbolic link is replaced."
+      type: object
+    SharedDirSpec:
+      properties:
+        dax_window:
+          description: |-
+            Size of memory region for DAX in bytes.
+            0 means no DAX. [default: 0]
+          type: integer
+        path:
+          description: "Path to the shared dir."
+          type: string
+        tag:
+          description: "Mount tag seen by the guest."
+          type: string
+      required:
+        - tag
+        - path
+      type: object
+    TapNetSpec:
+      properties:
+        api:
+          "$ref": "#/components/schemas/WorkerApi"
+          description: "System API for asynchronous IO."
+        if_name:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: |-
+            Name of a tap interface, e.g. tapX.
+            Required for TUN/TAP. Optional for MacVTap and IPVTap.
+        mac:
+          description: "MAC address of the virtual NIC, e.g. 06:3a:76:53:da:3d."
+          format: mac-addr
+          type: string
+        mtu:
+          description: |-
+            Maximum transmission unit, at least 68.
+            0 means not reporting the MTU to the guest. [default: 0]
+          type: integer
+        queue_pairs:
+          description: "Number of pairs of transmit/receive queues. [default: 1]"
+          type: integer
+        tap:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: |-
+            Path to the character device file of a tap interface.
+            Required for MacVTap and IPVTap, e.g. /dev/tapX.
+            Optional for TUN/TAP. [default: /dev/net/tun]
+      required:
+        - mac
+      type: object
+    UdsVsockSpec:
+      properties:
+        cid:
+          description: "Vsock context id."
+          type: integer
+        path:
+          description: "Host-side Unix domain socket path."
+          type: string
+      required:
+        - cid
+        - path
+      type: object
+    VfioCdevSpec:
+      properties:
+        ioas:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Name of the IO Address space to which this device should be attached."
+        path:
+          description: "Path to a VFIO cdev, e.g. /dev/vfio/devices/vfio0."
+          type: string
+      required:
+        - path
+      type: object
+    VfioContainerSpec:
+      properties:
+        dev_vfio:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Path to the vfio device. [default: /dev/vfio/vfio]"
+        name:
+          description: "Name of the Container."
+          type: string
+      required:
+        - name
+      type: object
+    VfioGroupSpec:
+      properties:
+        container:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Name of the container to which this device should be attached."
+        devices:
+          description: "Device ID, e.g. 0000:06:0d.0."
+          items:
+            type: string
+          type: array
+        path:
+          description: "Path to a VFIO group file, e.g. /dev/vfio/12."
+          type: string
+      required:
+        - path
+      type: object
+    VfioIoasSpec:
+      properties:
+        dev_iommu:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Path to the iommu device. [default: /dev/iommu]"
+        name:
+          description: "Name of the IO Address space."
+          type: string
+      required:
+        - name
+      type: object
+    VfioUserSpec:
+      properties:
+        socket:
+          description: "Path to the vfio-user UNIX domain socket."
+          type: string
+      required:
+        - socket
+      type: object
+    VhostVsockSpec:
+      properties:
+        cid:
+          description: "Vsock context id."
+          type: integer
+        dev:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Path to the host device file. [default: /dev/vhost-vsock]"
+      required:
+        - cid
+      type: object
+    Vm:
+      allOf:
+        - properties:
+            name:
+              description: "The resource name, e.g. `vms/vm0`."
+              type: string
+            state:
+              "$ref": "#/components/schemas/VmState"
+              description: "The state of the VM."
+          required:
+            - name
+            - state
+          type: object
+        - "$ref": "#/components/schemas/VmSpec"
+    VmSpec:
+      properties:
+        balloon:
+          anyOf:
+            - "$ref": "#/components/schemas/BalloonSpec"
+            - type: "null"
+          description: "A VirtIO balloon device."
+        blk:
+          description: "VirtIO block devices."
+          items:
+            "$ref": "#/components/schemas/BlkSpec"
+          type: array
+        board:
+          "$ref": "#/components/schemas/BoardSpec"
+          description: "The memory, vCPUs, and platform of the guest."
+        console:
+          "$ref": "#/components/schemas/ConsoleSpec"
+          description: "The guest console. [default: pty]"
+        entropy:
+          anyOf:
+            - "$ref": "#/components/schemas/EntropySpec"
+            - type: "null"
+          description: "A VirtIO entropy device."
+        fs:
+          description: "VirtIO filesystem devices."
+          items:
+            "$ref": "#/components/schemas/FsSpec"
+          type: array
+        fw_cfg:
+          description: "Extra items of the fw_cfg device."
+          items:
+            "$ref": "#/components/schemas/FwCfgItemSpec"
+          type: array
+        net:
+          description: "VirtIO net devices."
+          items:
+            "$ref": "#/components/schemas/NetSpec"
+          type: array
+        payload:
+          "$ref": "#/components/schemas/PayloadSpec"
+          description: "What the guest boots."
+        pvpanic:
+          description: "Add a pvpanic device."
+          type: boolean
+        vfio_cdev:
+          description: "Host PCI devices assigned to the guest using the IOMMUFD API."
+          items:
+            "$ref": "#/components/schemas/VfioCdevSpec"
+          type: array
+        vfio_container:
+          description: "VFIO containers."
+          items:
+            "$ref": "#/components/schemas/VfioContainerSpec"
+          type: array
+        vfio_group:
+          description: "Host PCI devices assigned to the guest using the legacy VFIO API."
+          items:
+            "$ref": "#/components/schemas/VfioGroupSpec"
+          type: array
+        vfio_ioas:
+          description: "IO address spaces of IOMMUFD."
+          items:
+            "$ref": "#/components/schemas/VfioIoasSpec"
+          type: array
+        vfio_user:
+          description: "vfio-user devices assigned to the guest."
+          items:
+            "$ref": "#/components/schemas/VfioUserSpec"
+          type: array
+        vsock:
+          anyOf:
+            - "$ref": "#/components/schemas/VsockSpec"
+            - type: "null"
+          description: "A VirtIO vsock device."
+      required:
+        - payload
+      type: object
+    VmState:
+      oneOf:
+        - const: STOPPED
+          description: "The VM is not running. It can boot."
+          type: string
+        - const: STOPPING
+          description: "The VM is being powered off."
+          type: string
+        - const: RUNNING
+          description: "The VM is running, or rebooting."
+          type: string
+        - const: PAUSED
+          description: "The VM is paused."
+          type: string
+        - const: FAILED
+          description: "A VMM-side error stopped the VM. It can only be deleted."
+          type: string
+    VsockSpec:
+      oneOf:
+        - description: "Vsock device backed by host kernel vhost-vsock module."
+          properties:
+            vhost:
+              "$ref": "#/components/schemas/VhostVsockSpec"
+          required:
+            - vhost
+          type: object
+        - description: "Vsock device mapped to a Unix domain socket."
+          properties:
+            uds:
+              "$ref": "#/components/schemas/UdsVsockSpec"
+          required:
+            - uds
+          type: object
+        - description: "Vsock device backed by a vhost-user process."
+          properties:
+            vu:
+              "$ref": "#/components/schemas/VuSocket"
+          required:
+            - vu
+          type: object
+    VuFsSpec:
+      properties:
+        dax_window:
+          description: |-
+            Size of memory region for DAX in bytes.
+            0 means no DAX. [default: 0]
+          type: integer
+        socket:
+          description: "Path to the vhost-user UNIX domain socket."
+          type: string
+        tag:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: "Mount tag seen by the guest."
+      required:
+        - socket
+      type: object
+    VuSocket:
+      properties:
+        socket:
+          description: "Path to the vhost-user UNIX domain socket."
+          type: string
+      required:
+        - socket
+      type: object
+    WorkerApi:
+      oneOf:
+        - const: mio
+          description: "I/O event queue backed by epoll/kqueue."
+          type: string
+        - const: io_uring
+          description: "Linux io_uring."
+          type: string
+info:
+  description: |-
+    alioth serves the API at a Unix domain socket, with `--api unix:<path>`, or at a
+    loopback TCP port, with `--api http://localhost:<port>`. The API has no
+    authentication: only the user of alioth can use the socket, but any local
+    process can connect to the port.
+
+    `alioth server` manages several VMs, or one on macOS. `alioth boot --api`
+    manages only `vms/vm0`, which it creates from its command-line options.
+    `/v1/vm` is an alias of `/v1/vms/vm0`, e.g. `POST /v1/vm:shutdown`.
+
+    Errors follow AIP-193.
+
+    This description is generated on Linux x86_64. Some fields of the VM spec vary
+    by platform.
+  license:
+    identifier: Apache-2.0
+    name: Apache-2.0
+  title: "Alioth VM API"
+  version: v1
+openapi: "3.1.0"
+paths:
+  "/v1/vms":
+    get:
+      operationId: ListVms
+      parameters:
+        - description: |-
+            The maximum number of VMs to return. 0 means the default of 50, and
+            the most is 1000.
+          in: query
+          name: page_size
+          required: false
+          schema:
+            type: integer
+        - description: |-
+            The `next_page_token` of the previous List response, or empty for the
+            first page.
+          in: query
+          name: page_token
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListVmsResponse"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Lists VMs in the order of their IDs."
+    post:
+      description: "`alioth boot --api` does not support it, and returns 405."
+      operationId: CreateVm
+      parameters:
+        - description: "The ID of the VM. If omitted, the first free one of `vm0`, `vm1`, ..."
+          in: query
+          name: vm_id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/VmSpec"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Creates a stopped VM."
+  "/v1/vms/{vm}":
+    delete:
+      operationId: DeleteVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Empty"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Deletes a VM. A VM that is not stopped is powered off first."
+    get:
+      operationId: GetVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Gets a VM."
+    parameters:
+      - "$ref": "#/components/parameters/vm"
+  "/v1/vms/{vm}:boot":
+    parameters:
+      - "$ref": "#/components/parameters/vm"
+    post:
+      operationId: BootVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Boots a stopped VM."
+  "/v1/vms/{vm}:reboot":
+    parameters:
+      - "$ref": "#/components/parameters/vm"
+    post:
+      operationId: RebootVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Reboots a VM."
+  "/v1/vms/{vm}:shutdown":
+    parameters:
+      - "$ref": "#/components/parameters/vm"
+    post:
+      operationId: ShutdownVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Powers off a VM, and returns after it stops."
+security: []
