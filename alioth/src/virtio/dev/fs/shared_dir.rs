@@ -16,7 +16,7 @@ use std::cmp::min;
 use std::path::Path;
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 
 use crate::fuse::passthrough::Passthrough;
@@ -24,7 +24,7 @@ use crate::virtio::Result;
 use crate::virtio::dev::DevSpec;
 use crate::virtio::dev::fs::{Fs, FsConfig};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct SharedDirSpec {
     /// Mount tag seen by the guest.
     pub tag: String,

@@ -27,7 +27,7 @@ use std::thread::JoinHandle;
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use zerocopy::{FromBytes, IntoBytes};
 
@@ -45,7 +45,7 @@ use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, error};
 const HEADER_SIZE: usize = size_of::<VsockHeader>();
 const SOCKET_TYPE: VsockType = VsockType::STREAM;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct UdsVsockSpec {
     /// Vsock context id.
     pub cid: u32,

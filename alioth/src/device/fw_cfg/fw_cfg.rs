@@ -27,7 +27,7 @@ use alioth_macros::Layout;
 use bitfield::bitfield;
 use parking_lot::Mutex;
 use serde::de::{self, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_aco::Help;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -540,7 +540,8 @@ impl Pause for Mutex<FwCfg> {
 
 impl MmioDev for Mutex<FwCfg> {}
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum FwCfgContentSpec {
     /// Path to a file with binary contents.
     #[serde(alias = "file")]
@@ -550,11 +551,12 @@ pub enum FwCfgContentSpec {
     String(String),
 }
 
-#[derive(Debug, PartialEq, Eq, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Help)]
 pub struct FwCfgItemSpec {
     /// Selector key of an item.
     pub name: String,
     /// Item content.
+    #[serde(flatten)]
     #[serde_aco(flatten)]
     pub content: FwCfgContentSpec,
 }

@@ -24,7 +24,7 @@ use libc::PROT_NONE;
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use zerocopy::{FromZeros, IntoBytes};
 
@@ -101,7 +101,7 @@ impl VuFs {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VuFsSpec {
     /// Path to the vhost-user UNIX domain socket.
     pub socket: Box<Path>,

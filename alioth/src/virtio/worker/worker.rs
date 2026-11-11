@@ -16,10 +16,11 @@
 pub mod io_uring;
 pub mod mio;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkerApi {
     /// I/O event queue backed by epoll/kqeueu.
     #[default]

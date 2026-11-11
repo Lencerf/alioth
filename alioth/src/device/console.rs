@@ -33,7 +33,7 @@ use libc::{
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Registry, Token};
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 
 use crate::device::Result;
@@ -46,7 +46,7 @@ pub trait Console: Debug + Send + Sync + 'static {
     fn deactivate(&self, registry: &Registry) -> io::Result<()>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct LogConsoleSpec {
     /// Path to the log file.
     pub path: Box<Path>,
@@ -197,7 +197,7 @@ impl Console for StdioConsole {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct PtyConsoleSpec {
     /// Path to a symbolic link to the PTY. An existing symbolic link is replaced.
     pub link: Option<Box<Path>>,
@@ -340,7 +340,8 @@ impl Console for PtyConsole {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum ConsoleSpec {
     /// Redirect guest console to host stdio (requires TTY).
     #[default]

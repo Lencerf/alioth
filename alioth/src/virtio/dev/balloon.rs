@@ -22,7 +22,7 @@ use libc::{_SC_PAGESIZE, sysconf};
 use mio::Registry;
 use mio::event::Event;
 use parking_lot::RwLock;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -294,7 +294,7 @@ impl VirtioMio for Balloon {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct BalloonSpec {
     /// Enable free page reporting. [default: false]
     #[serde(default)]

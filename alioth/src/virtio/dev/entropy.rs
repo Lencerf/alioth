@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 use libc::O_NONBLOCK;
 use mio::Registry;
 use mio::event::Event;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use snafu::ResultExt;
 
@@ -149,7 +149,7 @@ impl VirtioMio for Entropy {
     fn reset(&mut self, _registry: &Registry) {}
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct EntropySpec {
     /// Source of entropy [default: /dev/urandom]
     pub source: Option<Box<Path>>,

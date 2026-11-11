@@ -22,7 +22,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use snafu::Snafu;
 
@@ -82,7 +82,7 @@ fn default_memory_size() -> u64 {
     1 << 30
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct MemSpec {
     /// Total guest memory size in bytes. [default: 1G]
     #[serde(default = "default_memory_size")]
@@ -100,7 +100,8 @@ pub struct MemSpec {
     pub transparent_hugepage: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum MemBackend {
     /// Anonymous memory by MAP_ANONYMOUS.
     #[default]

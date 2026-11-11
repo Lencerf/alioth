@@ -12,16 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
-use serde::Deserialize;
 use serde::de::{self, Visitor};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_aco::{Help, TypedHelp};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 #[derive(Debug, Clone, Default, FromBytes, Immutable, IntoBytes, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct MacAddr(pub [u8; 6]);
+
+impl Display for MacAddr {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let [b0, b1, b2, b3, b4, b5] = self.0;
+        write!(f, "{b0:02x}:{b1:02x}:{b2:02x}:{b3:02x}:{b4:02x}:{b5:02x}")
+    }
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -63,11 +71,11 @@ struct MacAddrVisitor;
 impl<'de> Visitor<'de> for MacAddrVisitor {
     type Value = MacAddr;
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
         formatter.write_str("a MAC address like ea:d7:a8:e8:c6:2f")
     }
 
-    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
@@ -88,6 +96,15 @@ impl<'de> Deserialize<'de> for MacAddr {
         D: de::Deserializer<'de>,
     {
         deserializer.deserialize_str(MacAddrVisitor)
+    }
+}
+
+impl Serialize for MacAddr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
     }
 }
 

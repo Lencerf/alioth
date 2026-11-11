@@ -15,7 +15,7 @@
 #[cfg(target_os = "linux")]
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 
 use crate::board::BoardSpec;
@@ -36,12 +36,13 @@ use crate::virtio::dev::vsock::UdsVsockSpec;
 use crate::virtio::dev::{fs::vu::VuFsSpec, net::tap::TapNetSpec, vsock::VhostVsockSpec};
 
 #[cfg(target_os = "linux")]
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VuSocket {
     pub socket: Box<Path>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum NetSpec {
     /// VirtIO net device backed by TUN/TAP, MacVTap, or IPVTap.
     #[cfg(target_os = "linux")]
@@ -57,7 +58,8 @@ pub enum NetSpec {
     Vu(VuSocket),
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum BlkSpec {
     /// VirtIO block device backed a disk image file.
     #[serde(alias = "file")]
@@ -68,7 +70,8 @@ pub enum BlkSpec {
     Vu(VuSocket),
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Clone, Help)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum FsSpec {
     /// VirtIO FS device backed by a shared directory.
     #[serde(alias = "dir")]
@@ -79,7 +82,8 @@ pub enum FsSpec {
     Vu(VuFsSpec),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum VsockSpec {
     #[cfg(target_os = "linux")]
     /// Vsock device backed by host kernel vhost-vsock module.
@@ -94,7 +98,7 @@ pub enum VsockSpec {
     Vu(VuSocket),
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct VmSpec {
     pub board: BoardSpec,
 

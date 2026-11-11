@@ -24,7 +24,7 @@ pub mod xen;
 use std::ops::Range;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 #[cfg(target_arch = "x86_64")]
@@ -35,7 +35,7 @@ use crate::arch::reg::{Reg, SReg};
 use crate::errors::{DebugTrace, trace_error};
 use crate::mem::{MemRegionEntry, MemRegionType};
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PayloadSpec {
     pub firmware: Option<Box<Path>>,
     pub executable: Option<Executable>,
@@ -43,7 +43,8 @@ pub struct PayloadSpec {
     pub cmdline: Option<Box<str>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Executable {
     Linux(Box<Path>),
     #[cfg(target_arch = "x86_64")]

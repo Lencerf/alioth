@@ -30,7 +30,7 @@ use libc::{IFF_MULTI_QUEUE, IFF_NO_PI, IFF_TAP, IFF_VNET_HDR, O_NONBLOCK};
 use mio::event::Event;
 use mio::unix::SourceFd;
 use mio::{Interest, Registry, Token};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use zerocopy::{FromBytes, IntoBytes};
 
@@ -61,7 +61,7 @@ pub struct Net {
     api: WorkerApi,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct TapNetSpec {
     /// MAC address of the virtual NIC, e.g. 06:3a:76:53:da:3d.
     pub mac: MacAddr,

@@ -38,4 +38,15 @@ fn test_mac_addr_visitor() {
             .visit_borrowed_str::<Error>("ea:d7:a8:e8:c6:2g")
             .is_err()
     );
+    assert_eq!(
+        MacAddrVisitor.visit_str::<Error>("02:00:00:00:00:0a"),
+        Ok(MacAddr([0x2, 0, 0, 0, 0, 0xa]))
+    );
+}
+
+#[test]
+fn test_mac_addr_display() {
+    let addr = MacAddr([0xea, 0xd7, 0x8, 0xe8, 0xc6, 0x2f]);
+    assert_eq!(addr.to_string(), "ea:d7:08:e8:c6:2f");
+    assert_eq!(addr.to_string().parse::<MacAddr>().unwrap(), addr);
 }

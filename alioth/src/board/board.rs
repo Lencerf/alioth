@@ -28,7 +28,7 @@ use libc::{MAP_PRIVATE, MAP_SHARED};
 #[cfg(target_arch = "x86_64")]
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use snafu::Snafu;
 use zerocopy::{IntoBytes, transmute};
@@ -95,7 +95,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct CpuTopology {
     #[serde(default)]
     /// Enable SMT (Hyperthreading).
@@ -143,7 +143,7 @@ const fn default_cpu_count() -> u16 {
     1
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct CpuSpec {
     /// Number of VCPUs assigned to the guest. [default: 1]
     #[serde(default = "default_cpu_count")]
@@ -164,7 +164,7 @@ impl CpuSpec {
 
 pub const PCIE_MMIO_64_SIZE: u64 = 1 << 40;
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct PlatformSpec {
     /// Enable ACPI for the guest.
     #[cfg(target_arch = "aarch64")]
@@ -172,7 +172,7 @@ pub struct PlatformSpec {
     pub acpi: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct BoardSpec {
     pub mem: MemSpec,
     pub cpu: CpuSpec,

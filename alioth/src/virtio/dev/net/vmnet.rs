@@ -25,7 +25,7 @@ use flume::Sender;
 use libc::c_void;
 use mio::event::Event;
 use mio::{Interest, Registry, Token};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use zerocopy::IntoBytes;
 
@@ -434,7 +434,7 @@ fn write_to_vmnet(interface: *mut VmnetInterface) -> impl FnMut(&mut DescChain) 
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VmnetSpec {
     /// MAC address of the virtual NIC, e.g. 06:3a:76:53:da:3d.
     pub mac: Option<MacAddr>,

@@ -29,7 +29,7 @@ use io_uring::opcode;
 use io_uring::types::{Fd, FsyncFlags};
 use mio::Registry;
 use mio::event::Event;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use snafu::ResultExt;
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
@@ -131,7 +131,7 @@ pub struct BlockConfig {
 }
 impl_mmio_for_zerocopy!(BlockConfig);
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct BlkFileSpec {
     /// Path to a raw-formatted disk image.
     pub path: Box<Path>,

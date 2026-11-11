@@ -19,7 +19,7 @@ use std::thread::JoinHandle;
 
 use mio::event::Event;
 use mio::{Interest, Registry, Token};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 
 use crate::mem::LayoutUpdated;
@@ -32,7 +32,7 @@ use crate::virtio::vhost::{UpdateVsockMem, VhostDev, error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{IrqSender, Result, VirtioFeature};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VhostVsockSpec {
     /// Vsock context id.
     pub cid: u32,

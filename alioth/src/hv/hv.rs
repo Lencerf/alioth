@@ -28,7 +28,7 @@ use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use snafu::{AsErrorSource, Snafu};
 
@@ -323,7 +323,8 @@ pub trait Its: Debug + Send + Sync + 'static {
     fn init(&self) -> Result<()>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[serde(rename_all = "snake_case")]
 pub enum CocoSpec {
     /// Enable AMD SEV or SEV-ES.
     #[cfg(target_arch = "x86_64")]

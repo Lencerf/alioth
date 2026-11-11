@@ -23,7 +23,7 @@ pub mod user;
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 use snafu::Snafu;
 
@@ -55,7 +55,7 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VfioCdevSpec {
     /// Path to a VFIO cdev, e.g. /dev/vfio/devices/vfio0.
     pub path: Box<Path>,
@@ -63,7 +63,7 @@ pub struct VfioCdevSpec {
     pub ioas: Option<Box<str>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VfioIoasSpec {
     /// Name of the IO Address space.
     pub name: Box<str>,
@@ -71,7 +71,7 @@ pub struct VfioIoasSpec {
     pub dev_iommu: Option<Box<Path>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VfioGroupSpec {
     /// Path to a VFIO group file, e.g. /dev/vfio/12.
     pub path: Box<Path>,
@@ -82,7 +82,7 @@ pub struct VfioGroupSpec {
     pub container: Option<Box<str>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VfioContainerSpec {
     /// Name of the Container.
     pub name: Box<str>,
@@ -90,7 +90,7 @@ pub struct VfioContainerSpec {
     pub dev_vfio: Option<Box<Path>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VfioUserSpec {
     /// Path to the vfio-user UNIX domain socket.
     pub socket: Box<Path>,
