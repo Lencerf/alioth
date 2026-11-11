@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_aco::Help;
 
 use crate::board::BoardSpec;
-use crate::device::console::ConsoleSpec;
+use crate::device::console::{ConsoleSpec, PtyConsoleSpec};
 #[cfg(target_arch = "x86_64")]
 use crate::device::fw_cfg::FwCfgItemSpec;
 use crate::loader::PayloadSpec;
@@ -100,30 +100,48 @@ pub enum VsockSpec {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct VmSpec {
+    #[serde(default)]
     pub board: BoardSpec,
 
     pub payload: PayloadSpec,
 
+    // A deserialized spec, e.g. from an API request, defaults to a PTY
+    // console, since a VMM serving many VMs has no terminal for them.
+    #[serde(default = "default_console")]
     pub console: ConsoleSpec,
+    #[serde(default)]
     pub net: Vec<NetSpec>,
+    #[serde(default)]
     pub blk: Vec<BlkSpec>,
+    #[serde(default)]
     pub fs: Vec<FsSpec>,
     pub vsock: Option<VsockSpec>,
     pub entropy: Option<EntropySpec>,
     pub balloon: Option<BalloonSpec>,
+    #[serde(default)]
     pub pvpanic: bool,
 
     #[cfg(target_arch = "x86_64")]
+    #[serde(default)]
     pub fw_cfg: Vec<FwCfgItemSpec>,
 
     #[cfg(target_os = "linux")]
+    #[serde(default)]
     pub vfio_cdev: Vec<VfioCdevSpec>,
     #[cfg(target_os = "linux")]
+    #[serde(default)]
     pub vfio_ioas: Vec<VfioIoasSpec>,
     #[cfg(target_os = "linux")]
+    #[serde(default)]
     pub vfio_group: Vec<VfioGroupSpec>,
     #[cfg(target_os = "linux")]
+    #[serde(default)]
     pub vfio_container: Vec<VfioContainerSpec>,
     #[cfg(target_os = "linux")]
+    #[serde(default)]
     pub vfio_user: Vec<VfioUserSpec>,
+}
+
+fn default_console() -> ConsoleSpec {
+    ConsoleSpec::Pty(PtyConsoleSpec::default())
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -21,10 +22,9 @@ use parking_lot::{Condvar, Mutex};
 use rstest::rstest;
 
 use crate::api::{Code, Error, Instance, ListVmsRequest, Result, Vm, VmManager, VmState};
-use crate::board::BoardSpec;
 use crate::cpu::State;
 use crate::device::console::{ConsoleSpec, PtyConsoleSpec};
-use crate::mem::MemSpec;
+use crate::loader::{Executable, PayloadSpec};
 use crate::vm::config::VmSpec;
 
 #[derive(Debug)]
@@ -134,11 +134,8 @@ fn fixture_manager() -> VmManager<FakeVm> {
 
 fn fixture_spec(console: ConsoleSpec) -> VmSpec {
     VmSpec {
-        board: BoardSpec {
-            mem: MemSpec {
-                size: 1 << 30,
-                ..Default::default()
-            },
+        payload: PayloadSpec {
+            executable: Some(Executable::Linux(Path::new("vmlinuz").into())),
             ..Default::default()
         },
         console,
@@ -219,6 +216,20 @@ fn test_create_failure() {
     );
     // The ID is free again.
     manager.create(Some("vm0"), fixture_spec(pty())).unwrap();
+}
+
+#[test]
+fn test_create_without_payload() {
+    let manager = fixture_manager();
+    let mut spec = fixture_spec(pty());
+    spec.payload = PayloadSpec::default();
+    assert_matches!(
+        manager.create(None, spec),
+        Err(Error {
+            status: Code::InvalidArgument,
+            ..
+        })
+    );
 }
 
 #[test]

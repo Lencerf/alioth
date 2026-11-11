@@ -327,6 +327,10 @@ impl<V: Instance> VmManager<V> {
 
     /// Creates a stopped VM.
     pub fn create(&self, vm_id: Option<&str>, spec: VmSpec) -> Result<Vm> {
+        if spec.payload.executable.is_none() && spec.payload.firmware.is_none() {
+            let msg = "the payload has neither an executable nor a firmware";
+            return Err(Error::new(Code::InvalidArgument, msg));
+        }
         let stdio = matches!(spec.console, ConsoleSpec::Stdio);
         let id = {
             let mut vms = self.vms.lock();

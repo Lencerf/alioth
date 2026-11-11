@@ -143,7 +143,7 @@ const fn default_cpu_count() -> u16 {
     1
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct CpuSpec {
     /// Number of VCPUs assigned to the guest. [default: 1]
     #[serde(default = "default_cpu_count")]
@@ -151,6 +151,15 @@ pub struct CpuSpec {
     /// Architecture specific CPU topology.
     #[serde(default)]
     pub topology: CpuTopology,
+}
+
+impl Default for CpuSpec {
+    fn default() -> Self {
+        CpuSpec {
+            count: default_cpu_count(),
+            topology: CpuTopology::default(),
+        }
+    }
 }
 
 impl CpuSpec {
@@ -186,7 +195,9 @@ pub struct PlatformSpec {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct BoardSpec {
+    #[serde(default)]
     pub mem: MemSpec,
+    #[serde(default)]
     pub cpu: CpuSpec,
     pub coco: Option<CocoSpec>,
     #[serde(default)]

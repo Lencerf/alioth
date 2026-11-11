@@ -82,7 +82,7 @@ fn default_memory_size() -> u64 {
     1 << 30
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct MemSpec {
     /// Total guest memory size in bytes. [default: 1G]
     #[serde(default = "default_memory_size")]
@@ -98,6 +98,18 @@ pub struct MemSpec {
     #[cfg(target_os = "linux")]
     #[serde(default, alias = "thp")]
     pub transparent_hugepage: bool,
+}
+
+impl Default for MemSpec {
+    fn default() -> Self {
+        MemSpec {
+            size: default_memory_size(),
+            backend: MemBackend::default(),
+            shared: false,
+            #[cfg(target_os = "linux")]
+            transparent_hugepage: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Help)]
