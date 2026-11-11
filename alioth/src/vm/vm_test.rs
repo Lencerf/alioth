@@ -39,13 +39,13 @@ const POWER_OFF: [u8; 9] = [
 ];
 
 /// Real-mode code at the reset vector that halts forever.
-const HALT: [u8; 3] = [
+pub(crate) const HALT: [u8; 3] = [
     0xf4, // hlt
     0xeb, 0xfd, // jmp -3
 ];
 
-fn create_vm(kvm: &Kvm, firmware: &Path) -> Machine<Kvm> {
-    let spec = VmSpec {
+pub(crate) fn fixture_spec(firmware: &Path) -> VmSpec {
+    VmSpec {
         board: BoardSpec {
             cpu: CpuSpec {
                 count: 2,
@@ -71,12 +71,15 @@ fn create_vm(kvm: &Kvm, firmware: &Path) -> Machine<Kvm> {
             append: false,
         }),
         ..Default::default()
-    };
-    Machine::create(kvm, spec).unwrap()
+    }
+}
+
+fn create_vm(kvm: &Kvm, firmware: &Path) -> Machine<Kvm> {
+    Machine::create(kvm, fixture_spec(firmware)).unwrap()
 }
 
 /// Writes a 4 KiB firmware that runs `code` at the reset vector.
-fn write_firmware(temp_dir: &TempDir, code: &[u8]) -> PathBuf {
+pub(crate) fn write_firmware(temp_dir: &TempDir, code: &[u8]) -> PathBuf {
     let mut firmware = vec![0xf4; 4096];
     firmware[4096 - 16..][..code.len()].copy_from_slice(code);
     let path = temp_dir.path().join("firmware.bin");

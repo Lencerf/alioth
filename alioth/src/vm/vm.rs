@@ -749,4 +749,4 @@ fn check_state(state: State, want: &'static [State]) -> Result<()> {
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "vm_test.rs"]
-mod tests;
+pub(crate) mod tests;

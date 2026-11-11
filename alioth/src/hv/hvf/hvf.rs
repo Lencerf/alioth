@@ -81,6 +81,9 @@ pub struct Hvf {}
 impl Hypervisor for Hvf {
     type Vm = HvfVm;
 
+    // A process can create only one VM with Hypervisor.framework.
+    const MAX_VMS: Option<usize> = Some(1);
+
     fn create_vm(&self, _spec: &VmSpec) -> Result<Self::Vm> {
         HvfVm::new()
     }

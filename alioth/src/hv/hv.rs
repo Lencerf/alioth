@@ -440,6 +440,9 @@ pub trait Vm: Debug + Send + Sync + 'static {
 pub trait Hypervisor {
     type Vm: Vm + Sync + Send + 'static;
 
+    /// The maximum number of VMs that can exist at the same time.
+    const MAX_VMS: Option<usize> = None;
+
     fn create_vm(&self, spec: &VmSpec) -> Result<Self::Vm, Error>;
 
     #[cfg(target_arch = "x86_64")]

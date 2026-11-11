@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "api/api.rs"]
+pub mod api;
 #[path = "arch/arch.rs"]
 pub mod arch;
 #[path = "blk/blk.rs"]
