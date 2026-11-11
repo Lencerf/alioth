@@ -273,7 +273,7 @@ fn test_parse_net_arg(#[case] arg: &str, #[case] want: NetSpec) {
     HashMap::new(),
     CpuSpec {
         count: 16,
-        topology: CpuTopology { smt: false, cores: 16, sockets: 1, thread_contiguous: false }
+        topology: CpuTopology::default(),
     }
 )]
 fn test_parse_cpu_arg(

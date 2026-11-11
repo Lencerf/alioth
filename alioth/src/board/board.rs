@@ -154,6 +154,18 @@ pub struct CpuSpec {
 }
 
 impl CpuSpec {
+    /// Derives the topology fields left as 0: one socket, and as many cores
+    /// as the vCPUs fill.
+    fn fill_topology(&mut self) {
+        if self.topology.sockets == 0 {
+            self.topology.sockets = 1;
+        }
+        let vcpus_per_core = 1 + self.topology.smt as u16;
+        if self.topology.cores == 0 {
+            self.topology.cores = self.count / self.topology.sockets as u16 / vcpus_per_core;
+        }
+    }
+
     pub fn validate(&self) -> bool {
         let vcpus_per_core = 1 + self.topology.smt as u16;
         let vcpus_per_socket = self.topology.cores * vcpus_per_core;
@@ -258,10 +270,11 @@ impl<V> Board<V>
 where
     V: Vm,
 {
-    pub fn new<H>(hv: &H, spec: BoardSpec) -> Result<Self>
+    pub fn new<H>(hv: &H, mut spec: BoardSpec) -> Result<Self>
     where
         H: Hypervisor<Vm = V>,
     {
+        spec.cpu.fill_topology();
         spec.validate()?;
 
         let vm_spec = VmSpec {

@@ -49,6 +49,29 @@ fn test_cpu_topology_validate(#[case] spec: CpuSpec, #[case] expected: bool) {
 }
 
 #[rstest]
+#[case(4, CpuTopology::default(), CpuTopology { cores: 4, sockets: 1, ..Default::default() })]
+#[case(
+    8,
+    CpuTopology { smt: true, sockets: 2, ..Default::default() },
+    CpuTopology { smt: true, cores: 2, sockets: 2, ..Default::default() }
+)]
+#[case(
+    4,
+    CpuTopology { cores: 2, sockets: 2, ..Default::default() },
+    CpuTopology { cores: 2, sockets: 2, ..Default::default() }
+)]
+fn test_cpu_fill_topology(
+    #[case] count: u16,
+    #[case] topology: CpuTopology,
+    #[case] want: CpuTopology,
+) {
+    let mut spec = CpuSpec { count, topology };
+    spec.fill_topology();
+    assert_eq!(spec.topology, want);
+    assert!(spec.validate());
+}
+
+#[rstest]
 #[case(CpuTopology{smt: false, cores: 1, sockets: 1, thread_contiguous: false}, 0, (0, 0, 0))]
 #[case(CpuTopology{smt: true, cores: 2, sockets: 1, thread_contiguous: false}, 0, (0, 0, 0))]
 #[case(CpuTopology{smt: true, cores: 2, sockets: 1, thread_contiguous: false}, 1, (0, 1, 0))]
