@@ -15,7 +15,9 @@
 use std::collections::HashMap;
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use alioth::api::{VmManager, VmState};
 #[cfg(target_arch = "aarch64")]
 use alioth::board::PlatformSpec;
 use alioth::board::{BoardSpec, CpuSpec};
@@ -27,7 +29,7 @@ use alioth::errors::{DebugTrace, trace_error};
 use alioth::hv::Hvf;
 #[cfg(target_os = "linux")]
 use alioth::hv::Kvm;
-use alioth::hv::{CocoSpec, HvSpec};
+use alioth::hv::{CocoSpec, HvSpec, Hypervisor};
 use alioth::loader::{Executable, PayloadSpec};
 use alioth::mem::{MemBackend, MemSpec};
 #[cfg(target_os = "linux")]
@@ -42,6 +44,7 @@ use clap::Args;
 use serde_aco::help_text;
 use snafu::{ResultExt, Snafu};
 
+use crate::api::{self, ApiAddr};
 use crate::objects::{DOC_OBJECTS, parse_objects};
 
 #[trace_error]
@@ -64,6 +67,12 @@ pub enum Error {
     BootVm { source: alioth::vm::Error },
     #[snafu(display("VM did not shutdown peacefully"))]
     WaitVm { source: alioth::vm::Error },
+    #[snafu(display("Failed to start vms/vm0"))]
+    StartVm { error: alioth::api::Error },
+    #[snafu(display("Failed to serve the API"))]
+    Serve { error: std::io::Error },
+    #[snafu(display("vms/vm0 failed"))]
+    VmFailed,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -193,6 +202,11 @@ pub struct BootArgs {
 
     #[arg(short, long("object"), help = DOC_OBJECTS, value_name = "OBJECT")]
     objects: Vec<String>,
+
+    /// Serve the VM API at ADDR: unix:<path>, or http://localhost:<port>.
+    /// The VM is vms/vm0, and alioth exits when it stops.
+    #[arg(long, value_name = "ADDR")]
+    api: Option<ApiAddr>,
 }
 
 fn parse_net_arg(arg: &str, objects: &HashMap<&str, &str>) -> serde_aco::Result<NetSpec> {
@@ -370,12 +384,13 @@ fn parse_args(mut args: BootArgs, objects: HashMap<&str, &str>) -> Result<VmSpec
     Ok(spec)
 }
 
-pub fn boot(mut args: BootArgs) -> Result<(), Error> {
-    let object_args = mem::take(&mut args.objects);
-    let objects = parse_objects(&object_args)?;
-
-    let hv_spec = if let Some(arg) = args.hypervisor.take() {
-        serde_aco::from_args(&arg, &objects).context(error::ParseArg { arg })?
+/// Creates the hypervisor that `arg` specifies.
+pub fn hypervisor(
+    arg: Option<String>,
+    objects: &HashMap<&str, &str>,
+) -> Result<impl Hypervisor + use<>, Error> {
+    let hv_spec = if let Some(arg) = arg {
+        serde_aco::from_args(&arg, objects).context(error::ParseArg { arg })?
     } else {
         HvSpec::default()
     };
@@ -385,8 +400,43 @@ pub fn boot(mut args: BootArgs) -> Result<(), Error> {
         #[cfg(target_os = "macos")]
         HvSpec::Hvf => Hvf {},
     };
+    Ok(hypervisor)
+}
 
+/// Boots `vms/vm0` from `spec`, and serves the API at `addr` until the VM
+/// stops.
+fn boot_with_api<H>(hypervisor: H, spec: VmSpec, addr: &ApiAddr) -> Result<(), Error>
+where
+    H: Hypervisor + Send + Sync + 'static,
+{
+    let manager = Arc::new(VmManager::<Machine<H>>::new(hypervisor));
+    manager.create(Some("vm0"), spec).context(error::StartVm)?;
+    manager.boot("vm0").context(error::StartVm)?;
+    let waiter = manager.clone();
+    let stopped = async move {
+        // Returns when vm0 stops, fails, or is deleted.
+        let _ = tokio::task::spawn_blocking(move || waiter.wait_stopped("vm0")).await;
+    };
+    let ret = api::serve(addr, manager.clone(), false, stopped);
+    let failed = matches!(manager.get("vm0"), Ok(vm) if vm.state == VmState::Failed);
+    manager.delete_all();
+    ret.context(error::Serve)?;
+    if failed {
+        return error::VmFailed.fail();
+    }
+    Ok(())
+}
+
+pub fn boot(mut args: BootArgs) -> Result<(), Error> {
+    let object_args = mem::take(&mut args.objects);
+    let objects = parse_objects(&object_args)?;
+
+    let hypervisor = hypervisor(args.hypervisor.take(), &objects)?;
+    let api = args.api.take();
     let spec = parse_args(args, objects)?;
+    if let Some(addr) = api {
+        return boot_with_api(hypervisor, spec, &addr);
+    }
 
     let vm = Machine::create(&hypervisor, spec).context(error::CreateVm)?;
 

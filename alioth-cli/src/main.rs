@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod api;
 #[path = "boot/boot.rs"]
 mod boot;
 mod img;
 mod objects;
+mod server;
 #[cfg(target_os = "linux")]
 mod vu;
 
@@ -33,6 +35,8 @@ enum Command {
     Vu(Box<vu::VuArgs>),
     /// Manipulate disk images.
     Img(Box<img::ImgArgs>),
+    /// Serve the VM API, through which clients create and manage VMs.
+    Server(Box<server::ServerArgs>),
 }
 
 #[derive(Parser, Debug)]
@@ -84,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(target_os = "linux")]
         Command::Vu(args) => vu::start(*args)?,
         Command::Img(args) => img::exec(*args)?,
+        Command::Server(args) => server::server(*args)?,
     }
     Ok(())
 }

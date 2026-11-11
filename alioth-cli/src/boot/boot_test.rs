@@ -226,6 +226,10 @@ fn test_parse_args() {
         }],
     };
     assert_eq!(spec, want);
+
+    // The spec survives a JSON round trip, as in the VM API.
+    let json = serde_json::to_string(&spec).unwrap();
+    assert_eq!(serde_json::from_str::<VmSpec>(&json).unwrap(), spec);
 }
 
 #[rstest]
