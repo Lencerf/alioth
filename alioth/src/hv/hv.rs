@@ -88,6 +88,9 @@ pub enum Error {
     #[snafu(display("Failed to configure guest MSRs"))]
     GuestMsr { error: std::io::Error },
     #[cfg(target_arch = "x86_64")]
+    #[snafu(display("Failed to get MSR {index:#x}"))]
+    GetMsr { index: u32 },
+    #[cfg(target_arch = "x86_64")]
     #[snafu(display("Failed to set MSR {index:#x}"))]
     SetMsr { index: u32 },
     #[cfg(target_arch = "x86_64")]
@@ -96,6 +99,18 @@ pub enum Error {
     #[cfg(target_arch = "x86_64")]
     #[snafu(display("Failed to configure guest local APIC"))]
     GuestLapic { error: std::io::Error },
+    #[cfg(target_arch = "x86_64")]
+    #[snafu(display("Failed to configure the multiprocessor state"))]
+    MpState { error: std::io::Error },
+    #[cfg(target_arch = "x86_64")]
+    #[snafu(display("Failed to configure pending vCPU events"))]
+    VcpuEvents { error: std::io::Error },
+    #[cfg(target_arch = "x86_64")]
+    #[snafu(display("Failed to configure debug registers"))]
+    DebugRegs { error: std::io::Error },
+    #[cfg(target_arch = "x86_64")]
+    #[snafu(display("Failed to configure the nested virtualization state"))]
+    NestedState { error: std::io::Error },
     #[snafu(display("Failed to configure memory encryption"))]
     MemEncrypt { error: std::io::Error },
     #[snafu(display("Failed to configure an IrqFd"))]
@@ -186,7 +201,7 @@ impl Default for MemMapOption {
 }
 
 pub trait Vcpu {
-    #[cfg(target_arch = "aarch64")]
+    /// Resets the vCPU to its power-on state.
     fn reset(&mut self, is_bsp: bool) -> Result<()>;
 
     fn get_reg(&self, reg: Reg) -> Result<u64, Error>;

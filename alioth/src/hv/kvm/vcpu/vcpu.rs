@@ -110,7 +110,6 @@ pub struct KvmVcpu {
     kvm_run: KvmRunBlock,
     fd: OwnedFd,
     arch: VcpuArch,
-    #[allow(dead_code)]
     vm: Arc<VmInner>,
     // A vCPU stays on the thread that created it, see `IMMEDIATE_EXIT`.
     _not_send: PhantomData<*const ()>,
@@ -138,13 +137,15 @@ impl KvmVcpu {
         let mut kvm_run = unsafe { KvmRunBlock::new(&vcpu_fd, vm.vm.vcpu_mmap_size) }?;
         IMMEDIATE_EXIT.set(&mut kvm_run.immediate_exit);
         let arch = VcpuArch::new(identity);
-        Ok(KvmVcpu {
+        let vcpu = KvmVcpu {
             fd: vcpu_fd,
             kvm_run,
             vm: vm.vm.clone(),
             arch,
             _not_send: PhantomData,
-        })
+        };
+        vcpu.init()?;
+        Ok(vcpu)
     }
 }
 
@@ -157,9 +158,8 @@ impl Drop for KvmVcpu {
 }
 
 impl Vcpu for KvmVcpu {
-    #[cfg(target_arch = "aarch64")]
     fn reset(&mut self, is_bsp: bool) -> Result<(), Error> {
-        self.kvm_vcpu_init(is_bsp)
+        self.kvm_vcpu_reset(is_bsp)
     }
 
     fn get_reg(&self, reg: Reg) -> Result<u64, Error> {

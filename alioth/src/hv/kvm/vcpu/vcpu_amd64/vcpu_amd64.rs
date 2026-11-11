@@ -24,27 +24,44 @@ use snafu::ResultExt;
 use zerocopy::{transmute_mut, transmute_ref};
 
 use crate::arch::cpuid::CpuidIn;
-use crate::arch::msr::{Efer, Msr};
-use crate::arch::reg::{Cr0, Cr3, Cr4, DtReg, DtRegVal, Reg, SReg, SegAccess, SegReg, SegRegVal};
+use crate::arch::intr::DeliveryMode;
+use crate::arch::msr::{ApicBase, Efer, Msr};
+use crate::arch::reg::{
+    Cr0, Cr3, Cr4, DtReg, DtRegVal, Reg, Rflags, SReg, SegAccess, SegReg, SegRegVal,
+};
 use crate::hv::kvm::kvm_error;
 use crate::hv::kvm::vcpu::KvmVcpu;
 use crate::hv::kvm::vm::KvmVm;
 use crate::hv::{Error, Result, error};
 use crate::sys::kvm::{
-    KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmMsrEntry, KvmMsrs, KvmRegs,
-    MSRS_PER_CALL, kvm_create_vcpu, kvm_get_lapic, kvm_get_regs, kvm_get_sregs, kvm_get_xsave,
-    kvm_kvmclock_ctrl, kvm_set_cpuid2, kvm_set_lapic, kvm_set_msrs, kvm_set_regs, kvm_set_sregs,
+    KVM_MAX_CPUID_ENTRIES, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2, KvmDebugregs, KvmDtable,
+    KvmLapicState, KvmMpState, KvmMsrEntry, KvmMsrs, KvmNestedState, KvmNestedStateFlag,
+    KvmNestedStateFormat, KvmNestedStateHdr, KvmRegs, KvmSegment, KvmSregs, KvmVcpuEventValid,
+    KvmVcpuEvents, KvmVmxNestedStateHdr, KvmXcr, KvmXcrs, KvmXsave, MSRS_PER_CALL, kvm_create_vcpu,
+    kvm_get_lapic, kvm_get_msrs, kvm_get_regs, kvm_get_sregs, kvm_get_xsave, kvm_kvmclock_ctrl,
+    kvm_set_cpuid2, kvm_set_debugregs, kvm_set_lapic, kvm_set_mp_state, kvm_set_msrs,
+    kvm_set_nested_state, kvm_set_regs, kvm_set_sregs, kvm_set_vcpu_events, kvm_set_xcrs,
     kvm_set_xsave,
 };
+
+/// Default Family/Model/Stepping (P6) placed in EDX at power-on before guest
+/// CPUID is configured.
+const DEFAULT_CPUID_1_EAX: u32 = 0x600;
 
 #[derive(Debug)]
 pub struct VcpuArch {
     pub io_index: usize,
+    apic_id: u32,
+    cpuid_1_eax: u32,
 }
 
 impl VcpuArch {
-    pub fn new(_id: u64) -> Self {
-        Self { io_index: 0 }
+    pub fn new(id: u64) -> Self {
+        Self {
+            io_index: 0,
+            apic_id: id as u32,
+            cpuid_1_eax: DEFAULT_CPUID_1_EAX,
+        }
     }
 }
 
@@ -168,6 +185,10 @@ impl KvmVcpu {
         let apic_id = identity as u32;
         let fd = unsafe { kvm_create_vcpu(&vm.vm.fd, apic_id) }.context(error::CreateVcpu)?;
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    pub fn init(&self) -> Result<()> {
+        self.vm.save_power_on_msrs(false, self)
     }
 
     /// Tells the guest that the VMM stopped this vCPU for a while, so that
@@ -307,10 +328,41 @@ impl KvmVcpu {
             }
         }
         unsafe { kvm_set_cpuid2(&self.fd, &kvm_cpuid2) }.context(error::GuestCpuid)?;
+        let leaf1 = CpuidIn {
+            func: 0x1,
+            index: None,
+        };
+        if let Some(out) = cpuids.get(&leaf1) {
+            self.arch.cpuid_1_eax = out.eax;
+        }
+        self.vm.save_power_on_msrs(true, self)?;
         Ok(())
     }
 
-    pub fn kvm_set_msrs(&mut self, msrs: &[(Msr, u64)]) -> Result<()> {
+    /// Reads the MSRs in `indices`.
+    pub fn get_kvm_msrs(&self, indices: &[u32]) -> Result<Vec<KvmMsrEntry>> {
+        let mut kvm_msrs = KvmMsrs {
+            nmsrs: 0,
+            _pad: 0,
+            entries: [KvmMsrEntry::default(); MSRS_PER_CALL],
+        };
+        let mut msrs = Vec::with_capacity(indices.len());
+        for chunk in indices.chunks(MSRS_PER_CALL) {
+            kvm_msrs.nmsrs = chunk.len() as u32;
+            for (entry, index) in zip(&mut kvm_msrs.entries, chunk) {
+                entry.index = *index;
+            }
+            let n = unsafe { kvm_get_msrs(&self.fd, &mut kvm_msrs) }.context(error::GuestMsr)?;
+            // KVM stops at the first MSR that it cannot read.
+            if let Some(index) = chunk.get(n as usize) {
+                return error::GetMsr { index: *index }.fail();
+            }
+            msrs.extend_from_slice(&kvm_msrs.entries[..chunk.len()]);
+        }
+        Ok(msrs)
+    }
+
+    fn set_kvm_msrs<T>(&self, msrs: &[T], mut encode: impl FnMut(&T) -> KvmMsrEntry) -> Result<()> {
         let mut kvm_msrs = KvmMsrs {
             nmsrs: 0,
             _pad: 0,
@@ -318,17 +370,24 @@ impl KvmVcpu {
         };
         for chunk in msrs.chunks(MSRS_PER_CALL) {
             kvm_msrs.nmsrs = chunk.len() as u32;
-            for (entry, (index, data)) in zip(&mut kvm_msrs.entries, chunk) {
-                entry.index = index.raw();
-                entry.data = *data;
+            for (entry, msr) in zip(&mut kvm_msrs.entries, chunk) {
+                *entry = encode(msr);
             }
             let n = unsafe { kvm_set_msrs(&self.fd, &kvm_msrs) }.context(error::GuestMsr)?;
             // KVM stops at the first MSR that it cannot write.
-            if let Some((index, _)) = chunk.get(n as usize) {
-                return error::SetMsr { index: index.raw() }.fail();
+            if let Some(msr) = kvm_msrs.entries[..chunk.len()].get(n as usize) {
+                return error::SetMsr { index: msr.index }.fail();
             }
         }
         Ok(())
+    }
+
+    pub fn kvm_set_msrs(&mut self, msrs: &[(Msr, u64)]) -> Result<()> {
+        self.set_kvm_msrs(msrs, |&(index, data)| KvmMsrEntry {
+            index: index.raw(),
+            data,
+            ..Default::default()
+        })
     }
 
     pub fn kvm_get_xsave(&self, xsave: &mut [u32; 1024]) -> Result<()> {
@@ -354,6 +413,206 @@ impl KvmVcpu {
         unsafe { kvm_set_lapic(&self.fd, buf) }.context(error::GuestLapic)?;
         Ok(())
     }
+
+    /// Resets the vCPU to its x86 power-on state (Intel SDM Vol. 3A, Table
+    /// 10-1), restoring MSRs from the VM's initial MSR snapshot. Confidential
+    /// vCPUs do not expose their state to userspace and are left untouched.
+    pub fn kvm_vcpu_reset(&self, is_bsp: bool) -> Result<()> {
+        let Some(msrs) = self.vm.power_on_msrs() else {
+            return Ok(());
+        };
+        // Leave nested virtualization first, so that the rest applies to L1.
+        if let Some(format) = self.vm.nested_format() {
+            let nested = power_on_nested_state(format);
+            unsafe { kvm_set_nested_state(&self.fd, &nested) }.context(error::NestedState)?;
+        }
+        let sregs = power_on_sregs(is_bsp);
+        unsafe { kvm_set_sregs(&self.fd, &sregs) }.context(error::VcpuReg)?;
+        let regs = KvmRegs {
+            rdx: self.arch.cpuid_1_eax as u64,
+            rip: 0xfff0,
+            rflags: Rflags::RESERVED_1.bits() as u64,
+            ..Default::default()
+        };
+        unsafe { kvm_set_regs(&self.fd, &regs) }.context(error::VcpuReg)?;
+        let xsave = power_on_xsave();
+        unsafe { kvm_set_xsave(&self.fd, &xsave) }.context(error::GuestXsave)?;
+        if self.vm.has_xcrs() {
+            let mut xcrs = KvmXcrs {
+                nr_xcrs: 1,
+                ..Default::default()
+            };
+            xcrs.xcrs[0] = KvmXcr {
+                xcr: 0,
+                reserved: 0,
+                value: 1,
+            };
+            unsafe { kvm_set_xcrs(&self.fd, &xcrs) }.context(error::GuestXsave)?;
+        }
+        // KVM interprets the LAPIC state by the APIC base in sregs.
+        let lapic = power_on_lapic(self.arch.apic_id, is_bsp);
+        unsafe { kvm_set_lapic(&self.fd, &lapic) }.context(error::GuestLapic)?;
+        self.set_kvm_msrs(&msrs, |&entry| entry)?;
+        let events = KvmVcpuEvents {
+            flags: KvmVcpuEventValid::NMI_PENDING
+                | KvmVcpuEventValid::SIPI_VECTOR
+                | KvmVcpuEventValid::SHADOW
+                | KvmVcpuEventValid::SMM,
+            ..Default::default()
+        };
+        unsafe { kvm_set_vcpu_events(&self.fd, &events) }.context(error::VcpuEvents)?;
+        let debugregs = KvmDebugregs {
+            dr6: 0xffff_0ff0,
+            dr7: 0x0000_0400,
+            ..Default::default()
+        };
+        unsafe { kvm_set_debugregs(&self.fd, &debugregs) }.context(error::DebugRegs)?;
+        let mp_state = if is_bsp {
+            KvmMpState::RUNNABLE
+        } else {
+            KvmMpState::UNINITIALIZED
+        };
+        unsafe { kvm_set_mp_state(&self.fd, &mp_state) }.context(error::MpState)?;
+        Ok(())
+    }
+}
+
+fn power_on_nested_state(format: KvmNestedStateFormat) -> KvmNestedState {
+    match format {
+        KvmNestedStateFormat::VMX => KvmNestedState {
+            flags: KvmNestedStateFlag::empty(),
+            format,
+            size: size_of::<KvmNestedState>() as u32,
+            hdr: KvmNestedStateHdr {
+                vmx: KvmVmxNestedStateHdr {
+                    vmxon_pa: u64::MAX,
+                    vmcs12_pa: u64::MAX,
+                    ..Default::default()
+                },
+            },
+        },
+        KvmNestedStateFormat::SVM => KvmNestedState {
+            flags: KvmNestedStateFlag::GIF_SET,
+            format,
+            size: size_of::<KvmNestedState>() as u32,
+            hdr: KvmNestedStateHdr::default(),
+        },
+        _ => KvmNestedState {
+            flags: KvmNestedStateFlag::empty(),
+            format,
+            size: size_of::<KvmNestedState>() as u32,
+            hdr: KvmNestedStateHdr::default(),
+        },
+    }
+}
+
+fn power_on_sregs(is_bsp: bool) -> KvmSregs {
+    let data_seg = KvmSegment {
+        base: 0,
+        limit: 0xffff,
+        selector: 0,
+        type_: 0x3,
+        present: 1,
+        s: 1,
+        ..Default::default()
+    };
+    let mut apic_base = ApicBase(0);
+    apic_base.set_base(0xfee00);
+    apic_base.set_xapic(true);
+    apic_base.set_bsp(is_bsp);
+    KvmSregs {
+        cs: KvmSegment {
+            base: 0xffff_0000,
+            limit: 0xffff,
+            selector: 0xf000,
+            type_: 0xb,
+            present: 1,
+            s: 1,
+            ..Default::default()
+        },
+        ds: data_seg,
+        es: data_seg,
+        fs: data_seg,
+        gs: data_seg,
+        ss: data_seg,
+        tr: KvmSegment {
+            base: 0,
+            limit: 0xffff,
+            selector: 0,
+            type_: 0xb,
+            present: 1,
+            s: 0,
+            ..Default::default()
+        },
+        ldt: KvmSegment {
+            base: 0,
+            limit: 0xffff,
+            selector: 0,
+            type_: 0x2,
+            present: 1,
+            s: 0,
+            ..Default::default()
+        },
+        gdt: KvmDtable {
+            base: 0,
+            limit: 0xffff,
+            ..Default::default()
+        },
+        idt: KvmDtable {
+            base: 0,
+            limit: 0xffff,
+            ..Default::default()
+        },
+        cr0: Cr0::ET | Cr0::NW | Cr0::CD,
+        apic_base,
+        ..Default::default()
+    }
+}
+
+fn power_on_xsave() -> KvmXsave {
+    // Intel SDM Vol. 1, Table 10-2 and Section 13.4.2: x87 FCW = 0x037f,
+    // MXCSR = 0x1f80, and XSTATE_BV = 0 so KVM re-initializes all extended
+    // state components.
+    let mut xsave = KvmXsave { region: [0; 1024] };
+    xsave.region[0] = 0x037f;
+    xsave.region[24 >> 2] = 0x1f80;
+    xsave
+}
+
+fn power_on_lapic(apic_id: u32, is_bsp: bool) -> KvmLapicState {
+    // Intel SDM Vol. 3A, Table 11-1 and Section 11.4.7.1.
+    const APIC_ID: usize = 0x020 >> 2;
+    const APIC_DFR: usize = 0x0e0 >> 2;
+    const APIC_SPIV: usize = 0x0f0 >> 2;
+    const APIC_LVTT: usize = 0x320 >> 2;
+    const APIC_LVTTHMR: usize = 0x330 >> 2;
+    const APIC_LVTPC: usize = 0x340 >> 2;
+    const APIC_LVT0: usize = 0x350 >> 2;
+    const APIC_LVT1: usize = 0x360 >> 2;
+    const APIC_LVTERR: usize = 0x370 >> 2;
+    const APIC_LVT_MASKED: u32 = 1 << 16;
+
+    let mut lapic = KvmLapicState { regs: [0; 0x100] };
+    lapic.regs[APIC_ID] = apic_id << 24;
+    lapic.regs[APIC_DFR] = u32::MAX;
+    lapic.regs[APIC_SPIV] = 0xff;
+    for lvt in [
+        APIC_LVTT,
+        APIC_LVTTHMR,
+        APIC_LVTPC,
+        APIC_LVT0,
+        APIC_LVT1,
+        APIC_LVTERR,
+    ] {
+        lapic.regs[lvt] = APIC_LVT_MASKED;
+    }
+    // KVM enables ExtINT on the BSP's LINT0 at reset
+    // (`KVM_X86_QUIRK_LINT0_REENABLED`).
+    if is_bsp {
+        lapic.regs[APIC_LVT0] = (DeliveryMode::EXTINT.raw() as u32) << 8;
+    }
+    // KVM recomputes `APIC_LVR` (0x30) in `kvm_apic_set_state()`.
+    lapic
 }
 
 #[cfg(test)]

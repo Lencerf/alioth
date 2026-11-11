@@ -26,8 +26,12 @@ use crate::hv::CocoSpec;
 use crate::hv::{Kvm, Result, error};
 use crate::sys::kvm::{
     KVM_CPUID_FEATURES, KVM_MAX_CPUID_ENTRIES, KvmCap, KvmCpuid2, KvmCpuid2Flag, KvmCpuidEntry2,
-    KvmCpuidFeature, KvmX2apicApiFlag, kvm_get_supported_cpuid,
+    KvmCpuidFeature, KvmMsrList, KvmX2apicApiFlag, kvm_get_msr_index_list, kvm_get_supported_cpuid,
 };
+
+/// The capacity of the buffer for `KVM_GET_MSR_INDEX_LIST`. KVM lists about
+/// 100 MSRs today.
+const MAX_MSR_INDICES: usize = 1024;
 
 impl From<KvmCpuidEntry2> for (CpuidIn, CpuidResult) {
     fn from(value: KvmCpuidEntry2) -> Self {
@@ -87,6 +91,16 @@ impl Kvm {
         }
 
         Ok(cpuids)
+    }
+
+    /// Returns the MSRs that KVM can save and restore for a vCPU.
+    pub fn get_msr_index_list(&self) -> Result<Box<[u32]>> {
+        let mut list = KvmMsrList {
+            nmsrs: MAX_MSR_INDICES as u32,
+            indices: [0; MAX_MSR_INDICES],
+        };
+        unsafe { kvm_get_msr_index_list(&self.fd, &mut list) }.context(error::GuestMsr)?;
+        Ok(list.indices[..list.nmsrs as usize].into())
     }
 }
 

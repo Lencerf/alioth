@@ -36,7 +36,11 @@ impl<V: Vm> VcpuThread<V> {
             }
         }
         self.vcpu.set_cpuids(cpuids)?;
+        self.reset_vcpu()?;
+        Ok(())
+    }
 
+    pub(crate) fn init_msrs(&mut self) -> Result<()> {
         let msrs = [(Msr::MISC_ENABLE, MiscEnable::FAST_STRINGS.bits())];
         self.vcpu.set_msrs(&msrs)?;
         Ok(())
@@ -105,7 +109,9 @@ impl<V: Vm> VcpuThread<V> {
         Ok(init_state)
     }
 
-    pub(crate) fn reset_vcpu(&self) -> Result<()> {
+    pub(crate) fn reset_vcpu(&mut self) -> Result<()> {
+        self.vcpu.reset(self.index == 0)?;
+        self.init_msrs()?;
         Ok(())
     }
 }

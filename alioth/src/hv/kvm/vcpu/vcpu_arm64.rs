@@ -50,7 +50,11 @@ impl KvmVcpu {
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
-    pub fn kvm_vcpu_init(&mut self, is_bsp: bool) -> Result<()> {
+    pub fn init(&self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn kvm_vcpu_reset(&mut self, is_bsp: bool) -> Result<()> {
         let mut arm_cpu_init =
             unsafe { kvm_arm_preferred_target(&self.vm.fd) }.context(error::CreateVcpu)?;
         self.vm.check_extension(KvmCap::ARM_PSCI_0_2)?;

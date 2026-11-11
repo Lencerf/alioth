@@ -28,6 +28,7 @@ consts! {
         GS_BASE = 0xc000_0101;
         KERNEL_GS_BASE = 0xc000_0102;
         TSC_AUX = 0xc000_0103;
+        TSC = 0x0000_0010;
         MISC_ENABLE = 0x0000_01a0;
         APIC_BASE = 0x0000_001b;
     }
