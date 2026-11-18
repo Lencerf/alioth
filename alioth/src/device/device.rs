@@ -39,6 +39,10 @@ pub enum Error {
     System { error: std::io::Error },
     #[snafu(display("Device is not pausable"))]
     NotPausable,
+    #[snafu(display("Failed to pause device"))]
+    Pause {
+        source: Box<dyn DebugTrace + Send + Sync + 'static>,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

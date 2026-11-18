@@ -40,7 +40,9 @@ use crate::pci::config::{
 use crate::pci::{self, Pci, PciBar};
 use crate::sync::notifier::Notifier;
 use crate::utils::{get_atomic_high32, get_atomic_low32, set_atomic_high32, set_atomic_low32};
-use crate::virtio::dev::{RESET_TIMEOUT, Register, StartParam, VirtioDevice, WakeEvent, WorkerCtl};
+use crate::virtio::dev::{
+    PAUSE_TIMEOUT, RESET_TIMEOUT, Register, StartParam, VirtioDevice, WakeEvent, WorkerCtl,
+};
 use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg};
 use crate::virtio::{DevStatus, DeviceId, IrqSender, Result, VirtioFeature, error};
 use crate::{consts, impl_mmio_for_zerocopy, mem};
@@ -273,6 +275,24 @@ where
         self.ctl.wait_reset(seq, timeout)?;
         self.complete_reset();
         *reset_seq = None;
+        Ok(())
+    }
+
+    /// Pauses the device and waits for the worker to stop.
+    fn pause_sync(&self, timeout: Duration) -> Result<()> {
+        let mut reset_seq = self.reset_seq.lock();
+        let seq = self.ctl.request_pause();
+        if let Err(e) = self.ctl.wait_pause(seq, timeout) {
+            // The worker may still get to the pause later.
+            self.ctl.wake(WakeEvent::Resume);
+            return Err(e);
+        }
+        // The worker has handled what the driver requested before the
+        // pause. Bring the registers up to date, since nothing changes
+        // them while the device is paused.
+        if self.poll_reset(&mut reset_seq) && self.ctl.failed() {
+            self.set_needs_reset();
+        }
         Ok(())
     }
 
@@ -1080,11 +1100,14 @@ where
     M: MsiSender,
 {
     fn pause(&self) -> device::Result<()> {
-        device::error::NotPausable.fail()
+        let ret = self.registers.pause_sync(PAUSE_TIMEOUT);
+        ret.box_trace(device::error::Pause)
     }
 
     fn resume(&self) -> device::Result<()> {
-        device::error::NotPausable.fail()
+        // A worker that has exited has nothing to resume.
+        self.registers.ctl.wake(WakeEvent::Resume);
+        Ok(())
     }
 }
 

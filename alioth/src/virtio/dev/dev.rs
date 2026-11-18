@@ -127,6 +127,9 @@ const TOKEN_WARKER: u64 = 1 << 63;
 /// requests when it leaves its event loop.
 pub(crate) const RESET_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a transport waits for a worker to pause a device.
+pub(crate) const PAUSE_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone)]
 pub struct StartParam<S>
 where

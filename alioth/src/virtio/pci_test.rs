@@ -24,6 +24,7 @@ use flume::{Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use rstest::rstest;
 
+use crate::device::{self, Pause};
 use crate::hv::IrqFd;
 use crate::hv::tests::{RegisteredAddr, TestIrqFd, TestMsiSender, TestNotifierRegistry};
 use crate::mem::emulated::{Action, Mmio};
@@ -683,6 +684,89 @@ fn start_then_reset(mmio: &TestMmio, event_rx: &TestWakeReceiver) -> u64 {
         panic!("expected a reset event");
     };
     seq
+}
+
+/// Answers the next pause request like a worker.
+fn answer_pause<S>(event_rx: &Receiver<WakeEvent<S>>, report_tx: &Sender<WorkerReport>)
+where
+    S: IrqSender,
+{
+    let Ok(WakeEvent::Pause { seq }) = event_rx.recv_timeout(Duration::from_secs(5)) else {
+        panic!("expected a pause event");
+    };
+    report_tx.send(WorkerReport::Paused { seq }).unwrap();
+}
+
+#[test]
+fn test_pause_sync() {
+    let queues = Arc::new([QueueReg::default()]);
+    let (mmio, event_rx, report_tx) = create_test_mmio(queues);
+    thread::scope(|s| {
+        s.spawn(|| answer_pause(&event_rx, &report_tx));
+        assert_matches!(mmio.pause_sync(Duration::from_secs(5)), Ok(()));
+    });
+    assert!(event_rx.is_empty());
+}
+
+#[test]
+fn test_pause_sync_timeout() {
+    let queues = Arc::new([QueueReg::default()]);
+    let (mmio, event_rx, _report_tx) = create_test_mmio(queues);
+    assert_matches!(
+        mmio.pause_sync(Duration::from_millis(10)),
+        Err(Error::PauseTimeout { .. })
+    );
+    // The pause is called off, since the worker may still get to it.
+    assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Pause { .. }));
+    assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Resume));
+}
+
+#[test]
+fn test_pause_completes_reset_in_progress() {
+    let queues = Arc::new([QueueReg::default()]);
+    let (mmio, event_rx, report_tx) = create_test_mmio(queues.clone());
+    let seq = start_then_reset(&mmio, &event_rx);
+
+    // The worker handles the reset before the pause.
+    report_tx.send(WorkerReport::ResetDone { seq }).unwrap();
+    thread::scope(|s| {
+        s.spawn(|| answer_pause(&event_rx, &report_tx));
+        assert_matches!(mmio.pause_sync(Duration::from_secs(5)), Ok(()));
+    });
+
+    // The registers are up to date before the driver reads them.
+    assert_eq!(mmio.reg.status.load(Ordering::Acquire), 0);
+    assert!(!queues[0].enabled.load(Ordering::Acquire));
+}
+
+#[test]
+fn test_pci_device_pause_resume() {
+    let (dev, event_rx, report_tx) =
+        create_test_virtio_device::<PciIrqSender<TestMsiSender>>(DeviceId::NET, 0, None, 2);
+    let pci_dev = VirtioPciDevice::new(
+        dev,
+        TestMsiSender::default(),
+        Some(TestNotifierRegistry::default()),
+    )
+    .unwrap();
+
+    thread::scope(|s| {
+        s.spawn(|| answer_pause(&event_rx, &report_tx));
+        assert_matches!(pci_dev.pause(), Ok(()));
+    });
+    assert_matches!(pci_dev.resume(), Ok(()));
+    assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Resume));
+
+    // A device that cannot pause keeps running.
+    thread::scope(|s| {
+        s.spawn(|| {
+            let Ok(WakeEvent::Pause { seq }) = event_rx.recv_timeout(Duration::from_secs(5)) else {
+                panic!("expected a pause event");
+            };
+            report_tx.send(WorkerReport::PauseFailed { seq }).unwrap();
+        });
+        assert_matches!(pci_dev.pause(), Err(device::Error::Pause { .. }));
+    });
 }
 
 #[test]
