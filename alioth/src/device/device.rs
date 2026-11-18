@@ -43,13 +43,18 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// A device that stops while the VM is paused.
+///
+/// The vCPUs do not run while a device is paused, so a device only has to
+/// stop what it does on its own, e.g. in a worker thread. A device that
+/// acts only when a vCPU accesses it has nothing to do.
 pub trait Pause {
-    fn pause(&self) -> Result<()> {
-        error::NotPausable.fail()
-    }
-    fn resume(&self) -> Result<()> {
-        error::NotPausable.fail()
-    }
+    /// Stops the device. Once this returns, the device does not access
+    /// guest memory, send interrupts, or change its state until it resumes.
+    fn pause(&self) -> Result<()>;
+
+    /// Lets a paused device run again.
+    fn resume(&self) -> Result<()>;
 }
 
 pub trait MmioDev: Mmio + Pause {}

@@ -144,11 +144,11 @@ impl<C: Clock> Mmio for Cmos<C> {
 
 impl<C: Clock> Pause for Cmos<C> {
     fn pause(&self) -> Result<()> {
-        todo!()
+        Ok(())
     }
 
     fn resume(&self) -> Result<()> {
-        todo!()
+        Ok(())
     }
 }
 

@@ -24,7 +24,7 @@ use alioth_macros::Layout;
 use parking_lot::{Mutex, RwLock};
 use zerocopy::{FromZeros, Immutable, IntoBytes};
 
-use crate::device::Pause;
+use crate::device::{self, Pause};
 use crate::errors::BoxTrace;
 use crate::hv::{IrqFd, MsiSender, NotifierRegistry};
 use crate::mem::emulated::{Action, Mmio};
@@ -1075,7 +1075,18 @@ where
     }
 }
 
-impl<M> Pause for VirtioPciDevice<M> where M: MsiSender {}
+impl<M> Pause for VirtioPciDevice<M>
+where
+    M: MsiSender,
+{
+    fn pause(&self) -> device::Result<()> {
+        device::error::NotPausable.fail()
+    }
+
+    fn resume(&self) -> device::Result<()> {
+        device::error::NotPausable.fail()
+    }
+}
 
 impl<M> Pci for VirtioPciDevice<M>
 where
