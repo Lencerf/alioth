@@ -198,4 +198,14 @@ where
     fn handle_queue(&mut self, dev: &mut D, index: u16) -> Result<()> {
         dev.handle_queue(index, self)
     }
+
+    fn pause(&mut self, _dev: &mut D) -> Result<bool> {
+        // A device completes its requests while it handles an event, so
+        // none is in flight between two events.
+        Ok(true)
+    }
+
+    fn resume(&mut self, _dev: &mut D) -> Result<()> {
+        Ok(())
+    }
 }

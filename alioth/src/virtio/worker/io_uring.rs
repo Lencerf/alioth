@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::iter;
 use std::os::fd::{AsFd, AsRawFd};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use std::{iter, mem};
 
 use io_uring::cqueue::Entry as Cqe;
 use io_uring::squeue::Entry as Sqe;
@@ -131,6 +131,8 @@ where
             notifiers: param.notifiers.as_deref().unwrap_or(&[]),
             queues,
             submit_counts,
+            cancelling: Vec::new(),
+            held: Vec::new(),
         };
         self.submit_notifier(&mut active_ring.ring.submission())?;
         context.dev.activate(param.feature, &mut active_ring)?;
@@ -162,6 +164,46 @@ where
     pub notifiers: &'a [Notifier],
     shared_count: u16,
     submit_counts: Box<[u16]>,
+    /// The chains, by queue index and ID, whose requests are being
+    /// cancelled for a pause.
+    cancelling: Vec<(u16, u16)>,
+    /// The chains whose requests were cancelled for a pause, to be
+    /// submitted again once the device resumes.
+    held: Vec<(u16, u16)>,
+}
+
+/// Submits the request for `chain` of queue `q_index` to `ring`.
+fn submit_chain<D>(
+    dev: &mut D,
+    ring: &mut io_uring::IoUring,
+    shared_count: &mut u16,
+    submit_count: &mut u16,
+    q_index: u16,
+    chain: &mut DescChain,
+) -> Result<Status>
+where
+    D: VirtioIoUring,
+{
+    if *submit_count >= QUEUE_RESERVE_SIZE && *shared_count == 0 {
+        log::debug!("{}: queue-{q_index}: no more free entries", dev.name());
+        return Ok(Status::Break);
+    };
+    match dev.handle_desc(q_index, chain)? {
+        BufferAction::Sqe(sqe) => {
+            let buffer_key = ((chain.id() as u64) << 16) | q_index as u64;
+            let sqe = sqe.user_data(buffer_key | TOKEN_DESCRIPTOR);
+            if unsafe { ring.submission().push(&sqe) }.is_err() {
+                log::error!("{}: queue-{q_index}: unexpected full queue", dev.name());
+                return Ok(Status::Break);
+            }
+            *submit_count += 1;
+            if *submit_count > QUEUE_RESERVE_SIZE {
+                *shared_count -= 1;
+            }
+            Ok(Status::Deferred)
+        }
+        BufferAction::Written(len) => Ok(Status::Done { len }),
+    }
 }
 
 fn submit_queue_notifier(index: u16, notifier: &Notifier, sq: &mut SubmissionQueue) -> Result<()> {
@@ -279,27 +321,92 @@ where
         };
         let submit_count = self.submit_counts.get_mut(q_index as usize).unwrap();
 
+        let ring = &mut self.ring;
+        let shared_count = &mut self.shared_count;
         q.handle_desc(q_index, self.irq_sender, |chain| {
-            if *submit_count >= QUEUE_RESERVE_SIZE && self.shared_count == 0 {
-                log::debug!("{}: queue-{q_index}: no more free entries", dev.name());
-                return Ok(Status::Break);
+            submit_chain(dev, ring, shared_count, submit_count, q_index, chain)
+        })
+    }
+
+    /// Submits again the request of chain `id` of queue `q_index`, which
+    /// was cancelled.
+    fn resubmit<D>(&mut self, dev: &mut D, q_index: u16, id: u16) -> Result<()>
+    where
+        D: VirtioIoUring,
+    {
+        let Some(Some(q)) = self.queues.get_mut(q_index as usize) else {
+            log::error!("{}: invalid queue index {q_index}", dev.name());
+            return Ok(());
+        };
+        let submit_count = self.submit_counts.get_mut(q_index as usize).unwrap();
+        let ring = &mut self.ring;
+        let shared_count = &mut self.shared_count;
+        q.retry_deferred(id, q_index, self.irq_sender, |chain| {
+            submit_chain(dev, ring, shared_count, submit_count, q_index, chain)
+        })
+    }
+
+    /// Asks the kernel to cancel the requests in flight.
+    fn cancel_requests(&mut self) -> Result<()> {
+        for (index, queue) in self.queues.iter().enumerate() {
+            let Some(queue) = queue else {
+                continue;
             };
-            match dev.handle_desc(q_index, chain)? {
-                BufferAction::Sqe(sqe) => {
-                    let buffer_key = ((chain.id() as u64) << 16) | q_index as u64;
-                    let sqe = sqe.user_data(buffer_key | TOKEN_DESCRIPTOR);
-                    if unsafe { self.ring.submission().push(&sqe) }.is_err() {
-                        log::error!("{}: queue-{q_index}: unexpected full queue", dev.name());
-                        return Ok(Status::Break);
-                    }
-                    *submit_count += 1;
-                    if *submit_count > QUEUE_RESERVE_SIZE {
-                        self.shared_count -= 1;
-                    }
-                    Ok(Status::Deferred)
+            for id in queue.deferred_ids() {
+                let key = (index as u16, id);
+                if self.held.contains(&key) || self.cancelling.contains(&key) {
+                    continue;
                 }
-                BufferAction::Written(len) => Ok(Status::Done { len }),
+                let token = ((id as u64) << 16) | index as u64 | TOKEN_DESCRIPTOR;
+                let cancel = opcode::AsyncCancel::new(token)
+                    .build()
+                    .user_data(TOKEN_CANCEL);
+                while unsafe { self.ring.submission().push(&cancel) }.is_err() {
+                    self.ring.submit()?;
+                }
+                self.cancelling.push(key);
             }
+        }
+        Ok(())
+    }
+
+    /// Handles the completion of the request of a chain.
+    ///
+    /// A request that was cancelled for a pause does not complete its
+    /// chain. The chain is held while the device is `pausing`. Otherwise
+    /// the pause was called off, and the request is submitted again.
+    fn complete<D>(&mut self, dev: &mut D, cqe: &Cqe, pausing: bool) -> Result<()>
+    where
+        D: VirtioIoUring,
+    {
+        let buffer_key = cqe.user_data() as u32;
+        let q_index = buffer_key as u16;
+        let chain_id = (buffer_key >> 16) as u16;
+        // Account for the completion first, so that drain() never waits
+        // for a request that has already completed.
+        if let Some(submit_count) = self.submit_counts.get_mut(q_index as usize) {
+            if *submit_count > QUEUE_RESERVE_SIZE {
+                self.shared_count += 1;
+            }
+            *submit_count = submit_count.saturating_sub(1);
+        }
+        let key = (q_index, chain_id);
+        if let Some(index) = self.cancelling.iter().position(|k| *k == key) {
+            self.cancelling.swap_remove(index);
+            if cqe.result() == -libc::ECANCELED {
+                if pausing {
+                    self.held.push(key);
+                    return Ok(());
+                }
+                return self.resubmit(dev, q_index, chain_id);
+            }
+        }
+        let Some(Some(queue)) = self.queues.get_mut(q_index as usize) else {
+            log::error!("{}: invalid queue index {q_index}", dev.name());
+            return Ok(());
+        };
+        queue.handle_deferred(chain_id, q_index, self.irq_sender, |chain| {
+            dev.complete_desc(q_index, chain, cqe)
         })
     }
 }
@@ -320,29 +427,14 @@ where
     fn handle_event(&mut self, dev: &mut D, event: &Self::Event) -> Result<()> {
         let token = event.user_data();
         if token & TOKEN_DESCRIPTOR == TOKEN_DESCRIPTOR {
-            let buffer_key = token as u32;
-            let q_index = buffer_key as u16;
-            let chain_id = (buffer_key >> 16) as u16;
-            // Account for the completion first, so that drain() never waits
-            // for a request that has already completed.
-            if let Some(submit_count) = self.submit_counts.get_mut(q_index as usize) {
-                if *submit_count > QUEUE_RESERVE_SIZE {
-                    self.shared_count += 1;
-                }
-                *submit_count = submit_count.saturating_sub(1);
-            }
-            let Some(Some(queue)) = self.queues.get_mut(q_index as usize) else {
-                log::error!("{}: invalid queue index {q_index}", dev.name());
-                return Ok(());
-            };
-            queue.handle_deferred(chain_id, q_index, self.irq_sender, |chain| {
-                dev.complete_desc(q_index, chain, event)
-            })?;
-
-            self.submit_buffers(dev, q_index)
+            self.complete(dev, event, false)?;
+            self.submit_buffers(dev, token as u16)
         } else if token & TOKEN_QUEUE == TOKEN_QUEUE {
             let index = token as u16;
             self.submit_buffers(dev, index)
+        } else if token == TOKEN_CANCEL {
+            // The request that was cancelled reports the outcome.
+            Ok(())
         } else {
             unreachable!()
         }
@@ -350,6 +442,48 @@ where
 
     fn handle_queue(&mut self, dev: &mut D, index: u16) -> Result<()> {
         self.submit_buffers(dev, index)
+    }
+
+    /// Cancels the requests in flight, and waits until all of them ended.
+    ///
+    /// A request like reading from a tap device never completes by itself.
+    /// Its chain stays with the queue, and `resume()` submits it again. A
+    /// request that completes nevertheless, e.g. I/O that a disk is
+    /// working on, completes its chain as usual.
+    fn pause(&mut self, dev: &mut D) -> Result<bool> {
+        self.cancel_requests()?;
+        let mut interrupted = false;
+        while !interrupted && self.submit_counts.iter().any(|count| *count > 0) {
+            self.ring.submit_and_wait(1)?;
+            loop {
+                let Some(cqe) = self.ring.completion().next() else {
+                    break;
+                };
+                let token = cqe.user_data();
+                if token & TOKEN_DESCRIPTOR == TOKEN_DESCRIPTOR {
+                    self.complete(dev, &cqe, true)?;
+                } else if token & TOKEN_QUEUE == TOKEN_QUEUE || token == TOKEN_CANCEL {
+                    // resume() looks at the queues again.
+                } else {
+                    // The worker has a new wake event.
+                    interrupted = true;
+                }
+            }
+        }
+        Ok(!interrupted)
+    }
+
+    fn resume(&mut self, dev: &mut D) -> Result<()> {
+        for (q_index, id) in mem::take(&mut self.held) {
+            self.resubmit(dev, q_index, id)?;
+        }
+        // pause() dropped the notifications of the queues that it saw.
+        for index in 0..self.queues.len() {
+            if self.queues[index].is_some() {
+                self.submit_buffers(dev, index as u16)?;
+            }
+        }
+        Ok(())
     }
 }
 

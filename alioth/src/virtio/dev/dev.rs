@@ -57,6 +57,16 @@ pub trait Virtio: Debug + Send + Sync + 'static {
         self,
         param: WorkerParam<S>,
     ) -> Result<(JoinHandle<()>, Arc<Notifier>)>;
+    /// Stops what the device does outside of its worker, e.g. a backend
+    /// that serves the queues in another process.
+    ///
+    /// The worker of a running device calls it once no request is in
+    /// flight, and stays away from the queues until the device resumes or
+    /// is reset.
+    fn pause(&mut self) -> Result<()>;
+    /// Undoes [`pause`](Self::pause). A reset of a paused device ends the
+    /// pause without it.
+    fn resume(&mut self) -> Result<()>;
     fn shared_mem_regions(&self) -> Option<Arc<MemRegion>> {
         None
     }
@@ -174,6 +184,16 @@ where
     Reset {
         seq: u64,
     },
+    /// Pauses the device. Once nothing accesses the queues or the buffers
+    /// in guest memory, the worker reports [`WorkerReport::Paused`] with
+    /// `seq`, and waits for [`WakeEvent::Resume`]. A paused worker still
+    /// handles a reset and a shutdown.
+    Pause {
+        seq: u64,
+    },
+    /// Lets a paused device run again, or calls off a pause that the worker
+    /// has not completed.
+    Resume,
 }
 
 /// What a worker reports to the transport.
@@ -184,6 +204,10 @@ pub enum WorkerReport {
     /// The worker has failed, and does not serve the queues until the
     /// device is reset.
     Failed,
+    /// The worker has paused for request `seq`.
+    Paused { seq: u64 },
+    /// The device cannot pause for request `seq`, and keeps running.
+    PauseFailed { seq: u64 },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -217,15 +241,17 @@ where
     /// The lock is held while sending the reset event, so that the worker
     /// sees resets in the order of their sequence numbers.
     reset_seq: Mutex<u64>,
+    /// Sequence number of the last requested pause, see `reset_seq`.
+    pause_seq: Mutex<u64>,
     reports: Mutex<Reports>,
 }
 
-/// Returns `true` if reset `seq` is not later than reset `done`.
+/// Returns `true` if request `seq` is not later than request `done`.
 ///
 /// Sequence numbers are compared in serial number arithmetic, which stays
 /// correct after the counter wraps around, as long as the two are less than
-/// 2^63 resets apart.
-fn reset_completed(done: u64, seq: u64) -> bool {
+/// 2^63 requests apart.
+fn seq_completed(done: u64, seq: u64) -> bool {
     (done.wrapping_sub(seq) as i64) >= 0
 }
 
@@ -237,19 +263,32 @@ struct Reports {
     reset_done: u64,
     /// Whether the worker has failed since the last completed reset.
     failed: bool,
+    /// Sequence number of the last pause the worker answered.
+    pause_done: u64,
+    /// Whether the device could not pause for `pause_done`.
+    pause_failed: bool,
 }
 
 impl Reports {
     fn handle(&mut self, report: WorkerReport) {
         match report {
             WorkerReport::ResetDone { seq } => {
-                if !reset_completed(self.reset_done, seq) {
+                if !seq_completed(self.reset_done, seq) {
                     self.reset_done = seq;
                 }
                 // A reset brings the device back into service.
                 self.failed = false;
             }
             WorkerReport::Failed => self.failed = true,
+            WorkerReport::Paused { seq } => self.pause_answered(seq, false),
+            WorkerReport::PauseFailed { seq } => self.pause_answered(seq, true),
+        }
+    }
+
+    fn pause_answered(&mut self, seq: u64, failed: bool) {
+        if !seq_completed(self.pause_done, seq) {
+            self.pause_done = seq;
+            self.pause_failed = failed;
         }
     }
 
@@ -282,10 +321,13 @@ where
             event_tx,
             notifier,
             reset_seq: Mutex::new(0),
+            pause_seq: Mutex::new(0),
             reports: Mutex::new(Reports {
                 rx: report_rx,
                 reset_done: 0,
                 failed: false,
+                pause_done: 0,
+                pause_failed: false,
             }),
         }
     }
@@ -338,14 +380,14 @@ where
         let mut reports = self.reports.lock();
         let alive = reports.drain();
         // An exited worker no longer uses the queues.
-        !alive || reset_completed(reports.reset_done, seq)
+        !alive || seq_completed(reports.reset_done, seq)
     }
 
     /// Waits until the worker has completed reset `seq`.
     pub fn wait_reset(&self, seq: u64, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         let mut reports = self.reports.lock();
-        while !reset_completed(reports.reset_done, seq) {
+        while !seq_completed(reports.reset_done, seq) {
             match reports.rx.recv_deadline(deadline) {
                 Ok(report) => reports.handle(report),
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -354,6 +396,43 @@ where
                     return error::ResetTimeout { name, timeout }.fail();
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Asks the worker to pause the device.
+    ///
+    /// Returns the sequence number of this pause, which
+    /// [`wait_pause`](Self::wait_pause) takes.
+    pub fn request_pause(&self) -> u64 {
+        let mut pause_seq = self.pause_seq.lock();
+        let seq = pause_seq.wrapping_add(1);
+        *pause_seq = seq;
+        self.wake(WakeEvent::Pause { seq });
+        seq
+    }
+
+    /// Waits until the worker has paused for request `seq`.
+    ///
+    /// After an error, the caller sends [`WakeEvent::Resume`], since the
+    /// worker may still pause later.
+    pub fn wait_pause(&self, seq: u64, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let mut reports = self.reports.lock();
+        while !seq_completed(reports.pause_done, seq) {
+            match reports.rx.recv_deadline(deadline) {
+                Ok(report) => reports.handle(report),
+                // An exited worker no longer uses the queues.
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                Err(RecvTimeoutError::Timeout) => {
+                    let name = self.name.clone();
+                    return error::PauseTimeout { name, timeout }.fail();
+                }
+            }
+        }
+        if reports.pause_failed {
+            let name = self.name.clone();
+            return error::PauseFailed { name }.fail();
         }
         Ok(())
     }
@@ -516,6 +595,13 @@ pub trait ActiveBackend<D: Virtio> {
     fn queues(&mut self) -> &mut [Option<Queue<Self::Q>>];
     fn handle_event(&mut self, dev: &mut D, event: &Self::Event) -> Result<()>;
     fn handle_queue(&mut self, dev: &mut D, index: u16) -> Result<()>;
+    /// Ends the requests in flight, so that nothing accesses the queues or
+    /// the buffers of the guest afterwards.
+    ///
+    /// Returns `false` if a wake event arrived before all of them ended.
+    fn pause(&mut self, dev: &mut D) -> Result<bool>;
+    /// Continues the requests that [`pause`](Self::pause) stopped.
+    fn resume(&mut self, dev: &mut D) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -529,6 +615,8 @@ where
     /// The reset being handled, acknowledged once the worker no longer uses
     /// the queues.
     reset_seq: Option<u64>,
+    /// The pause that the worker has not answered yet.
+    pause_seq: Option<u64>,
     /// The guest memory generation the queues were last moved to, or `None`
     /// at the start of an event loop.
     ram_generation: Option<u64>,
@@ -549,31 +637,113 @@ where
         self.report(WorkerReport::ResetDone { seq });
     }
 
+    fn request_reset(&mut self, seq: u64) {
+        log::info!("{}: reset requested", self.dev.name());
+        self.state = WorkerState::Pending;
+        self.reset_seq = Some(seq);
+    }
+
     fn handle_wake_events<B>(&mut self, backend: &mut B) -> Result<()>
     where
         B: ActiveBackend<D>,
     {
-        while let Ok(event) = self.param.event_rx.try_recv() {
+        // Whether the backend has stopped requests for a pause.
+        let mut stopped = false;
+        while self.state == WorkerState::Running {
+            while let Ok(event) = self.param.event_rx.try_recv() {
+                match event {
+                    WakeEvent::Notify { q_index } => {
+                        backend.handle_queue(&mut self.dev, q_index)?
+                    }
+                    WakeEvent::Shutdown => {
+                        self.state = WorkerState::Shutdown;
+                        return Ok(());
+                    }
+                    WakeEvent::Start { .. } => {
+                        log::error!("{}: device has already started", self.dev.name())
+                    }
+                    #[cfg(target_os = "linux")]
+                    WakeEvent::VuChannel { channel } => self.dev.set_vu_channel(channel),
+                    WakeEvent::Reset { seq } => {
+                        self.request_reset(seq);
+                        return Ok(());
+                    }
+                    WakeEvent::Pause { seq } => self.pause_seq = Some(seq),
+                    // The pause is called off before the worker completed it.
+                    WakeEvent::Resume => self.pause_seq = None,
+                }
+            }
+            let Some(seq) = self.pause_seq else {
+                if stopped {
+                    backend.resume(&mut self.dev)?;
+                }
+                break;
+            };
+            stopped = true;
+            // A new wake event may call off the pause, or end the event loop.
+            if !backend.pause(&mut self.dev)? {
+                continue;
+            }
+            self.pause_seq = None;
+            if let Err(e) = self.dev.pause() {
+                log::error!("{}: failed to pause: {e:?}", self.dev.name());
+                self.report(WorkerReport::PauseFailed { seq });
+                continue;
+            }
+            log::debug!("{}: pause {seq} completed", self.dev.name());
+            self.report(WorkerReport::Paused { seq });
+            // The backend continues once the device resumes.
+            self.wait_resume(backend)?;
+            stopped = false;
+        }
+        Ok(())
+    }
+
+    /// Blocks a paused worker until the device resumes, or until a reset or
+    /// a shutdown ends the event loop.
+    ///
+    /// The worker does not look at its other event sources meanwhile, so
+    /// what arrives there is handled after the device resumes.
+    fn wait_resume<B>(&mut self, backend: &mut B) -> Result<()>
+    where
+        B: ActiveBackend<D>,
+    {
+        loop {
+            let Ok(event) = self.param.event_rx.recv() else {
+                // The transport is gone.
+                self.state = WorkerState::Shutdown;
+                return Ok(());
+            };
             match event {
-                WakeEvent::Notify { q_index } => backend.handle_queue(&mut self.dev, q_index)?,
+                WakeEvent::Resume => {
+                    log::debug!("{}: resumed", self.dev.name());
+                    self.dev.resume()?;
+                    return backend.resume(&mut self.dev);
+                }
+                // The device is paused already.
+                WakeEvent::Pause { seq } => self.report(WorkerReport::Paused { seq }),
+                WakeEvent::Reset { seq } => {
+                    self.request_reset(seq);
+                    return Ok(());
+                }
                 WakeEvent::Shutdown => {
                     self.state = WorkerState::Shutdown;
-                    break;
+                    return Ok(());
                 }
                 WakeEvent::Start { .. } => {
                     log::error!("{}: device has already started", self.dev.name())
                 }
                 #[cfg(target_os = "linux")]
                 WakeEvent::VuChannel { channel } => self.dev.set_vu_channel(channel),
-                WakeEvent::Reset { seq } => {
-                    log::info!("{}: reset requested", self.dev.name());
-                    self.state = WorkerState::Pending;
-                    self.reset_seq = Some(seq);
-                    break;
+                // No vCPU runs while the devices are paused.
+                WakeEvent::Notify { q_index } => {
+                    log::error!(
+                        "{}: driver notified queue {q_index} of a paused device",
+                        self.dev.name()
+                    )
                 }
             }
         }
-        Ok(())
     }
 
     fn wait_start(&mut self) -> Option<StartParam<S>> {
@@ -581,6 +751,9 @@ where
             match wake_event {
                 // The device has not started, so there is nothing to reset.
                 WakeEvent::Reset { seq } => self.ack_reset(seq),
+                // Neither is there anything to pause.
+                WakeEvent::Pause { seq } => self.report(WorkerReport::Paused { seq }),
+                WakeEvent::Resume => {}
                 WakeEvent::Start { param } => {
                     self.state = WorkerState::Running;
                     self.ram_generation = None;
@@ -642,6 +815,7 @@ where
                 param,
                 state: WorkerState::Pending,
                 reset_seq: None,
+                pause_seq: None,
                 ram_generation: None,
             },
             backend,
@@ -716,6 +890,10 @@ where
             // snapshot by now.
             if let Some(seq) = self.context.reset_seq.take() {
                 self.context.ack_reset(seq);
+            }
+            // That also completes a pause that the event loop left behind.
+            if let Some(seq) = self.context.pause_seq.take() {
+                self.context.report(WorkerReport::Paused { seq });
             }
         }
         log::debug!("worker {}: done", self.context.dev.name())

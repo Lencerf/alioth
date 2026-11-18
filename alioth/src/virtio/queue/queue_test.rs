@@ -627,6 +627,51 @@ fn test_handle_desc_chain_in_flight() {
     assert_matches!(guest_q.get_used(), Some(UsedDesc { id: i, len: 16, .. }) if i == id);
 }
 
+#[test]
+fn test_retry_deferred() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let ram = ram_bus.load();
+    let reg = &queues[0];
+    let mut host_q = Queue::<SplitQueue>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    let mut guest_q = GuestQueue::new(SplitQueue::new(reg, &ram, false).unwrap().unwrap(), reg);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+
+    let id = guest_q.add_desc(&[], &[(DATA_ADDR, 16)]);
+    host_q
+        .handle_desc(0, &irq_sender, |_| Ok(Status::Deferred))
+        .unwrap();
+    assert_eq!(host_q.deferred_ids().collect::<Vec<_>>(), [id]);
+
+    // The queue keeps a chain that the device defers again.
+    host_q
+        .retry_deferred(id, 0, &irq_sender, |chain| {
+            assert_eq!(chain.id(), id);
+            Ok(Status::Deferred)
+        })
+        .unwrap();
+    assert_eq!(host_q.deferred_ids().collect::<Vec<_>>(), [id]);
+    assert_matches!(irq_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(guest_q.get_used(), None);
+
+    // A chain that the device completes this time is used.
+    host_q
+        .retry_deferred(id, 0, &irq_sender, |chain| {
+            let len = chain.writable[0].len() as u32;
+            Ok(Status::Done { len })
+        })
+        .unwrap();
+    assert_eq!(host_q.deferred_ids().count(), 0);
+    assert_eq!(irq_rx.try_recv(), Ok(0));
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id: i, len: 16, .. }) if i == id);
+
+    let ret = host_q.retry_deferred(id, 0, &irq_sender, |_| Ok(Status::Deferred));
+    assert_matches!(ret, Err(Error::InvalidDescriptor { id: i, .. }) if i == id);
+}
+
 #[rstest]
 #[case(false)]
 #[case(true)]

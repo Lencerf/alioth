@@ -250,6 +250,14 @@ impl Virtio for Net {
         self.feature.bits() | FEATURE_BUILT_IN
     }
 
+    fn pause(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
     where
         S: IrqSender,

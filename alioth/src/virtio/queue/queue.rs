@@ -227,6 +227,38 @@ where
         }
     }
 
+    /// Returns the IDs of the chains the device has not completed.
+    pub fn deferred_ids(&self) -> impl Iterator<Item = u16> + '_ {
+        self.deferred.keys().copied()
+    }
+
+    /// Hands chain `id`, which the device has not completed, to `op` again,
+    /// e.g. to submit a request that was cancelled.
+    pub fn retry_deferred(
+        &mut self,
+        id: u16,
+        q_index: u16,
+        irq_sender: &impl IrqSender,
+        mut op: impl FnMut(&mut DescChain) -> Result<Status>,
+    ) -> Result<()> {
+        let Some(deferred) = self.deferred.get_mut(&id) else {
+            return error::InvalidDescriptor { id }.fail();
+        };
+        let Status::Done { len } = op(&mut deferred.chain)? else {
+            return Ok(());
+        };
+        let Some(deferred) = self.deferred.remove(&id) else {
+            return Ok(());
+        };
+        let delta = deferred.chain.delta;
+        self.push_used(deferred.chain, len);
+        fence(Ordering::SeqCst);
+        if self.q.interrupt_enabled(self.used, delta) {
+            irq_sender.queue_irq(q_index);
+        }
+        Ok(())
+    }
+
     pub fn desc_avail(&self) -> bool {
         self.q.desc_avail(self.avail)
     }

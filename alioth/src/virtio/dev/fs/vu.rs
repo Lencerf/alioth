@@ -45,7 +45,7 @@ use crate::virtio::vu::conn::VuChannel;
 use crate::virtio::vu::frontend::VuFrontend;
 use crate::virtio::vu::{Error, error as vu_error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{DeviceId, IrqSender, Result};
+use crate::virtio::{DeviceId, IrqSender, Result, error as virtio_error};
 
 #[derive(Debug)]
 pub struct VuFs {
@@ -147,6 +147,14 @@ impl Virtio for VuFs {
 
     fn num_queues(&self) -> u16 {
         self.frontend.num_queues()
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        virtio_error::PauseUnsupported.fail()
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>

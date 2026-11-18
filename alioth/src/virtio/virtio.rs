@@ -85,6 +85,12 @@ pub enum Error {
     InvalidMtu { mtu: u16 },
     #[snafu(display("{name}: device did not complete reset within {timeout:?}"))]
     ResetTimeout { name: Arc<str>, timeout: Duration },
+    #[snafu(display("{name}: device did not pause within {timeout:?}"))]
+    PauseTimeout { name: Arc<str>, timeout: Duration },
+    #[snafu(display("{name}: device failed to pause"))]
+    PauseFailed { name: Arc<str> },
+    #[snafu(display("Cannot stop the backend that serves the queues"))]
+    PauseUnsupported,
     #[cfg(target_os = "linux")]
     #[snafu(display("vhost-user error"), context(false))]
     Vu { source: Box<vu::Error> },

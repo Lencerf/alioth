@@ -17,16 +17,16 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use flume::Sender;
+use flume::{Receiver, Sender};
 use io_uring::cqueue::Entry as Cqe;
 use io_uring::opcode;
 use io_uring::types::Fd;
 
 use crate::ffi;
-use crate::mem::mapped::ArcMemPages;
+use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::entropy::{EntropyConfig, EntropyFeature};
 use crate::virtio::dev::{ActiveBackend, StartParam, Virtio, WakeEvent, WorkerCtl, WorkerParam};
@@ -38,6 +38,8 @@ use crate::virtio::worker::io_uring::{
     ActiveIoUring, BufferAction, IoUring, RING_SIZE, VirtioIoUring,
 };
 use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, VirtioFeature};
+
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A device that reads guest buffers from a pipe with io_uring.
 #[derive(Debug)]
@@ -59,6 +61,14 @@ impl Virtio for PipeReader {
 
     fn name(&self) -> &str {
         "pipe-reader"
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
@@ -227,6 +237,8 @@ fn io_uring_drain_cancels_pending_reads() {
         notifiers: &[],
         shared_count: RING_SIZE - 1,
         submit_counts: Box::new([0]),
+        cancelling: Vec::new(),
+        held: Vec::new(),
     };
     active.submit_buffers(&mut dev, 0).unwrap();
     active.ring.submit().unwrap();
@@ -286,6 +298,8 @@ fn io_uring_request_in_flight_across_layout_change() {
         notifiers: &[],
         shared_count: RING_SIZE - 1,
         submit_counts: Box::new([0]),
+        cancelling: Vec::new(),
+        held: Vec::new(),
     };
     active.submit_buffers(&mut dev, 0).unwrap();
     active.ring.submit().unwrap();
@@ -380,6 +394,238 @@ fn io_uring_reset_test() {
     let seq = ctl.request_reset();
     ctl.wait_reset(seq, Duration::from_secs(5)).unwrap();
     assert_eq!(resets.load(Ordering::Acquire), 2);
+
+    assert!(ctl.wake(WakeEvent::Shutdown));
+    handle.join().unwrap();
+}
+
+/// A pipe reader, and its queue with one chain available.
+struct PipeFixture {
+    ram_bus: Arc<RamBus>,
+    dev: PipeReader,
+    writer: File,
+    submitted: Receiver<u16>,
+    completed: Arc<AtomicUsize>,
+    irq_sender: FakeIrqSender,
+    irq_rx: Receiver<u16>,
+    queues: [Option<Queue<SplitQueue>>; 1],
+    /// The ID of the chain.
+    id: u16,
+}
+
+fn fixture_pipe_reader() -> PipeFixture {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let ram = ram_bus.load();
+    let regs = fixture_queues(1);
+    let mut guest_q = GuestQueue::new(
+        SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(),
+        &regs[0],
+    );
+    let id = guest_q.add_desc(&[], &[(DATA_ADDR, 4 << 10)]);
+
+    let (reader, writer) = pipe();
+    let (submitted_tx, submitted) = flume::unbounded();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let dev = PipeReader {
+        reader,
+        config: Arc::new(EntropyConfig),
+        submitted: submitted_tx,
+        completed: completed.clone(),
+        resets: Arc::default(),
+    };
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let queues = [Queue::<SplitQueue>::new(&regs[0], ram_bus.clone(), false).unwrap()];
+    PipeFixture {
+        ram_bus,
+        dev,
+        writer,
+        submitted,
+        completed,
+        irq_sender: FakeIrqSender { q_tx: irq_tx },
+        irq_rx,
+        queues,
+        id,
+    }
+}
+
+/// Returns a ring with the read for the chain of `fixture` in flight. The
+/// pipe is empty, so the read does not complete by itself.
+fn fixture_read_in_flight<'a>(
+    queues: &'a mut [Option<Queue<SplitQueue>>],
+    irq_sender: &'a FakeIrqSender,
+    dev: &mut PipeReader,
+) -> ActiveIoUring<'a, SplitQueue, FakeIrqSender> {
+    let mut active = ActiveIoUring {
+        ring: io_uring::IoUring::new(RING_SIZE as u32).unwrap(),
+        queues,
+        irq_sender,
+        notifiers: &[],
+        shared_count: RING_SIZE - 1,
+        submit_counts: Box::new([0]),
+        cancelling: Vec::new(),
+        held: Vec::new(),
+    };
+    active.submit_buffers(dev, 0).unwrap();
+    active.ring.submit().unwrap();
+    assert_eq!(active.submit_counts[0], 1);
+    active
+}
+
+/// Handles completions until the device has completed a chain.
+fn wait_completed(
+    active: &mut ActiveIoUring<'_, SplitQueue, FakeIrqSender>,
+    dev: &mut PipeReader,
+    completed: &AtomicUsize,
+) {
+    while completed.load(Ordering::Relaxed) == 0 {
+        active.ring.submit_and_wait(1).unwrap();
+        let cqe = active.ring.completion().next().unwrap();
+        active.handle_event(dev, &cqe).unwrap();
+    }
+}
+
+#[test]
+fn io_uring_pause_resubmits_pending_reads() {
+    let mut f = fixture_pipe_reader();
+    let mut active = fixture_read_in_flight(&mut f.queues, &f.irq_sender, &mut f.dev);
+    assert_eq!(f.submitted.try_recv(), Ok(f.id));
+
+    // The pause cancels the read, and the chain stays with the queue.
+    assert!(active.pause(&mut f.dev).unwrap());
+    assert_eq!(active.submit_counts[0], 0);
+    assert_eq!(active.held, [(0, f.id)]);
+    assert_eq!(f.completed.load(Ordering::Relaxed), 0);
+    assert!(f.irq_rx.try_recv().is_err());
+
+    // Nothing reads the pipe while the device is paused.
+    let s = b"written while paused";
+    let sentinel = [0xa5u8; 20];
+    f.ram_bus.write(DATA_ADDR, &sentinel).unwrap();
+    f.writer.write_all(s).unwrap();
+    thread::sleep(Duration::from_millis(50));
+    let mut guest_buf = [0u8; 20];
+    f.ram_bus.read(DATA_ADDR, &mut guest_buf).unwrap();
+    assert_eq!(guest_buf, sentinel);
+
+    // The resume submits the read again, which completes the chain.
+    active.resume(&mut f.dev).unwrap();
+    assert_eq!(f.submitted.try_recv(), Ok(f.id));
+    assert!(active.held.is_empty());
+    wait_completed(&mut active, &mut f.dev, &f.completed);
+    f.ram_bus.read(DATA_ADDR, &mut guest_buf).unwrap();
+    assert_eq!(&guest_buf, s);
+    assert_eq!(f.irq_rx.try_recv(), Ok(0));
+    assert_eq!(active.submit_counts[0], 0);
+}
+
+#[test]
+fn io_uring_pause_interrupted_by_wake_event() {
+    let mut f = fixture_pipe_reader();
+    let mut active = fixture_read_in_flight(&mut f.queues, &f.irq_sender, &mut f.dev);
+
+    // A completion that belongs neither to a chain nor to a queue comes
+    // from the notifier of the worker.
+    let nop = opcode::Nop::new().build().user_data(1 << 63);
+    unsafe { active.ring.submission().push(&nop) }.unwrap();
+    assert!(!active.pause(&mut f.dev).unwrap());
+
+    // The worker looks at its wake events, and goes on with the pause.
+    assert!(active.pause(&mut f.dev).unwrap());
+    assert_eq!(active.submit_counts[0], 0);
+    assert_eq!(active.held, [(0, f.id)]);
+    assert!(active.cancelling.is_empty());
+}
+
+#[test]
+fn io_uring_pause_called_off() {
+    let mut f = fixture_pipe_reader();
+    let mut active = fixture_read_in_flight(&mut f.queues, &f.irq_sender, &mut f.dev);
+    assert_eq!(f.submitted.try_recv(), Ok(f.id));
+
+    // The pause is called off after the read is cancelled, so the event
+    // loop gets the result of the read.
+    active.cancel_requests().unwrap();
+    assert_eq!(active.cancelling, [(0, f.id)]);
+    while active.submit_counts[0] == 1 && f.submitted.is_empty() {
+        active.ring.submit_and_wait(1).unwrap();
+        let cqe = active.ring.completion().next().unwrap();
+        active.handle_event(&mut f.dev, &cqe).unwrap();
+    }
+
+    // It submits the read again instead of completing the chain.
+    assert_eq!(f.submitted.try_recv(), Ok(f.id));
+    assert_eq!(active.submit_counts[0], 1);
+    assert!(active.cancelling.is_empty());
+    assert!(active.held.is_empty());
+    assert_eq!(f.completed.load(Ordering::Relaxed), 0);
+
+    f.writer.write_all(b"data").unwrap();
+    wait_completed(&mut active, &mut f.dev, &f.completed);
+    assert_eq!(f.irq_rx.try_recv(), Ok(0));
+}
+
+#[test]
+fn io_uring_worker_pause_resume() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let regs: Arc<[QueueReg]> = Arc::from(fixture_queues(1));
+
+    let (reader, mut writer) = pipe();
+    let (submitted_tx, submitted_rx) = flume::unbounded();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let dev = PipeReader {
+        reader,
+        config: Arc::new(EntropyConfig),
+        submitted: submitted_tx,
+        completed: completed.clone(),
+        resets: Arc::default(),
+    };
+
+    let (tx, rx) = flume::unbounded();
+    let (report_tx, report_rx) = flume::unbounded();
+    let (handle, notifier) = dev
+        .spawn_worker(WorkerParam {
+            event_rx: rx,
+            report_tx,
+            memory: ram_bus.clone(),
+            queue_regs: regs.clone(),
+        })
+        .unwrap();
+    let ctl = WorkerCtl::new("pipe-reader".into(), tx, notifier, report_rx);
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let param = StartParam {
+        feature: VirtioFeature::VERSION_1.bits(),
+        irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
+        notifiers: Option::<Arc<[Notifier]>>::None,
+    };
+    assert!(ctl.wake(WakeEvent::Start { param }));
+
+    // The pipe is empty, so the read stays in flight.
+    let ram = ram_bus.load();
+    let mut guest_q = GuestQueue::new(
+        SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(),
+        &regs[0],
+    );
+    let id = guest_q.add_desc(&[], &[(DATA_ADDR, 4 << 10)]);
+    assert!(ctl.wake(WakeEvent::Notify { q_index: 0 }));
+    assert_eq!(submitted_rx.recv_timeout(TIMEOUT), Ok(id));
+
+    // The worker pauses, although the read never completes by itself.
+    let seq = ctl.request_pause();
+    ctl.wait_pause(seq, TIMEOUT).unwrap();
+
+    // A paused worker leaves the pipe and the queue alone.
+    let s = b"written while paused";
+    writer.write_all(s).unwrap();
+    assert!(irq_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert_eq!(completed.load(Ordering::Relaxed), 0);
+
+    // It reads the pipe again once the device resumes.
+    assert!(ctl.wake(WakeEvent::Resume));
+    assert_eq!(submitted_rx.recv_timeout(TIMEOUT), Ok(id));
+    assert_eq!(irq_rx.recv_timeout(TIMEOUT), Ok(0));
+    let mut guest_buf = [0u8; 20];
+    ram_bus.read(DATA_ADDR, &mut guest_buf).unwrap();
+    assert_eq!(&guest_buf, s);
 
     assert!(ctl.wake(WakeEvent::Shutdown));
     handle.join().unwrap();

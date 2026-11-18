@@ -19,6 +19,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use assert_matches::assert_matches;
+use flume::{Receiver, Sender};
 use mio::event::Event;
 use mio::{Events, Interest, Poll, Registry, Token};
 
@@ -69,6 +70,12 @@ struct FakeDev {
     activations: Arc<AtomicU32>,
     /// Counts the calls to [`VirtioMio::reset`].
     resets: Arc<AtomicU32>,
+    /// Makes [`Virtio::pause`] fail, like a backend that cannot be stopped.
+    fail_pause: Arc<AtomicBool>,
+    /// Counts the successful calls to [`Virtio::pause`].
+    pauses: Arc<AtomicU32>,
+    /// Counts the calls to [`Virtio::resume`].
+    resumes: Arc<AtomicU32>,
 }
 
 impl Virtio for FakeDev {
@@ -97,6 +104,19 @@ impl Virtio for FakeDev {
 
     fn feature(&self) -> u128 {
         0
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        if self.fail_pause.load(Ordering::Acquire) {
+            return error::PauseUnsupported.fail();
+        }
+        self.pauses.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        self.resumes.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
@@ -189,6 +209,9 @@ struct TestWorker {
     fail_activate: Arc<AtomicBool>,
     activations: Arc<AtomicU32>,
     resets: Arc<AtomicU32>,
+    fail_pause: Arc<AtomicBool>,
+    pauses: Arc<AtomicU32>,
+    resumes: Arc<AtomicU32>,
 }
 
 impl TestWorker {
@@ -205,6 +228,9 @@ impl TestWorker {
         let fail_activate = dev.fail_activate.clone();
         let activations = dev.activations.clone();
         let resets = dev.resets.clone();
+        let fail_pause = dev.fail_pause.clone();
+        let pauses = dev.pauses.clone();
+        let resumes = dev.resumes.clone();
         let (event_tx, event_rx) = flume::unbounded();
         let (report_tx, report_rx) = flume::unbounded();
         let param = WorkerParam {
@@ -222,6 +248,9 @@ impl TestWorker {
             fail_activate,
             activations,
             resets,
+            fail_pause,
+            pauses,
+            resumes,
         }
     }
 
@@ -247,6 +276,25 @@ impl TestWorker {
 
     fn resets(&self) -> u32 {
         self.resets.load(Ordering::Acquire)
+    }
+
+    fn pause(&self) {
+        let seq = self.ctl.request_pause();
+        assert_matches!(self.ctl.wait_pause(seq, TIMEOUT), Ok(()));
+    }
+
+    fn pauses(&self) -> u32 {
+        self.pauses.load(Ordering::Acquire)
+    }
+
+    /// Resumes the device, and waits until it has resumed `count` times.
+    fn resume(&self, count: u32) {
+        assert!(self.ctl.wake(WakeEvent::Resume));
+        let deadline = Instant::now() + TIMEOUT;
+        while self.resumes.load(Ordering::Acquire) < count {
+            assert!(Instant::now() < deadline, "device not resumed");
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     fn config_irqs(&self) -> u32 {
@@ -468,6 +516,14 @@ impl ActiveBackend<FakeDev> for SyncCounter {
     fn handle_queue(&mut self, _: &mut FakeDev, _: u16) -> Result<()> {
         Ok(())
     }
+
+    fn pause(&mut self, _: &mut FakeDev) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn resume(&mut self, _: &mut FakeDev) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[test]
@@ -484,6 +540,7 @@ fn test_handle_event_syncs_ram_once_per_layout() {
         },
         state: WorkerState::Running,
         reset_seq: None,
+        pause_seq: None,
         ram_generation: None,
     };
     let mut backend = SyncCounter::default();
@@ -640,4 +697,269 @@ fn test_worker_failure_until_reset() {
     let seq = ctl.request_reset();
     report_tx.send(WorkerReport::ResetDone { seq }).unwrap();
     assert!(!ctl.failed());
+}
+
+#[test]
+fn test_worker_pause_before_start() {
+    let worker = TestWorker::spawn();
+    worker.pause();
+    // The device has not started, so there was nothing to stop.
+    assert_eq!(worker.pauses(), 0);
+
+    // Neither is there anything to resume.
+    assert!(worker.ctl.wake(WakeEvent::Resume));
+    worker.start();
+    worker.wait_activations(1);
+    assert_eq!(worker.resumes.load(Ordering::Acquire), 0);
+    worker.shutdown();
+}
+
+#[test]
+fn test_worker_pause_resume() {
+    let worker = TestWorker::spawn();
+    worker.start();
+    for count in 1..=2 {
+        worker.pause();
+        assert_eq!(worker.pauses(), count);
+        // A paused worker answers another pause without stopping the
+        // device again.
+        worker.pause();
+        assert_eq!(worker.pauses(), count);
+        worker.resume(count);
+    }
+    assert!(!worker.ctl.failed());
+    assert_eq!(worker.resets(), 0);
+    worker.shutdown();
+}
+
+#[test]
+fn test_paused_worker_resets() {
+    let worker = TestWorker::spawn();
+    worker.start();
+    worker.pause();
+    worker.reset();
+    assert_eq!(worker.resets(), 1);
+
+    // The reset ended the pause, so the device starts without a resume.
+    worker.start();
+    worker.wait_activations(2);
+    assert_eq!(worker.resumes.load(Ordering::Acquire), 0);
+
+    // A paused worker shuts down.
+    worker.pause();
+    assert_eq!(worker.pauses(), 2);
+    worker.shutdown();
+}
+
+#[test]
+fn test_worker_answers_pause_before_reset() {
+    let worker = TestWorker::spawn();
+    worker.start();
+    // The worker may see both requests at once, or the reset after it
+    // has paused.
+    let pause_seq = worker.ctl.request_pause();
+    let reset_seq = worker.ctl.request_reset();
+    assert_matches!(worker.ctl.wait_reset(reset_seq, TIMEOUT), Ok(()));
+    assert_matches!(worker.ctl.wait_pause(pause_seq, TIMEOUT), Ok(()));
+    assert_eq!(worker.resets(), 1);
+    worker.shutdown();
+}
+
+#[test]
+fn test_worker_pause_failure() {
+    let worker = TestWorker::spawn();
+    worker.start();
+    worker.fail_pause.store(true, Ordering::Release);
+    let seq = worker.ctl.request_pause();
+    assert_matches!(
+        worker.ctl.wait_pause(seq, TIMEOUT),
+        Err(Error::PauseFailed { .. })
+    );
+    // The device keeps running.
+    assert!(!worker.ctl.failed());
+    assert_eq!(worker.resets(), 0);
+
+    worker.fail_pause.store(false, Ordering::Release);
+    worker.pause();
+    assert_eq!(worker.pauses(), 1);
+    worker.shutdown();
+}
+
+#[test]
+fn test_worker_exit_completes_pause() {
+    let worker = TestWorker::spawn();
+    worker.start();
+    let TestWorker { ctl, handle, .. } = worker;
+    assert!(ctl.wake(WakeEvent::Shutdown));
+    handle.join().unwrap();
+
+    // An exited worker no longer uses the queues.
+    let seq = ctl.request_pause();
+    assert_matches!(ctl.wait_pause(seq, TIMEOUT), Ok(()));
+}
+
+#[test]
+fn test_wait_pause_timeout() {
+    let (event_tx, _event_rx) = flume::unbounded();
+    let (report_tx, report_rx) = flume::unbounded();
+    let notifier = Arc::new(Notifier::new().unwrap());
+    let ctl = WorkerCtl::<TestIrqSender>::new("fake".into(), event_tx, notifier, report_rx);
+
+    let seq1 = ctl.request_pause();
+    let seq2 = ctl.request_pause();
+    assert_matches!(
+        ctl.wait_pause(seq1, Duration::from_millis(10)),
+        Err(Error::PauseTimeout { timeout, .. }) if timeout == Duration::from_millis(10)
+    );
+
+    // The answer to a pause also answers the earlier ones.
+    report_tx.send(WorkerReport::Paused { seq: seq2 }).unwrap();
+    assert_matches!(ctl.wait_pause(seq1, Duration::ZERO), Ok(()));
+    assert_matches!(ctl.wait_pause(seq2, Duration::ZERO), Ok(()));
+
+    let seq3 = ctl.request_pause();
+    report_tx
+        .send(WorkerReport::PauseFailed { seq: seq3 })
+        .unwrap();
+    assert_matches!(
+        ctl.wait_pause(seq3, Duration::ZERO),
+        Err(Error::PauseFailed { .. })
+    );
+}
+
+/// A backend whose requests in flight do not end right away: its first
+/// `pause()` is interrupted by `wake`, if any.
+struct SlowBackend {
+    event_tx: Sender<WakeEvent<TestIrqSender>>,
+    wake: Option<WakeEvent<TestIrqSender>>,
+    pauses: u32,
+    resumes: u32,
+}
+
+impl ActiveBackend<FakeDev> for SlowBackend {
+    type Event = DeviceEvent;
+    type Q = SplitQueue;
+
+    fn queues(&mut self) -> &mut [Option<Queue<SplitQueue>>] {
+        &mut []
+    }
+
+    fn handle_event(&mut self, _: &mut FakeDev, _: &DeviceEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_queue(&mut self, _: &mut FakeDev, _: u16) -> Result<()> {
+        Ok(())
+    }
+
+    fn pause(&mut self, _: &mut FakeDev) -> Result<bool> {
+        self.pauses += 1;
+        let Some(event) = self.wake.take() else {
+            return Ok(true);
+        };
+        self.event_tx.send(event).unwrap();
+        Ok(false)
+    }
+
+    fn resume(&mut self, _: &mut FakeDev) -> Result<()> {
+        self.resumes += 1;
+        Ok(())
+    }
+}
+
+type SlowWorker = (
+    Context<FakeDev, TestIrqSender>,
+    SlowBackend,
+    Sender<WakeEvent<TestIrqSender>>,
+    Receiver<WorkerReport>,
+);
+
+/// Returns a running worker context that has pause 1 pending, its
+/// backend, and the other ends of its channels.
+fn fixture_slow_worker(wake: Option<WakeEvent<TestIrqSender>>) -> SlowWorker {
+    let (event_tx, event_rx) = flume::unbounded();
+    let (report_tx, report_rx) = flume::unbounded();
+    let context = Context {
+        dev: FakeDev::default(),
+        param: WorkerParam {
+            event_rx,
+            report_tx,
+            memory: Arc::new(fixture_ram_bus()),
+            queue_regs: Arc::new([]),
+        },
+        state: WorkerState::Running,
+        reset_seq: None,
+        pause_seq: None,
+        ram_generation: None,
+    };
+    let backend = SlowBackend {
+        event_tx: event_tx.clone(),
+        wake,
+        pauses: 0,
+        resumes: 0,
+    };
+    event_tx.send(WakeEvent::Pause { seq: 1 }).unwrap();
+    (context, backend, event_tx, report_rx)
+}
+
+#[test]
+fn test_pause_called_off() {
+    // The transport gives up while the requests in flight end.
+    let (mut context, mut backend, _event_tx, report_rx) =
+        fixture_slow_worker(Some(WakeEvent::Resume));
+    context.handle_wake_events(&mut backend).unwrap();
+
+    // The backend continues the requests that it stopped.
+    assert_eq!((backend.pauses, backend.resumes), (1, 1));
+    assert_eq!(context.dev.pauses.load(Ordering::Acquire), 0);
+    assert_eq!(context.state, WorkerState::Running);
+    assert!(report_rx.try_recv().is_err());
+}
+
+#[test]
+fn test_pause_interrupted_by_reset() {
+    let (mut context, mut backend, _event_tx, report_rx) =
+        fixture_slow_worker(Some(WakeEvent::Reset { seq: 7 }));
+    context.handle_wake_events(&mut backend).unwrap();
+
+    // The event loop ends. The worker answers both requests afterwards.
+    assert_eq!(context.state, WorkerState::Pending);
+    assert_eq!(context.reset_seq, Some(7));
+    assert_eq!(context.pause_seq, Some(1));
+    assert_eq!((backend.pauses, backend.resumes), (1, 0));
+    assert!(report_rx.try_recv().is_err());
+}
+
+#[test]
+fn test_pause_interrupted_by_other_event() {
+    let (mut context, mut backend, event_tx, report_rx) =
+        fixture_slow_worker(Some(WakeEvent::Notify { q_index: 0 }));
+    let resumer = thread::spawn(move || {
+        let report = report_rx.recv_timeout(TIMEOUT);
+        event_tx.send(WakeEvent::Resume).unwrap();
+        report
+    });
+    context.handle_wake_events(&mut backend).unwrap();
+
+    // The worker goes on with the pause, and waits for the resume.
+    assert_eq!(resumer.join().unwrap(), Ok(WorkerReport::Paused { seq: 1 }));
+    assert_eq!((backend.pauses, backend.resumes), (2, 1));
+    assert_eq!(context.dev.pauses.load(Ordering::Acquire), 1);
+    assert_eq!(context.dev.resumes.load(Ordering::Acquire), 1);
+    assert_eq!(context.state, WorkerState::Running);
+}
+
+#[test]
+fn test_pause_fails_in_device() {
+    let (mut context, mut backend, _event_tx, report_rx) = fixture_slow_worker(None);
+    context.dev.fail_pause.store(true, Ordering::Release);
+    context.handle_wake_events(&mut backend).unwrap();
+
+    // The device keeps running, so the backend continues as well.
+    assert_eq!(
+        report_rx.try_recv(),
+        Ok(WorkerReport::PauseFailed { seq: 1 })
+    );
+    assert_eq!((backend.pauses, backend.resumes), (1, 1));
+    assert_eq!(context.state, WorkerState::Running);
 }

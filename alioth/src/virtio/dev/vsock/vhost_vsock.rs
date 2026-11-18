@@ -30,7 +30,7 @@ use crate::virtio::dev::{DevSpec, DeviceId, Virtio, WorkerParam};
 use crate::virtio::queue::VirtQueue;
 use crate::virtio::vhost::{UpdateVsockMem, VhostDev, error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{IrqSender, Result, VirtioFeature};
+use crate::virtio::{IrqSender, Result, VirtioFeature, error as virtio_error};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VhostVsockSpec {
@@ -128,6 +128,14 @@ impl Virtio for VhostVsock {
         Some(Box::new(UpdateVsockMem {
             dev: self.vhost_dev.clone(),
         }))
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        virtio_error::PauseUnsupported.fail()
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>

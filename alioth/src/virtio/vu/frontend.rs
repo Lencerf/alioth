@@ -270,6 +270,14 @@ impl Virtio for VuFrontend {
         (self.device_feature & (DEVICE_FEATURE_MASK | SUPPORTED_VIRTIO_FEATURES)) as u128
     }
 
+    fn pause(&mut self) -> Result<()> {
+        error::PauseUnsupported.fail()
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
     where
         S: IrqSender,
