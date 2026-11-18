@@ -19,6 +19,7 @@ use assert_matches::assert_matches;
 use rstest::rstest;
 use zerocopy::{FromBytes, IntoBytes};
 
+use crate::device::{self, Pause};
 use crate::hv::tests::{RegisteredAddr, TestMsiSender, TestNotifierRegistry};
 use crate::mem::MemRange;
 use crate::mem::emulated::{Action, Mmio};
@@ -140,6 +141,23 @@ fn test_vfio_pci_dev_creation_and_config() {
     // Reset via Pci trait
     assert_matches!(Pci::reset(&dev), Ok(()));
     assert_eq!(mock.resets.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn test_vfio_pci_dev_not_pausable() {
+    let mock = Arc::new(MockVfioDevice::default());
+    mock.add_config(create_mock_pci_config_space());
+
+    let dev = VfioPciDev::new(
+        Arc::from("test-vfio-pci"),
+        mock,
+        TestMsiSender::default(),
+        no_registry(),
+    )
+    .unwrap();
+
+    assert_matches!(dev.pause(), Err(device::Error::NotPausable { .. }));
+    assert_matches!(dev.resume(), Err(device::Error::NotPausable { .. }));
 }
 
 #[test]

@@ -23,7 +23,7 @@ use libc::{PROT_READ, PROT_WRITE};
 use parking_lot::{Mutex, RwLock};
 use zerocopy::{FromBytes, IntoBytes};
 
-use crate::device::Pause;
+use crate::device::{self, Pause};
 use crate::errors::BoxTrace;
 use crate::hv::{IrqFd, MsiSender, NotifierRegistry};
 use crate::mem::emulated::{Action, Mmio, MmioBus};
@@ -436,11 +436,19 @@ where
     msix_table: Arc<MsixTableMmio<M::IrqFd>>,
 }
 
+// The VMM cannot stop a device that is passed through.
 impl<M, D> Pause for VfioPciDev<M, D>
 where
     M: MsiSender,
     D: Device,
 {
+    fn pause(&self) -> device::Result<()> {
+        device::error::NotPausable.fail()
+    }
+
+    fn resume(&self) -> device::Result<()> {
+        device::error::NotPausable.fail()
+    }
 }
 
 impl<M, D> Pci for VfioPciDev<M, D>

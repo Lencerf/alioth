@@ -15,6 +15,7 @@
 use assert_matches::assert_matches;
 use jiff::Timestamp;
 
+use crate::device::Pause;
 use crate::device::clock::tests::TestClock;
 use crate::device::cmos::{Cmos, CmosRegA};
 use crate::mem::emulated::Mmio;
@@ -79,4 +80,12 @@ fn test_cmos_upgrade_in_progress() {
         CmosRegA(reg_a as u8).update_in_progress(),
         "CMOS update should be in progress"
     );
+}
+
+#[test]
+fn test_cmos_pause_resume() {
+    let now = Timestamp::from_nanosecond(1_762_559_098_010_000_000).unwrap();
+    let cmos = Cmos::new(TestClock { now });
+    assert_matches!(cmos.pause(), Ok(()));
+    assert_matches!(cmos.resume(), Ok(()));
 }
