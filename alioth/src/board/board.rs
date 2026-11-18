@@ -42,9 +42,9 @@ use crate::arch::layout::{
     PCIE_MMIO_32_NON_PREFETCHABLE_START, PCIE_MMIO_32_PREFETCHABLE_END,
     PCIE_MMIO_32_PREFETCHABLE_START, RAM_32_SIZE,
 };
-use crate::device::MmioDev;
 #[cfg(target_arch = "x86_64")]
 use crate::device::fw_cfg::FwCfg;
+use crate::device::{MmioDev, Pause};
 use crate::errors::{DebugTrace, trace_error};
 use crate::firmware::acpi::bindings::{
     AcpiMcfgAllocation, AcpiSignature, AcpiTableHeader, AcpiTableMcfg1, AcpiTableRsdp,
@@ -343,6 +343,21 @@ where
             (pcie_mmio_64_start, pcie_mmio_64_start + PCIE_MMIO_64_SIZE),
         ]);
         Ok(())
+    }
+
+    /// Returns every device, with a name that tells it apart.
+    pub(crate) fn devices(&self) -> Vec<(String, Arc<dyn Pause>)> {
+        let mut devices = Vec::<(String, Arc<dyn Pause>)>::new();
+        for (port, dev) in self.io_devs.read().iter() {
+            devices.push((format!("at I/O port {port:#x}"), dev.clone()));
+        }
+        for (addr, dev) in self.mmio_devs.read().iter() {
+            devices.push((format!("at {addr:#x}"), dev.clone()));
+        }
+        for dev in self.pci_bus.segment.devices() {
+            devices.push((dev.name().to_owned(), dev));
+        }
+        devices
     }
 
     pub(crate) fn init_devices(&self) -> Result<()> {

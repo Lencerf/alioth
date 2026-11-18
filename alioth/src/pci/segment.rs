@@ -181,6 +181,11 @@ impl PciSegment {
         }
     }
 
+    /// Returns the devices of the segment.
+    pub fn devices(&self) -> Vec<Arc<dyn Pci>> {
+        self.devices.read().values().cloned().collect()
+    }
+
     pub fn reset(&self) -> Result<()> {
         let devices = self.devices.read();
         for dev in devices.values() {

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 use std::{fs, hint, thread};
 
@@ -23,9 +25,13 @@ use crate::arch::x86_64::msr::MiscEnable;
 use crate::board::{BoardSpec, CpuSpec, CpuTopology};
 use crate::cpu::State;
 use crate::device::console::{ConsoleSpec, LogConsoleSpec};
+use crate::device::{self, Pause};
 use crate::hv::{Kvm, KvmSpec};
 use crate::loader::PayloadSpec;
 use crate::mem::MemSpec;
+use crate::pci::config::PciConfig;
+use crate::pci::pvpanic::PvPanic;
+use crate::pci::{self, Pci};
 use crate::vm::config::VmSpec;
 use crate::vm::{Error, Machine};
 
@@ -527,6 +533,147 @@ fn test_concurrent_pause_resume() {
     vm.pause().unwrap();
     assert_not_counting(&vm);
     vm.resume().unwrap();
+    wait_counting(&vm);
+
+    vm.shutdown().unwrap();
+    vm.wait_stopped();
+    vm.terminate().unwrap();
+}
+
+/// A PCI device that counts how often it pauses and resumes.
+#[derive(Debug)]
+struct TestPciDev {
+    inner: PvPanic,
+    fail_pause: AtomicBool,
+    pauses: AtomicU32,
+    resumes: AtomicU32,
+}
+
+impl TestPciDev {
+    /// Returns how often the device paused and resumed.
+    fn counts(&self) -> (u32, u32) {
+        let pauses = self.pauses.load(Ordering::Acquire);
+        (pauses, self.resumes.load(Ordering::Acquire))
+    }
+}
+
+impl Pause for TestPciDev {
+    fn pause(&self) -> device::Result<()> {
+        if self.fail_pause.load(Ordering::Acquire) {
+            return device::error::NotPausable.fail();
+        }
+        self.pauses.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    fn resume(&self) -> device::Result<()> {
+        self.resumes.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+impl Pci for TestPciDev {
+    fn name(&self) -> &str {
+        "test"
+    }
+
+    fn config(&self) -> &dyn PciConfig {
+        self.inner.config()
+    }
+
+    fn reset(&self) -> pci::Result<()> {
+        self.inner.reset()
+    }
+}
+
+fn add_test_pci_dev(vm: &Machine<Kvm>) -> Arc<TestPciDev> {
+    let dev = Arc::new(TestPciDev {
+        inner: PvPanic::new(),
+        fail_pause: AtomicBool::new(false),
+        pauses: AtomicU32::new(0),
+        resumes: AtomicU32::new(0),
+    });
+    vm.add_pci_dev(None, dev.clone()).unwrap();
+    dev
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_pause_resume_devices() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &COUNT);
+    let dev = add_test_pci_dev(&vm);
+    vm.boot().unwrap();
+    wait_counting(&vm);
+
+    vm.pause().unwrap();
+    assert_eq!(dev.counts(), (1, 0));
+    vm.resume().unwrap();
+    assert_eq!(dev.counts(), (1, 1));
+    wait_counting(&vm);
+
+    // The devices of a paused VM resume before they are reset.
+    vm.pause().unwrap();
+    vm.reboot().unwrap();
+    assert_eq!(dev.counts(), (2, 2));
+    wait_state(&vm, State::Running);
+    wait_counting(&vm);
+
+    vm.pause().unwrap();
+    vm.shutdown().unwrap();
+    assert_eq!(dev.counts(), (3, 3));
+    vm.wait_stopped();
+    vm.terminate().unwrap();
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_pause_device_failure() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &COUNT);
+    let good = add_test_pci_dev(&vm);
+    let bad = add_test_pci_dev(&vm);
+    bad.fail_pause.store(true, Ordering::Release);
+    vm.boot().unwrap();
+    wait_counting(&vm);
+
+    // The VM keeps running, and a device that paused before the failure
+    // resumes.
+    assert_matches!(vm.pause(), Err(Error::PauseDevice { name, .. }) if name == "test");
+    assert_eq!(vm.state(), State::Running);
+    wait_counting(&vm);
+    let (pauses, resumes) = good.counts();
+    assert_eq!(pauses, resumes);
+
+    bad.fail_pause.store(false, Ordering::Release);
+    vm.pause().unwrap();
+    assert_not_counting(&vm);
+    assert_eq!(good.counts(), (pauses + 1, resumes));
+    vm.resume().unwrap();
+    wait_counting(&vm);
+
+    vm.shutdown().unwrap();
+    vm.wait_stopped();
+    vm.terminate().unwrap();
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_pause_passthrough_device() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &COUNT);
+    let dev = add_test_pci_dev(&vm);
+    vm.passthrough.lock().push("vfio-0".into());
+    vm.boot().unwrap();
+    wait_counting(&vm);
+
+    // The VM refuses the pause before it stops anything.
+    assert_matches!(vm.pause(), Err(Error::Passthrough { name, .. }) if &*name == "vfio-0");
+    assert_eq!(vm.state(), State::Running);
+    assert_eq!(dev.counts(), (0, 0));
     wait_counting(&vm);
 
     vm.shutdown().unwrap();

@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, thread};
 
-#[cfg(target_os = "linux")]
 use parking_lot::Mutex;
 use snafu::{ResultExt, Snafu};
 
@@ -31,7 +30,6 @@ use crate::arch::layout::{PL011_START, PL031_START};
 use crate::arch::layout::{PORT_CMOS_REG, PORT_COM1, PORT_FW_CFG_SELECTOR, PORT_FWDBG};
 use crate::board::{Board, BoardSpec};
 use crate::cpu::{self, Context, State, VcpuHandle};
-use crate::device::MmioDev;
 use crate::device::clock::SystemClock;
 #[cfg(target_arch = "x86_64")]
 use crate::device::cmos::Cmos;
@@ -46,6 +44,7 @@ use crate::device::pl011::Pl011;
 use crate::device::pl031::Pl031;
 #[cfg(target_arch = "x86_64")]
 use crate::device::serial::Serial;
+use crate::device::{MmioDev, Pause};
 use crate::errors::{DebugTrace, trace_error};
 use crate::hv::{self, Hypervisor, Vm};
 use crate::loader::PayloadSpec;
@@ -125,6 +124,13 @@ pub enum Error {
     },
     #[snafu(display("The VM changed to {state:?} before it paused"))]
     PauseInterrupted { state: State },
+    #[snafu(display("Cannot pause a VM with the passed-through device {name}"))]
+    Passthrough { name: Arc<str> },
+    #[snafu(display("Failed to pause device {name}"))]
+    PauseDevice {
+        name: String,
+        source: Box<crate::device::Error>,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -134,6 +140,11 @@ where
     H: Hypervisor,
 {
     ctx: Arc<Context<H::Vm>>,
+    /// The names of the devices that are passed through.
+    passthrough: Mutex<Vec<Arc<str>>>,
+    /// Whether the devices are paused. Held by the thread that pauses or
+    /// resumes them.
+    devices_paused: Mutex<bool>,
 
     #[cfg(target_os = "linux")]
     iommu: Mutex<Option<Arc<Iommu>>>,
@@ -153,6 +164,8 @@ where
         // On errors, dropping `vm` ends the vCPU threads created so far.
         let vm = Machine {
             ctx: Arc::new(Context::new(Board::new(hv, spec)?)),
+            passthrough: Mutex::new(Vec::new()),
+            devices_paused: Mutex::new(false),
             #[cfg(target_os = "linux")]
             iommu: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -526,8 +539,7 @@ where
         )?;
         let none = None::<<H::Vm as Vm>::NotifierRegistry>;
         let dev = VfioPciDev::new(name.clone(), cdev, msi_sender, none)?;
-        self.add_pci_dev(Some(bdf), Arc::new(dev))?;
-        Ok(())
+        self.add_vfio_pci_dev(bdf, name, Arc::new(dev))
     }
 
     #[cfg(target_os = "linux")]
@@ -548,7 +560,7 @@ where
         )?;
         let registry = self.create_notifier_registry(&name)?;
         let dev = VfioPciDev::new(name.clone(), dev, msi_sender, registry)?;
-        self.add_pci_dev(Some(bdf), Arc::new(dev))?;
+        self.add_vfio_pci_dev(bdf, name, Arc::new(dev))?;
 
         let update = Box::new(UpdateVfioUserMapping::new(session.clone()));
         self.ctx.board.memory.register_change_callback(update)?;
@@ -615,7 +627,14 @@ where
         )?;
         let none = None::<<H::Vm as Vm>::NotifierRegistry>;
         let dev = VfioPciDev::new(name.clone(), devfd, msi_sender, none)?;
-        self.add_pci_dev(Some(bdf), Arc::new(dev))
+        self.add_vfio_pci_dev(bdf, name, Arc::new(dev))
+    }
+
+    fn add_vfio_pci_dev(&self, bdf: Bdf, name: Arc<str>, dev: Arc<dyn Pci>) -> Result<()> {
+        self.add_pci_dev(Some(bdf), dev)?;
+        // The VMM cannot stop a device that is passed through, see `pause()`.
+        self.passthrough.lock().push(name);
+        Ok(())
     }
 }
 
@@ -637,16 +656,74 @@ where
         Ok(())
     }
 
+    /// Resumes the devices of a paused VM, and then the guest.
     pub fn resume(&self) -> Result<()> {
+        let mut devices_paused = self.devices_paused.lock();
         let mut sync = self.ctx.sync.lock();
         check_state(sync.state, &[State::Paused])?;
+        self.resume_devices(&mut devices_paused);
         sync.state = State::Running;
         self.ctx.cond.notify_all();
         Ok(())
     }
 
-    /// Pauses the guest, and returns once no vCPU runs it.
+    /// Pauses all devices. If one of them fails, the devices that paused
+    /// before it resume.
+    fn pause_devices(&self) -> Result<()> {
+        let devices = self.ctx.board.devices();
+        for (index, (name, dev)) in devices.iter().enumerate() {
+            let Err(e) = dev.pause() else {
+                continue;
+            };
+            resume_devices(&devices[..index]);
+            return Err(e).context(error::PauseDevice { name });
+        }
+        Ok(())
+    }
+
+    /// Resumes the devices if they are `paused`.
+    fn resume_devices(&self, paused: &mut bool) {
+        if mem::take(paused) {
+            resume_devices(&self.ctx.board.devices());
+        }
+    }
+
+    /// Pauses the guest and then the devices. Once it returns, no vCPU runs
+    /// the guest, and no device accesses guest memory or sends an
+    /// interrupt.
+    ///
+    /// If a device fails to pause, the VM keeps running.
     pub fn pause(&self) -> Result<()> {
+        // A device that is passed through cannot be stopped, so the VM
+        // does not stop anything else either.
+        if let Some(name) = self.passthrough.lock().first() {
+            return error::Passthrough { name: name.clone() }.fail();
+        }
+        self.pause_vcpus()?;
+
+        let mut devices_paused = self.devices_paused.lock();
+        let sync = self.ctx.sync.lock();
+        // Another thread may have resumed or reset the VM meanwhile.
+        if sync.state != State::Paused {
+            return error::PauseInterrupted { state: sync.state }.fail();
+        }
+        // Until this thread releases `devices_paused`, the VM stays
+        // paused: no vCPU runs, and the VMM waits for the lock.
+        drop(sync);
+        if *devices_paused {
+            return Ok(());
+        }
+        if let Err(e) = self.pause_devices() {
+            self.ctx.sync.lock().state = State::Running;
+            self.ctx.cond.notify_all();
+            return Err(e);
+        }
+        *devices_paused = true;
+        Ok(())
+    }
+
+    /// Pauses the guest, and returns once no vCPU runs it.
+    fn pause_vcpus(&self) -> Result<()> {
         let vcpus = self.ctx.vcpus.read();
         let mut sync = self.ctx.sync.lock();
         check_state(sync.state, &[State::Running])?;
@@ -678,10 +755,13 @@ where
     }
 
     fn request_reset(&self, want: &'static [State], next: State) -> Result<()> {
+        let mut devices_paused = self.devices_paused.lock();
         let vcpus = self.ctx.vcpus.read();
         let mut sync = self.ctx.sync.lock();
         let state = sync.state;
         check_state(state, want)?;
+        // The devices of a paused VM run again before they are reset.
+        self.resume_devices(&mut devices_paused);
         sync.state = next;
         if state == State::Running {
             cpu::stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
@@ -742,6 +822,15 @@ where
         self.wait_stopped();
         if let Err(e) = self.terminate() {
             log::error!("Failed to terminate the VM: {e:?}");
+        }
+    }
+}
+
+/// Resumes `devices`, the last one first.
+fn resume_devices(devices: &[(String, Arc<dyn Pause>)]) {
+    for (name, dev) in devices.iter().rev() {
+        if let Err(e) = dev.resume() {
+            log::error!("Failed to resume device {name}: {e:?}");
         }
     }
 }
