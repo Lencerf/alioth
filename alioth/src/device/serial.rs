@@ -190,7 +190,7 @@ pub struct Serial<M: MsiSender, C> {
     pin: u8,
     reg: Arc<Mutex<SerialReg>>,
     console: Arc<C>,
-    _thread: ConsoleThread,
+    thread: ConsoleThread,
 }
 
 impl<M, C> Mmio for Serial<M, C>
@@ -293,11 +293,12 @@ where
     M: MsiSender,
 {
     fn pause(&self) -> device::Result<()> {
+        self.thread.pause();
         Ok(())
     }
 
     fn resume(&self) -> device::Result<()> {
-        Ok(())
+        self.thread.resume()
     }
 }
 
@@ -356,7 +357,7 @@ where
             pin,
             io_apci,
             console,
-            _thread: thread,
+            thread,
         };
         Ok(serial)
     }

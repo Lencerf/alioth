@@ -360,12 +360,15 @@ pub trait UartRecv: Send + 'static {
 }
 
 const TOKEN_SHUTDOWN: Token = Token(1 << 63);
+const TOKEN_RESUME: Token = Token(1 << 62);
 
 struct ThreadWorker<U, C> {
     name: Arc<str>,
     uart: U,
     console: Arc<C>,
     poll: Poll,
+    /// Whether the thread holds back the input of the console.
+    paused: Arc<Mutex<bool>>,
 }
 
 impl<U, C> ThreadWorker<U, C>
@@ -396,10 +399,15 @@ where
         loop {
             self.poll.poll(&mut events, None)?;
             for event in events.iter() {
-                if event.token() != C::TOKEN_INPUT {
+                if event.token() == TOKEN_SHUTDOWN {
                     return Ok(());
                 }
-                self.read_input()?;
+                // The lock makes `pause()` wait while the UART receives
+                // the input.
+                let paused = self.paused.lock();
+                if !*paused {
+                    self.read_input()?;
+                }
             }
         }
     }
@@ -417,6 +425,8 @@ pub struct ConsoleThread {
     pub name: Arc<str>,
     worker_thread: Option<JoinHandle<()>>,
     exit_notifier: Notifier,
+    resume_notifier: Notifier,
+    paused: Arc<Mutex<bool>>,
 }
 
 impl ConsoleThread {
@@ -430,12 +440,16 @@ impl ConsoleThread {
         let registry = poll.registry();
         let mut notifier = Notifier::new()?;
         registry.register(&mut notifier, TOKEN_SHUTDOWN, Interest::READABLE)?;
+        let mut resume_notifier = Notifier::new()?;
+        registry.register(&mut resume_notifier, TOKEN_RESUME, Interest::READABLE)?;
         console.activate(registry)?;
+        let paused = Arc::new(Mutex::new(false));
         let mut worker = ThreadWorker {
             name: name.clone(),
             uart,
             poll,
             console,
+            paused: paused.clone(),
         };
         let worker_thread = std::thread::Builder::new()
             .name(name.to_string())
@@ -444,8 +458,24 @@ impl ConsoleThread {
             name,
             worker_thread: Some(worker_thread),
             exit_notifier: notifier,
+            resume_notifier,
+            paused,
         };
         Ok(console)
+    }
+
+    /// Holds back the input of the console. The UART receives nothing
+    /// once this returns.
+    pub fn pause(&self) {
+        *self.paused.lock() = true;
+    }
+
+    /// Delivers the input of the console again, including what arrived
+    /// in the meantime.
+    pub fn resume(&self) -> Result<()> {
+        *self.paused.lock() = false;
+        self.resume_notifier.notify()?;
+        Ok(())
     }
 }
 

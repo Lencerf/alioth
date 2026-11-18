@@ -145,7 +145,7 @@ pub struct Pl011<I, C> {
     irq_line: Arc<I>,
     reg: Arc<Mutex<Pl011Reg>>,
     console: Arc<C>,
-    _thread: ConsoleThread,
+    thread: ConsoleThread,
 }
 
 impl<I, C> Pl011<I, C>
@@ -171,7 +171,7 @@ where
             irq_line,
             reg,
             console,
-            _thread: thread,
+            thread,
         };
         Ok(pl011)
     }
@@ -272,11 +272,12 @@ where
     for<'a> &'a C: Read + Write,
 {
     fn pause(&self) -> Result<()> {
+        self.thread.pause();
         Ok(())
     }
 
     fn resume(&self) -> Result<()> {
-        Ok(())
+        self.thread.resume()
     }
 }
 

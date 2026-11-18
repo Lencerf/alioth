@@ -144,6 +144,30 @@ fn test_pty_console() {
 }
 
 #[test]
+fn test_console_thread_pause_resume() {
+    let console = Arc::new(PtyConsole::new(&PtyConsoleSpec::default()).unwrap());
+    let (tx, rx) = flume::unbounded();
+    let thread = ConsoleThread::new("pty".into(), ChannelRecv(tx), console.clone()).unwrap();
+    let mut client = open_slave(console.path());
+
+    // The UART receives nothing while the thread is paused.
+    thread.pause();
+    client.write_all(b"ab").unwrap();
+    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+    // It receives what arrived in the meantime once the thread resumes.
+    thread.resume().unwrap();
+    let mut input = Vec::new();
+    while input.len() < 2 {
+        input.extend(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    }
+    assert_eq!(input, b"ab");
+
+    client.write_all(b"c").unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(b"c".to_vec()));
+}
+
+#[test]
 fn test_pty_console_full() {
     let console = PtyConsole::new(&PtyConsoleSpec::default()).unwrap();
 
