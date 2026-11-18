@@ -83,7 +83,7 @@ pub mod config;
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
-#[snafu(module, context(suffix(false)))]
+#[snafu(module, visibility(pub(crate)), context(suffix(false)))]
 pub enum Error {
     #[snafu(display("Hypervisor internal error"), context(false))]
     HvError { source: Box<crate::hv::Error> },

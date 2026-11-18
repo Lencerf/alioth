@@ -46,6 +46,9 @@ pub enum Code {
     NotFound,
     /// A VM with the requested ID already exists.
     AlreadyExists,
+    /// The request lost a race against another change to the VM, e.g. a
+    /// pause against a reboot by the guest. It can be retried.
+    Aborted,
     /// The method is not supported, e.g. Create by `alioth boot --api`.
     Unimplemented,
     /// alioth failed to handle the request.
@@ -58,7 +61,7 @@ impl Code {
         match self {
             Code::InvalidArgument | Code::FailedPrecondition => 400,
             Code::NotFound => 404,
-            Code::AlreadyExists => 409,
+            Code::AlreadyExists | Code::Aborted => 409,
             Code::Unimplemented => 501,
             Code::Internal => 500,
         }
@@ -111,9 +114,24 @@ fn chain(error: &dyn StdError) -> String {
 impl From<vm::Error> for Error {
     fn from(error: vm::Error) -> Self {
         match error {
+            // `VmState` does not tell a VM that reboots from one that
+            // runs, which a VM that cannot pause needs.
+            vm::Error::UnexpectedState {
+                state: State::RebootPending,
+                ..
+            } => Error::new(Code::FailedPrecondition, "the VM is rebooting"),
             vm::Error::UnexpectedState { state, .. } => {
                 let state = VmState::from(state);
                 Error::new(Code::FailedPrecondition, format!("the VM is {state}"))
+            }
+            vm::Error::Passthrough { name, .. } => {
+                let message = format!("device {name} is passed through, and cannot be paused");
+                Error::new(Code::FailedPrecondition, message)
+            }
+            vm::Error::PauseInterrupted { state, .. } => {
+                let state = VmState::from(state);
+                let message = format!("the VM changed to {state} before it paused");
+                Error::new(Code::Aborted, message)
             }
             error => Error::new(Code::Internal, chain(&error)),
         }
@@ -217,6 +235,11 @@ pub trait Instance: Sized + Send + Sync + 'static {
     fn boot(&self) -> Result<()>;
     fn shutdown(&self) -> Result<()>;
     fn reboot(&self) -> Result<()>;
+    /// Pauses a running VM, and returns after the guest and the devices
+    /// stopped.
+    fn pause(&self) -> Result<()>;
+    /// Resumes a paused VM.
+    fn resume(&self) -> Result<()>;
     /// Blocks until the VM stops, or fails.
     fn wait_stopped(&self);
     /// Ends a stopped or failed VM.
@@ -249,6 +272,14 @@ where
 
     fn reboot(&self) -> Result<()> {
         Ok(Machine::reboot(self)?)
+    }
+
+    fn pause(&self) -> Result<()> {
+        Ok(Machine::pause(self)?)
+    }
+
+    fn resume(&self) -> Result<()> {
+        Ok(Machine::resume(self)?)
     }
 
     fn wait_stopped(&self) {
@@ -521,6 +552,20 @@ impl<V: Instance> VmManager<V> {
     pub fn reboot(&self, id: &str) -> Result<Vm> {
         let entry = self.live_entry(id)?;
         entry.vm.reboot().map_err(named(id))?;
+        Ok(entry.resource(id))
+    }
+
+    /// Pauses VM `id`, and returns after the guest and the devices stopped.
+    pub fn pause(&self, id: &str) -> Result<Vm> {
+        let entry = self.live_entry(id)?;
+        entry.vm.pause().map_err(named(id))?;
+        Ok(entry.resource(id))
+    }
+
+    /// Resumes VM `id`.
+    pub fn resume(&self, id: &str) -> Result<Vm> {
+        let entry = self.live_entry(id)?;
+        entry.vm.resume().map_err(named(id))?;
         Ok(entry.resource(id))
     }
 

@@ -75,6 +75,14 @@ impl Instance for FakeVm {
         self.transit(&[State::Running], State::Running)
     }
 
+    fn pause(&self) -> Result<(), Error> {
+        self.transit(&[State::Running], State::Paused)
+    }
+
+    fn resume(&self) -> Result<(), Error> {
+        self.transit(&[State::Paused], State::Running)
+    }
+
     fn wait_stopped(&self) {
         let mut state = self.state.lock();
         self.cond.wait_while(&mut state, |s| {
@@ -191,6 +199,17 @@ async fn test_methods() {
 
     let (_, vm) = send(&router, Method::POST, "/v1/vms/vm0:reboot", None).await;
     assert_eq!(vm["state"], "RUNNING");
+
+    let (status, vm) = send(&router, Method::POST, "/v1/vms/vm0:pause", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vm["state"], "PAUSED");
+    let (status, value) = send(&router, Method::POST, "/v1/vms/vm0:pause", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error(&value, 400, "FAILED_PRECONDITION");
+    let (status, vm) = send(&router, Method::POST, "/v1/vms/vm0:resume", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vm["state"], "RUNNING");
+
     let (_, vm) = send(&router, Method::POST, "/v1/vms/vm0:shutdown", None).await;
     assert_eq!(vm["state"], "STOPPED");
 }
@@ -203,6 +222,10 @@ async fn test_alias() {
     let (_, vm) = send(&router, Method::GET, "/v1/vm", None).await;
     assert_eq!(vm["name"], "vms/vm0");
     let (_, vm) = send(&router, Method::POST, "/v1/vm:boot", None).await;
+    assert_eq!(vm["state"], "RUNNING");
+    let (_, vm) = send(&router, Method::POST, "/v1/vm:pause", None).await;
+    assert_eq!(vm["state"], "PAUSED");
+    let (_, vm) = send(&router, Method::POST, "/v1/vm:resume", None).await;
     assert_eq!(vm["state"], "RUNNING");
     let (_, vm) = send(&router, Method::POST, "/v1/vm:shutdown", None).await;
     assert_eq!(vm["state"], "STOPPED");
@@ -245,7 +268,7 @@ async fn test_method_not_allowed() {
     assert_eq!(status, StatusCode::OK);
 
     // POST on a VM needs a custom method that exists.
-    for uri in ["/v1/vms/vm0", "/v1/vms/vm0:pause"] {
+    for uri in ["/v1/vms/vm0", "/v1/vms/vm0:hibernate"] {
         let (status, allow, value) = send_full(&router, Method::POST, uri, None).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(allow.as_deref(), Some("GET,HEAD,DELETE"));

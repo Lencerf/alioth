@@ -25,6 +25,7 @@ use crate::api::{Code, Error, Instance, ListVmsRequest, Result, Vm, VmManager, V
 use crate::cpu::State;
 use crate::device::console::{ConsoleSpec, PtyConsoleSpec};
 use crate::loader::{Executable, PayloadSpec};
+use crate::vm;
 use crate::vm::config::VmSpec;
 
 #[derive(Debug)]
@@ -113,6 +114,14 @@ impl<const MAX: usize> Instance for FakeVm<MAX> {
     fn reboot(&self) -> Result<()> {
         let want = &[State::Running, State::Paused, State::RebootPending];
         self.state.transit(want, State::Running)
+    }
+
+    fn pause(&self) -> Result<()> {
+        self.state.transit(&[State::Running], State::Paused)
+    }
+
+    fn resume(&self) -> Result<()> {
+        self.state.transit(&[State::Paused], State::Running)
     }
 
     fn wait_stopped(&self) {
@@ -442,11 +451,69 @@ fn test_delete() {
     );
 }
 
+#[test]
+fn test_pause_resume() {
+    let manager = fixture_manager();
+    manager.create(None, fixture_spec(pty())).unwrap();
+
+    let err = manager.pause("vm0").unwrap_err();
+    assert_eq!(err.status, Code::FailedPrecondition);
+    assert_eq!(err.message, "vms/vm0: the VM is STOPPED");
+    manager.boot("vm0").unwrap();
+    assert_matches!(
+        manager.resume("vm0"),
+        Err(Error {
+            status: Code::FailedPrecondition,
+            ..
+        })
+    );
+
+    assert_eq!(manager.pause("vm0").unwrap().state, VmState::Paused);
+    let err = manager.pause("vm0").unwrap_err();
+    assert_eq!(err.status, Code::FailedPrecondition);
+    assert_eq!(err.message, "vms/vm0: the VM is PAUSED");
+    assert_eq!(manager.resume("vm0").unwrap().state, VmState::Running);
+
+    // A paused VM shuts down.
+    manager.pause("vm0").unwrap();
+    assert_eq!(manager.shutdown("vm0").unwrap().state, VmState::Stopped);
+    assert_matches!(
+        manager.pause("vm1"),
+        Err(Error {
+            status: Code::NotFound,
+            ..
+        })
+    );
+}
+
+#[test]
+fn test_pause_errors() {
+    let err = Error::from(vm::error::Passthrough { name: "vfio-0" }.build());
+    assert_eq!(err.status, Code::FailedPrecondition);
+    assert_eq!(
+        err.message,
+        "device vfio-0 is passed through, and cannot be paused"
+    );
+
+    let state = State::ShutdownPending;
+    let err = Error::from(vm::error::PauseInterrupted { state }.build());
+    assert_eq!(err.status, Code::Aborted);
+    assert_eq!(err.message, "the VM changed to STOPPING before it paused");
+
+    // A VM that reboots is reported as running, but cannot pause.
+    let want: &'static [State] = &[State::Running];
+    let state = State::RebootPending;
+    let err = Error::from(vm::error::UnexpectedState { state, want }.build());
+    assert_eq!(err.status, Code::FailedPrecondition);
+    assert_eq!(err.message, "the VM is rebooting");
+}
+
 #[rstest]
 #[case(Code::InvalidArgument, 400)]
 #[case(Code::FailedPrecondition, 400)]
 #[case(Code::NotFound, 404)]
 #[case(Code::AlreadyExists, 409)]
+#[case(Code::Aborted, 409)]
 #[case(Code::Unimplemented, 501)]
 #[case(Code::Internal, 500)]
 fn test_http_status(#[case] code: Code, #[case] status: u16) {
@@ -481,6 +548,8 @@ fn test_kvm() {
 
     manager.create(None, fixture_spec(&firmware)).unwrap();
     assert_eq!(manager.boot("vm0").unwrap().state, VmState::Running);
+    assert_eq!(manager.pause("vm0").unwrap().state, VmState::Paused);
+    assert_eq!(manager.resume("vm0").unwrap().state, VmState::Running);
     assert_eq!(manager.reboot("vm0").unwrap().state, VmState::Running);
     assert_eq!(manager.shutdown("vm0").unwrap().state, VmState::Stopped);
 

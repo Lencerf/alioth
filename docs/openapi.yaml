@@ -131,6 +131,11 @@ components:
         - const: ALREADY_EXISTS
           description: "A VM with the requested ID already exists."
           type: string
+        - const: ABORTED
+          description: |-
+            The request lost a race against another change to the VM, e.g. a
+            pause against a reboot by the guest. It can be retried.
+          type: string
         - const: UNIMPLEMENTED
           description: "The method is not supported, e.g. Create by `alioth boot --api`."
           type: string
@@ -808,6 +813,23 @@ paths:
         "5XX":
           "$ref": "#/components/responses/Error"
       summary: "Boots a stopped VM."
+  "/v1/vms/{vm}:pause":
+    parameters:
+      - "$ref": "#/components/parameters/vm"
+    post:
+      operationId: PauseVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Pauses a running VM, and returns after the guest and the devices stopped."
   "/v1/vms/{vm}:reboot":
     parameters:
       - "$ref": "#/components/parameters/vm"
@@ -825,6 +847,23 @@ paths:
         "5XX":
           "$ref": "#/components/responses/Error"
       summary: "Reboots a VM."
+  "/v1/vms/{vm}:resume":
+    parameters:
+      - "$ref": "#/components/parameters/vm"
+    post:
+      operationId: ResumeVm
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Vm"
+          description: OK
+        "4XX":
+          "$ref": "#/components/responses/Error"
+        "5XX":
+          "$ref": "#/components/responses/Error"
+      summary: "Resumes a paused VM."
   "/v1/vms/{vm}:shutdown":
     parameters:
       - "$ref": "#/components/parameters/vm"

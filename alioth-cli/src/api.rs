@@ -196,6 +196,22 @@ async fn reboot_vm<V: Instance>(
     call(manager, move |m| m.reboot(&id)).await
 }
 
+async fn pause_vm<V: Instance>(
+    State(manager): State<Manager<V>>,
+    id: VmId,
+) -> Result<Json<Vm>, ApiError> {
+    let id = vm_id(id)?;
+    call(manager, move |m| m.pause(&id)).await
+}
+
+async fn resume_vm<V: Instance>(
+    State(manager): State<Manager<V>>,
+    id: VmId,
+) -> Result<Json<Vm>, ApiError> {
+    let id = vm_id(id)?;
+    call(manager, move |m| m.resume(&id)).await
+}
+
 /// Runs a custom method, `POST /v1/vms/{vm}:{verb}`, see AIP-136.
 ///
 /// TODO: route `/v1/vms/{vm}:boot` etc. once axum 0.9 is released. The router
@@ -211,6 +227,8 @@ async fn custom_method<V: Instance>(
         Some((id, "boot")) => boot_vm(manager, vm(id)).await.into_response(),
         Some((id, "shutdown")) => shutdown_vm(manager, vm(id)).await.into_response(),
         Some((id, "reboot")) => reboot_vm(manager, vm(id)).await.into_response(),
+        Some((id, "pause")) => pause_vm(manager, vm(id)).await.into_response(),
+        Some((id, "resume")) => resume_vm(manager, vm(id)).await.into_response(),
         // POST is not a method of the VM itself.
         _ => ([(ALLOW, "GET,HEAD,DELETE")], method_not_allowed().await).into_response(),
     };
@@ -249,6 +267,8 @@ pub fn router<V: Instance>(manager: Manager<V>, create: bool) -> Router {
         .route("/v1/vm:boot", post(boot_vm::<V>))
         .route("/v1/vm:shutdown", post(shutdown_vm::<V>))
         .route("/v1/vm:reboot", post(reboot_vm::<V>))
+        .route("/v1/vm:pause", post(pause_vm::<V>))
+        .route("/v1/vm:resume", post(resume_vm::<V>))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .with_state(manager)

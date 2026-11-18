@@ -221,6 +221,11 @@ pub fn openapi() -> Value {
             "Powers off a VM, and returns after it stops.",
         ),
         "/v1/vms/{vm}:reboot": schemas.vm_method("RebootVm", "Reboots a VM."),
+        "/v1/vms/{vm}:pause": schemas.vm_method(
+            "PauseVm",
+            "Pauses a running VM, and returns after the guest and the devices stopped.",
+        ),
+        "/v1/vms/{vm}:resume": schemas.vm_method("ResumeVm", "Resumes a paused VM."),
     });
     let error = json!({
         "description": "An error, as defined by AIP-193.",
