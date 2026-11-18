@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use flume::Sender;
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 use snafu::{ResultExt, Snafu};
 
 use crate::board::Board;
@@ -83,6 +83,8 @@ pub(crate) struct MpSync {
     count: u16,
     // Incremented every time all vCPUs arrive at the barrier.
     generation: u32,
+    // The number of vCPUs that are parked for a pause.
+    parked: u16,
 }
 
 pub struct VcpuHandle {
@@ -107,6 +109,7 @@ impl<V: Vm> Context<V> {
                 fatal: false,
                 count: 0,
                 generation: 0,
+                parked: 0,
             }),
             cond: Condvar::new(),
         }
@@ -148,6 +151,35 @@ where
     }
 
     Ok(())
+}
+
+/// Parks a vCPU, one of `count`, until the VM leaves the paused state.
+fn park(sync: &mut MutexGuard<MpSync>, cond: &Condvar, count: u16) {
+    sync.parked += 1;
+    if sync.parked == count {
+        // Wakes up the thread in `wait_parked`.
+        cond.notify_all();
+    }
+    cond.wait_while(sync, |s| s.state == State::Paused);
+    sync.parked -= 1;
+}
+
+/// Blocks until `count` vCPUs are parked, or the VM leaves the paused state.
+pub(crate) fn wait_parked(sync: &mut MutexGuard<MpSync>, cond: &Condvar, count: u16) {
+    cond.wait_while(sync, |s| s.state == State::Paused && s.parked < count);
+}
+
+/// Changes the state to `next` for the reset that a vCPU requests, unless
+/// the VM is being reset already. Returns `true` if the state changed.
+fn request_reset(sync: &mut MutexGuard<MpSync>, cond: &Condvar, next: State) -> bool {
+    // The request overrides a pause that is in progress.
+    if !matches!(sync.state, State::Running | State::Paused) {
+        return false;
+    }
+    sync.state = next;
+    // Wakes up the parked vCPUs and the thread in `wait_parked`.
+    cond.notify_all();
+    true
 }
 
 impl<V: Vm> VcpuThread<V> {
@@ -266,6 +298,44 @@ impl<V: Vm> VcpuThread<V> {
         }
     }
 
+    /// Runs the guest until the VM is reset, and parks the vCPU while the
+    /// VM is paused.
+    ///
+    /// Returns the request of this vCPU, `Ok(State::Paused)` if another vCPU
+    /// or the VMM requested the reset.
+    fn run_guest(&mut self) -> Result<State> {
+        loop {
+            let vcpus = self.ctx.vcpus.read();
+            let mut sync = self.ctx.sync.lock();
+            if sync.state == State::Paused {
+                park(&mut sync, &self.ctx.cond, vcpus.len() as u16);
+            }
+            if sync.state != State::Running {
+                break Ok(State::Paused);
+            }
+            drop(sync);
+            drop(vcpus);
+
+            let request = self.vcpu_loop();
+            if matches!(request, Ok(State::Paused)) {
+                // The VM may have resumed already.
+                continue;
+            }
+
+            let next = match request {
+                Ok(State::RebootPending) => State::RebootPending,
+                _ => State::ShutdownPending,
+            };
+            let vcpus = self.ctx.vcpus.read();
+            let mut sync = self.ctx.sync.lock();
+            if request_reset(&mut sync, &self.ctx.cond, next) {
+                log::trace!("VCPU-{}: change state to {next:?}", self.index);
+                stop_vcpus(&self.ctx.board, Some(self.index), &vcpus)?;
+            }
+            break request;
+        }
+    }
+
     fn run(&mut self) -> Result<()> {
         self.init_vcpu()?;
 
@@ -273,10 +343,13 @@ impl<V: Vm> VcpuThread<V> {
             let mut sync = self.ctx.sync.lock();
             loop {
                 match sync.state {
-                    State::Stopped | State::Paused => self.ctx.cond.wait(&mut sync),
-                    // A reset requested before this vCPU boots is handled
-                    // after the boot, together with the other vCPUs.
-                    State::Running | State::RebootPending | State::ShutdownPending => break,
+                    State::Stopped => self.ctx.cond.wait(&mut sync),
+                    // A pause or a reset requested before this vCPU boots is
+                    // handled after the boot, together with the other vCPUs.
+                    State::Running
+                    | State::Paused
+                    | State::RebootPending
+                    | State::ShutdownPending => break,
                     State::Terminated => break 'reboot Ok(()),
                 }
             }
@@ -284,31 +357,7 @@ impl<V: Vm> VcpuThread<V> {
 
             self.boot_init_sync()?;
 
-            let request = 'pause: loop {
-                let request = self.vcpu_loop();
-
-                let vcpus = self.ctx.vcpus.read();
-                let mut sync = self.ctx.sync.lock();
-                if sync.state == State::Running {
-                    sync.state = match request {
-                        Ok(State::RebootPending) => State::RebootPending,
-                        Ok(State::Paused) => State::Paused,
-                        _ => State::ShutdownPending,
-                    };
-                    log::trace!("VCPU-{}: change state to {:?}", self.index, sync.state);
-                    stop_vcpus(&self.ctx.board, Some(self.index), &vcpus)?;
-                }
-                loop {
-                    match sync.state {
-                        State::Paused => self.ctx.cond.wait(&mut sync),
-                        State::Running => break,
-                        State::RebootPending
-                        | State::ShutdownPending
-                        | State::Stopped
-                        | State::Terminated => break 'pause request,
-                    }
-                }
-            };
+            let request = self.run_guest();
 
             if self.index == 0 {
                 let board = &self.ctx.board;

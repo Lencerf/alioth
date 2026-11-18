@@ -30,7 +30,7 @@ use crate::arch::layout::{PL011_START, PL031_START};
 #[cfg(target_arch = "x86_64")]
 use crate::arch::layout::{PORT_CMOS_REG, PORT_COM1, PORT_FW_CFG_SELECTOR, PORT_FWDBG};
 use crate::board::{Board, BoardSpec};
-use crate::cpu::{Context, State, VcpuHandle, stop_vcpus, vcpu_thread};
+use crate::cpu::{self, Context, State, VcpuHandle};
 use crate::device::MmioDev;
 use crate::device::clock::SystemClock;
 #[cfg(target_arch = "x86_64")]
@@ -123,6 +123,8 @@ pub enum Error {
         state: State,
         want: &'static [State],
     },
+    #[snafu(display("The VM changed to {state:?} before it paused"))]
+    PauseInterrupted { state: State },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -165,7 +167,7 @@ where
             let ctx = vm.ctx.clone();
             let handle = thread::Builder::new()
                 .name(format!("vcpu_{index}"))
-                .spawn(move || vcpu_thread(index, ctx, event_tx))
+                .spawn(move || cpu::vcpu_thread(index, ctx, event_tx))
                 .context(error::CreateVcpu { index })?;
             vm.ctx.vcpus.write().push(VcpuHandle { thread: handle });
             if event_rx.recv_timeout(Duration::from_secs(2)).is_err() {
@@ -643,12 +645,18 @@ where
         Ok(())
     }
 
+    /// Pauses the guest, and returns once no vCPU runs it.
     pub fn pause(&self) -> Result<()> {
         let vcpus = self.ctx.vcpus.read();
         let mut sync = self.ctx.sync.lock();
         check_state(sync.state, &[State::Running])?;
+        // The vCPUs read the state after this function unlocks `sync`.
+        cpu::stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
         sync.state = State::Paused;
-        stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
+        cpu::wait_parked(&mut sync, &self.ctx.cond, vcpus.len() as u16);
+        if sync.state != State::Paused {
+            return error::PauseInterrupted { state: sync.state }.fail();
+        }
         Ok(())
     }
 
@@ -676,7 +684,7 @@ where
         check_state(state, want)?;
         sync.state = next;
         if state == State::Running {
-            stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
+            cpu::stop_vcpus(&self.ctx.board, None, &vcpus).context(error::StopVcpus)?;
         } else {
             self.ctx.cond.notify_all();
         }

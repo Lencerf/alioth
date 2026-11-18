@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use std::{fs, thread};
+use std::{fs, hint, thread};
 
 use assert_matches::assert_matches;
 use tempfile::TempDir;
@@ -43,6 +43,15 @@ pub(crate) const HALT: [u8; 3] = [
     0xf4, // hlt
     0xeb, 0xfd, // jmp -3
 ];
+
+/// Real-mode code at the reset vector that counts in memory forever.
+const COUNT: [u8; 7] = [
+    0x66, 0xff, 0x06, 0x00, 0x10, // inc dword ptr [0x1000]
+    0xeb, 0xf9, // jmp -7
+];
+
+/// The address of the counter of `COUNT`.
+const COUNTER: u64 = 0x1000;
 
 pub(crate) fn fixture_spec(firmware: &Path) -> VmSpec {
     VmSpec {
@@ -97,6 +106,37 @@ fn wait_state(vm: &Machine<Kvm>, state: State) {
         assert!(Instant::now() < deadline, "stuck in {:?}", vm.state());
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Returns the counter of `COUNT`, 0 if the VM has no memory yet.
+fn read_counter(vm: &Machine<Kvm>) -> u32 {
+    let ram = vm.ctx.board.memory.ram_bus();
+    ram.read_t(COUNTER).unwrap_or(0)
+}
+
+/// Waits for the guest to count.
+fn wait_counting(vm: &Machine<Kvm>) {
+    let count = read_counter(vm);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while read_counter(vm) == count {
+        assert!(Instant::now() < deadline, "stuck at {count}");
+        thread::yield_now();
+    }
+}
+
+/// Waits for `duration`, at a finer resolution than `thread::sleep()`.
+fn spin(duration: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < duration {
+        hint::spin_loop();
+    }
+}
+
+/// Asserts that the guest does not count.
+fn assert_not_counting(vm: &Machine<Kvm>) {
+    let count = read_counter(vm);
+    thread::sleep(Duration::from_millis(1));
+    assert_eq!(read_counter(vm), count);
 }
 
 #[test]
@@ -278,4 +318,218 @@ fn test_vcpu_failure() {
     vm.wait_stopped();
     assert_eq!(vm.state(), State::Terminated);
     assert_matches!(vm.terminate(), Err(Error::VcpuExit { index: 0, .. }));
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_pause_resume() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &COUNT);
+
+    assert_matches!(
+        vm.pause(),
+        Err(Error::UnexpectedState {
+            state: State::Stopped,
+            ..
+        })
+    );
+    vm.boot().unwrap();
+    assert_matches!(
+        vm.resume(),
+        Err(Error::UnexpectedState {
+            state: State::Running,
+            ..
+        })
+    );
+
+    for _ in 0..100 {
+        wait_counting(&vm);
+        vm.pause().unwrap();
+        assert_eq!(vm.state(), State::Paused);
+        // No vCPU runs the guest once `pause()` returns.
+        assert_not_counting(&vm);
+        assert_matches!(
+            vm.pause(),
+            Err(Error::UnexpectedState {
+                state: State::Paused,
+                ..
+            })
+        );
+        vm.resume().unwrap();
+    }
+
+    // A vCPU that is about to park does not pause the VM again after the
+    // VM resumes.
+    for _ in 0..1000 {
+        vm.pause().unwrap();
+        vm.resume().unwrap();
+    }
+    wait_counting(&vm);
+    assert_eq!(vm.state(), State::Running);
+
+    // A paused VM reboots, and runs afterwards.
+    vm.pause().unwrap();
+    vm.reboot().unwrap();
+    wait_state(&vm, State::Running);
+    wait_counting(&vm);
+
+    vm.shutdown().unwrap();
+    vm.wait_stopped();
+    vm.terminate().unwrap();
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_pause_while_booting() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &COUNT);
+
+    for _ in 0..20 {
+        // The pause returns after all vCPUs finish booting, which creates
+        // the guest memory.
+        vm.boot().unwrap();
+        vm.pause().unwrap();
+        let ram = vm.ctx.board.memory.ram_bus();
+        assert_matches!(ram.read_t::<u32>(COUNTER), Ok(_));
+        assert_not_counting(&vm);
+        vm.resume().unwrap();
+        wait_counting(&vm);
+
+        // The same for a pause that follows a reboot.
+        vm.reboot().unwrap();
+        while let Err(e) = vm.pause() {
+            assert_matches!(
+                e,
+                Error::UnexpectedState {
+                    state: State::RebootPending,
+                    ..
+                }
+            );
+            thread::yield_now();
+        }
+        let ram = vm.ctx.board.memory.ram_bus();
+        assert_matches!(ram.read_t::<u32>(COUNTER), Ok(_));
+        assert_not_counting(&vm);
+        vm.resume().unwrap();
+        wait_counting(&vm);
+
+        vm.shutdown().unwrap();
+        vm.wait_stopped();
+    }
+
+    vm.terminate().unwrap();
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_guest_power_off_while_pausing() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &POWER_OFF);
+
+    // An upper bound of the time that the guest takes to power off the VM.
+    let durations = (0..3).map(|_| {
+        let start = Instant::now();
+        vm.boot().unwrap();
+        vm.wait_stopped();
+        start.elapsed()
+    });
+    let duration = durations.min().unwrap();
+
+    // The pause arrives before, while, and after the guest powers off the VM.
+    for i in 0..200 {
+        vm.boot().unwrap();
+        spin(duration * i / 200);
+        match vm.pause() {
+            // The guest powers off the VM once it resumes.
+            Ok(()) => vm.resume().unwrap(),
+            // The request of the guest is not dropped, it ends the pause.
+            Err(Error::PauseInterrupted {
+                state: State::ShutdownPending | State::Stopped,
+                ..
+            }) => {}
+            // The guest powered off the VM before the pause.
+            Err(Error::UnexpectedState {
+                state: State::ShutdownPending | State::Stopped,
+                ..
+            }) => {}
+            Err(e) => panic!("{e:?}"),
+        }
+        wait_state(&vm, State::Stopped);
+    }
+
+    vm.terminate().unwrap();
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_vcpu_failure_while_pausing() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = create_vm(&kvm, &temp_dir.path().join("missing.bin"));
+
+    // The pause does not wait for a vCPU that fails to boot.
+    vm.boot().unwrap();
+    assert_matches!(
+        vm.pause(),
+        Err(Error::PauseInterrupted {
+            state: State::Terminated,
+            ..
+        } | Error::UnexpectedState {
+            state: State::Terminated,
+            ..
+        })
+    );
+    assert_matches!(vm.terminate(), Err(Error::VcpuExit { index: 0, .. }));
+}
+
+#[test]
+#[cfg_attr(not(feature = "test-hv"), ignore)]
+fn test_concurrent_pause_resume() {
+    let kvm = Kvm::new(KvmSpec::default()).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let vm = fixture_vm(&kvm, &temp_dir, &COUNT);
+    vm.boot().unwrap();
+
+    thread::scope(|s| {
+        let pauser = s.spawn(|| {
+            let mut count = 0;
+            while count < 1000 {
+                match vm.pause() {
+                    Ok(()) => count += 1,
+                    Err(Error::PauseInterrupted {
+                        state: State::Running,
+                        ..
+                    }) => count += 1,
+                    // The VM has not resumed yet.
+                    Err(Error::UnexpectedState {
+                        state: State::Paused,
+                        ..
+                    }) => thread::yield_now(),
+                    Err(e) => panic!("{e:?}"),
+                }
+            }
+        });
+        // Resumes that overtake the pauses in progress.
+        while !pauser.is_finished() {
+            let _ = vm.resume();
+        }
+    });
+    if vm.state() == State::Paused {
+        vm.resume().unwrap();
+    }
+    wait_counting(&vm);
+    assert_eq!(vm.state(), State::Running);
+
+    // The VM still pauses.
+    vm.pause().unwrap();
+    assert_not_counting(&vm);
+    vm.resume().unwrap();
+    wait_counting(&vm);
+
+    vm.shutdown().unwrap();
+    vm.wait_stopped();
+    vm.terminate().unwrap();
 }
