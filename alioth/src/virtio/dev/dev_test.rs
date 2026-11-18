@@ -834,6 +834,8 @@ struct SlowBackend {
     wake: Option<WakeEvent<TestIrqSender>>,
     pauses: u32,
     resumes: u32,
+    /// How often the device had resumed when the backend resumed last.
+    dev_resumes: u32,
 }
 
 impl ActiveBackend<FakeDev> for SlowBackend {
@@ -861,8 +863,9 @@ impl ActiveBackend<FakeDev> for SlowBackend {
         Ok(false)
     }
 
-    fn resume(&mut self, _: &mut FakeDev) -> Result<()> {
+    fn resume(&mut self, dev: &mut FakeDev) -> Result<()> {
         self.resumes += 1;
+        self.dev_resumes = dev.resumes.load(Ordering::Acquire);
         Ok(())
     }
 }
@@ -897,6 +900,7 @@ fn fixture_slow_worker(wake: Option<WakeEvent<TestIrqSender>>) -> SlowWorker {
         wake,
         pauses: 0,
         resumes: 0,
+        dev_resumes: 0,
     };
     event_tx.send(WakeEvent::Pause { seq: 1 }).unwrap();
     (context, backend, event_tx, report_rx)
@@ -947,6 +951,45 @@ fn test_pause_interrupted_by_other_event() {
     assert_eq!(context.dev.pauses.load(Ordering::Acquire), 1);
     assert_eq!(context.dev.resumes.load(Ordering::Acquire), 1);
     assert_eq!(context.state, WorkerState::Running);
+    // The device resumes first, so that it serves its queues again by the
+    // time the backend notifies them.
+    assert_eq!(backend.dev_resumes, 1);
+}
+
+#[test]
+fn test_mio_resume_notifies_offloaded_queues() {
+    // Something else serves queue 1, and may have dropped a notification
+    // while the device was paused.
+    let mut dev = FakeDev {
+        offloaded: Some(1),
+        ..Default::default()
+    };
+    let mut observer = Poll::new().unwrap();
+    let mut notifiers = [Notifier::new().unwrap(), Notifier::new().unwrap()];
+    for (index, notifier) in notifiers.iter_mut().enumerate() {
+        let registry = observer.registry();
+        registry
+            .register(notifier, Token(index), Interest::READABLE)
+            .unwrap();
+    }
+    let mut poll = Poll::new().unwrap();
+    let mut queues: [Option<Queue<SplitQueue>>; 0] = [];
+    let irq_sender = TestIrqSender::default();
+    let mut active_mio = ActiveMio {
+        queues: &mut queues,
+        irq_sender: &irq_sender,
+        notifiers: &notifiers,
+        poll: &mut poll,
+    };
+
+    ActiveBackend::resume(&mut active_mio, &mut dev).unwrap();
+
+    // The worker itself serves queue 0, whose notifications stay pending
+    // while it is paused.
+    let mut events = Events::with_capacity(4);
+    observer.poll(&mut events, Some(Duration::ZERO)).unwrap();
+    let tokens = events.iter().map(|e| e.token()).collect::<Vec<_>>();
+    assert_eq!(tokens, [Token(1)]);
 }
 
 #[test]

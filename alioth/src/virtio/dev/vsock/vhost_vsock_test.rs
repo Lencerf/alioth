@@ -20,6 +20,7 @@ use assert_matches::assert_matches;
 use mio::{Events, Interest, Poll, Token};
 
 use crate::sync::notifier::Notifier;
+use crate::virtio::dev::Virtio;
 use crate::virtio::dev::vsock::VsockConfig;
 use crate::virtio::dev::vsock::vhost_vsock::VhostVsock;
 use crate::virtio::queue::Queue;
@@ -94,4 +95,20 @@ fn test_vhost_vsock_handle_event_and_queue() {
     assert_matches!(dev.handle_queue(1, &mut active_mio), Ok(()));
     assert_matches!(dev.handle_queue(2, &mut active_mio), Ok(()));
     assert_matches!(dev.handle_queue(3, &mut active_mio), Ok(()));
+}
+
+#[test]
+fn test_vhost_vsock_pause_resume_failure() {
+    // `/dev/null` does not take the request that stops or starts the
+    // queues, so the device does not claim that it paused or resumed.
+    let mut dev = VhostVsock {
+        name: "vhost-vsock".into(),
+        vhost_dev: Arc::new(VhostDev::new("/dev/null").unwrap()),
+        config: VsockConfig::default(),
+        features: VirtioFeature::VERSION_1.bits() as u64,
+        error_fds: [None, None],
+    };
+
+    assert_matches!(dev.pause(), Err(Error::Vhost { .. }));
+    assert_matches!(dev.resume(), Err(Error::Vhost { .. }));
 }

@@ -30,7 +30,7 @@ use crate::virtio::dev::{DevSpec, DeviceId, Virtio, WorkerParam};
 use crate::virtio::queue::VirtQueue;
 use crate::virtio::vhost::{UpdateVsockMem, VhostDev, error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{IrqSender, Result, VirtioFeature, error as virtio_error};
+use crate::virtio::{IrqSender, Result, VirtioFeature};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Help)]
 pub struct VhostVsockSpec {
@@ -131,10 +131,14 @@ impl Virtio for VhostVsock {
     }
 
     fn pause(&mut self) -> Result<()> {
-        virtio_error::PauseUnsupported.fail()
+        // The kernel stops serving the queues. It keeps their positions,
+        // the connections, and what host sockets send in the meantime.
+        self.vhost_dev.vsock_set_running(false)?;
+        Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        self.vhost_dev.vsock_set_running(true)?;
         Ok(())
     }
 

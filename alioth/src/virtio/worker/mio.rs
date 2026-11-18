@@ -205,7 +205,9 @@ where
         Ok(true)
     }
 
-    fn resume(&mut self, _dev: &mut D) -> Result<()> {
-        Ok(())
+    fn resume(&mut self, dev: &mut D) -> Result<()> {
+        // Whatever serves the offloaded queues was stopped while the
+        // device was paused, like before the device was activated.
+        dev.notify_offloaded(self.notifiers)
     }
 }
