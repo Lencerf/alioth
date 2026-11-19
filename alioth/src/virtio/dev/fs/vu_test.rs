@@ -28,7 +28,12 @@ use tempfile::TempDir;
 use zerocopy::IntoBytes;
 
 use crate::mem::mapped::ArcMemPages;
+use crate::sync::notifier::Notifier;
+use crate::virtio::dev::Virtio;
 use crate::virtio::dev::fs::vu::{VuFs, VuFsSpec, handle_backend_req};
+use crate::virtio::queue::Queue;
+use crate::virtio::queue::split::SplitQueue;
+use crate::virtio::tests::FakeIrqSender;
 use crate::virtio::vu::Error as VuError;
 use crate::virtio::vu::bindings::{
     Message, MessageFlag, VhostUserMmap, VirtqState, VuBackMsg, VuFeature, VuFrontMsg,
@@ -199,6 +204,11 @@ fn spawn_backend(listener: UnixListener) -> JoinHandle<Recorded> {
                     recorded.requests.push((req, state.index as u64));
                     0
                 }
+                VuFrontMsg::SET_VIRTQ_KICK => {
+                    let index: u64 = backend.recv_payload().unwrap();
+                    recorded.requests.push((req, index));
+                    0
+                }
                 VuFrontMsg::GET_VIRTQ_BASE => {
                     let state: VirtqState = backend.recv_payload().unwrap();
                     recorded.requests.push((req, state.index as u64));
@@ -264,4 +274,37 @@ fn reset_answers_backend() {
             (VuFrontMsg::SET_VIRTQ_ENABLE, 1),
         ]
     );
+}
+
+#[rstest]
+#[case(0)]
+#[case(WINDOW_SIZE as usize)]
+fn pause_resume(#[case] dax_window: usize) {
+    let temp_dir = TempDir::new().unwrap();
+    let (mut fs, backend) = fixture_fs(&temp_dir, dax_window);
+
+    let (q_tx, _q_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx };
+    let notifiers = [Notifier::new().unwrap(), Notifier::new().unwrap()];
+    // The driver enabled no queue.
+    let queues: [Option<Queue<SplitQueue>>; 2] = [None, None];
+    assert_matches!(fs.pause(), Ok(()));
+    assert_matches!(fs.resume(&queues, &notifiers, &irq_sender), Ok(()));
+    drop(fs);
+
+    // The back-end stops the rings, and starts them again.
+    let recorded = backend.join().unwrap();
+    assert_eq!(
+        recorded.requests,
+        [
+            (VuFrontMsg::GET_VIRTQ_BASE, 0),
+            (VuFrontMsg::GET_VIRTQ_BASE, 1),
+            (VuFrontMsg::SET_VIRTQ_KICK, 0),
+            (VuFrontMsg::SET_VIRTQ_KICK, 1),
+        ]
+    );
+    // With a DAX window, the back-end got the mapping without which it
+    // does not stop ring 0.
+    let mapped = recorded.mapped.map(|answer| answer.is_ok());
+    assert_eq!(mapped, (dax_window > 0).then_some(true));
 }

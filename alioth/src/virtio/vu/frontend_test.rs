@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -117,6 +117,7 @@ fn test_vu_frontend_reset_stops_rings() {
         device_feature: 0,
         num_queues: 2,
         err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
     };
     let poll = Poll::new().unwrap();
     frontend.reset(poll.registry());
@@ -182,6 +183,7 @@ fn test_vu_frontend_reset_answers_backend() {
         device_feature: 0,
         num_queues: 2,
         err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
     };
     // The worker watches the back-end channel of an active device.
     let poll = Poll::new().unwrap();
@@ -260,15 +262,32 @@ where
 /// The ring index of a recorded request that is not about a ring.
 const NO_RING: u32 = u32::MAX;
 
+/// What a scripted back-end saw.
+#[derive(Default)]
+struct Recorded {
+    /// The requests, with the ring index and the value of each.
+    requests: Vec<(VuFrontMsg, u32, u64)>,
+    /// The kick fd and the call fd of ring 0, which the back-end drops when
+    /// it stops the ring, like libvhost-user.
+    kick: Option<File>,
+    call: Option<File>,
+}
+
+/// Where the scripted back-end stops ring `index`.
+fn stop_base(index: u32) -> u32 {
+    0x8031_8021 + index
+}
+
 /// Spawns a back-end that acknowledges the requests about rings, and
-/// records them with the ring index and the value of each.
-fn spawn_backend(conn: UnixStream) -> thread::JoinHandle<Vec<(VuFrontMsg, u32, u64)>> {
+/// records them.
+fn spawn_backend(conn: UnixStream) -> thread::JoinHandle<Recorded> {
     let backend = VuSession::from(conn);
     thread::spawn(move || {
         let mut fds = [const { None }; 8];
-        let mut requests = vec![];
+        let mut recorded = Recorded::default();
         while let Ok(msg) = backend.recv_msg(&mut fds) {
             let req = VuFrontMsg::from(msg.request);
+            let requests = &mut recorded.requests;
             match req {
                 VuFrontMsg::SET_FEATURES | VuFrontMsg::SET_STATUS => {
                     let val: u64 = backend.recv_payload().unwrap();
@@ -279,6 +298,12 @@ fn spawn_backend(conn: UnixStream) -> thread::JoinHandle<Vec<(VuFrontMsg, u32, u
                 | VuFrontMsg::SET_VIRTQ_ERR => {
                     let index: u64 = backend.recv_payload().unwrap();
                     requests.push((req, index as u32, 0));
+                    let fd = fds[0].take().map(File::from);
+                    match (req, index) {
+                        (VuFrontMsg::SET_VIRTQ_KICK, 0) => recorded.kick = fd,
+                        (VuFrontMsg::SET_VIRTQ_CALL, 0) => recorded.call = fd,
+                        _ => {}
+                    }
                 }
                 VuFrontMsg::SET_VIRTQ_NUM
                 | VuFrontMsg::SET_VIRTQ_BASE
@@ -290,11 +315,22 @@ fn spawn_backend(conn: UnixStream) -> thread::JoinHandle<Vec<(VuFrontMsg, u32, u
                     let addr: VirtqAddr = backend.recv_payload().unwrap();
                     requests.push((req, addr.index, 0));
                 }
+                VuFrontMsg::GET_VIRTQ_BASE => {
+                    let mut state: VirtqState = backend.recv_payload().unwrap();
+                    requests.push((req, state.index, state.val as u64));
+                    if state.index == 0 {
+                        recorded.kick = None;
+                        recorded.call = None;
+                    }
+                    state.val = stop_base(state.index);
+                    backend.reply(req, &state, &[]).unwrap();
+                    continue;
+                }
                 req => panic!("unexpected request: {req:?}"),
             }
             backend.reply(req, &0u64, &[]).unwrap();
         }
-        requests
+        recorded
     })
 }
 
@@ -311,6 +347,7 @@ fn test_vu_frontend_activate_starts_rings_last() {
         device_feature: 0,
         num_queues: 2,
         err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
     };
 
     // The driver enabled queue 0 only.
@@ -322,9 +359,9 @@ fn test_vu_frontend_activate_starts_rings_last() {
     // SET_VRING_KICK starts a ring, so it is the last request for a ring.
     let size = rings.queues[0].as_ref().unwrap().addrs().size as u64;
     let set_feat = (feature | VirtioFeature::VHOST_PROTOCOL.bits()) as u64;
-    let requests = backend_thread.join().unwrap();
+    let recorded = backend_thread.join().unwrap();
     assert_eq!(
-        requests,
+        recorded.requests,
         [
             (VuFrontMsg::SET_FEATURES, NO_RING, set_feat),
             (VuFrontMsg::SET_VIRTQ_ERR, 0, 0),
@@ -338,6 +375,121 @@ fn test_vu_frontend_activate_starts_rings_last() {
             (VuFrontMsg::SET_STATUS, NO_RING, 0xf),
         ]
     );
+}
+
+#[test]
+fn test_vu_frontend_pause_resume() {
+    let (frontend_conn, backend_conn) = UnixStream::pair().unwrap();
+    let backend_thread = spawn_backend(backend_conn);
+    let mut frontend = VuFrontend {
+        name: "vu-frontend".into(),
+        session: Arc::new(VuSession::from(frontend_conn)),
+        channel: None,
+        id: DeviceId::NET,
+        vu_feature: VuFeature::STATUS,
+        device_feature: 0,
+        num_queues: 2,
+        err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
+    };
+
+    // The driver enabled queue 0 only.
+    let mut rings = Rings::<PackedQueue>::new(false);
+    let feature = (VirtioFeature::VERSION_1 | VirtioFeature::RING_PACKED).bits();
+    rings.activate(&mut frontend, feature);
+    frontend.pause().unwrap();
+    frontend
+        .resume(&rings.queues, &rings.notifiers, &rings.irq_sender)
+        .unwrap();
+    drop(frontend);
+
+    let size = rings.queues[0].as_ref().unwrap().addrs().size as u64;
+    let recorded = backend_thread.join().unwrap();
+    let init_base = PackedQueue::INIT_VHOST_BASE as u64;
+    assert_eq!(
+        recorded.requests[4],
+        (VuFrontMsg::SET_VIRTQ_BASE, 0, init_base)
+    );
+    assert_eq!(
+        recorded.requests[10..],
+        [
+            // Every ring stops, also the one that the driver did not enable.
+            (VuFrontMsg::GET_VIRTQ_BASE, 0, 0),
+            (VuFrontMsg::GET_VIRTQ_BASE, 1, 0),
+            // The ring is configured again, and starts where the back-end
+            // stopped it.
+            (VuFrontMsg::SET_VIRTQ_CALL, 0, 0),
+            (VuFrontMsg::SET_VIRTQ_NUM, 0, size),
+            (VuFrontMsg::SET_VIRTQ_BASE, 0, stop_base(0) as u64),
+            (VuFrontMsg::SET_VIRTQ_ADDR, 0, 0),
+            (VuFrontMsg::SET_VIRTQ_ENABLE, 0, 1),
+            (VuFrontMsg::SET_VIRTQ_KICK, 0, 0),
+            (VuFrontMsg::SET_VIRTQ_KICK, 1, 0),
+        ]
+    );
+
+    // The back-end has the notifier and the interrupt fd of the ring again.
+    let mut buf = [0u8; 8];
+    rings.notifiers[0].notify().unwrap();
+    assert_matches!(recorded.kick.unwrap().read(&mut buf), Ok(8));
+    let mut call = recorded.call.unwrap();
+    call.write_all(&1u64.to_ne_bytes()).unwrap();
+    let irqfd = rings.irq_sender.irqfd.as_fd().try_clone_to_owned();
+    assert_matches!(File::from(irqfd.unwrap()).read(&mut buf), Ok(8));
+}
+
+#[test]
+fn test_vu_frontend_pause_failure() {
+    let (frontend_conn, backend_conn) = UnixStream::pair().unwrap();
+    drop(backend_conn);
+    let mut frontend = VuFrontend {
+        name: "vu-frontend".into(),
+        session: Arc::new(VuSession::from(frontend_conn)),
+        channel: None,
+        id: DeviceId::NET,
+        vu_feature: VuFeature::STATUS,
+        device_feature: 0,
+        num_queues: 2,
+        err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
+    };
+
+    // A back-end that is gone does not confirm that it stopped a ring.
+    assert_matches!(frontend.pause(), Err(Error::Vu { .. }));
+}
+
+#[test]
+fn test_vu_frontend_activate_after_pause() {
+    let (frontend_conn, backend_conn) = UnixStream::pair().unwrap();
+    let backend_thread = spawn_backend(backend_conn);
+    let mut frontend = VuFrontend {
+        name: "vu-frontend".into(),
+        session: Arc::new(VuSession::from(frontend_conn)),
+        channel: None,
+        id: DeviceId::NET,
+        vu_feature: VuFeature::STATUS,
+        device_feature: 0,
+        num_queues: 2,
+        err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
+    };
+
+    let mut rings = Rings::<SplitQueue>::new(true);
+    let feature = VirtioFeature::VERSION_1.bits();
+    rings.activate(&mut frontend, feature);
+    frontend.pause().unwrap();
+    // The driver resets the paused device, and sets it up again.
+    frontend.reset(rings.poll.registry());
+    rings.activate(&mut frontend, feature);
+    drop(frontend);
+
+    // The rings of the new activation start from the beginning, not where
+    // the back-end stopped them for the pause.
+    let recorded = backend_thread.join().unwrap();
+    let bases = recorded.requests.iter().filter_map(|(req, index, base)| {
+        (*req == VuFrontMsg::SET_VIRTQ_BASE).then_some((*index, *base))
+    });
+    assert_eq!(bases.collect::<Vec<_>>(), [(0, 0), (1, 0), (0, 0), (1, 0)]);
 }
 
 #[rstest]
@@ -394,6 +546,7 @@ fn test_vu_frontend_activate_vring_base(#[case] drv_feat: VirtioFeature, #[case]
         device_feature,
         num_queues: 2,
         err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
     };
 
     // The worker picks the queue type by the driver features.
@@ -443,6 +596,7 @@ fn test_vu_frontend_feature_filtering() {
         device_feature: dev_low | dev_high | supported_transport | unsupported_transport,
         num_queues: 1,
         err_fds: Vec::new(),
+        bases: Box::new([0; 1]),
     };
 
     let exposed = frontend.feature();
@@ -501,6 +655,7 @@ fn test_vu_frontend_queue_err() {
         device_feature: 0,
         num_queues: 2,
         err_fds: Vec::new(),
+        bases: Box::new([0; 2]),
     };
 
     // The driver enabled only the second queue.
@@ -570,6 +725,7 @@ fn test_vu_frontend_handle_queue() {
         device_feature: 0,
         num_queues: 1,
         err_fds: Vec::new(),
+        bases: Box::new([0; 1]),
     };
 
     let mut poll = Poll::new().unwrap();

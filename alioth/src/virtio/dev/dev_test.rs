@@ -119,7 +119,7 @@ impl Virtio for FakeDev {
 
     fn pause(&mut self) -> Result<()> {
         if self.fail_pause.load(Ordering::Acquire) {
-            return error::PauseUnsupported.fail();
+            return error::InvalidBuffer.fail();
         }
         self.pauses.fetch_add(1, Ordering::AcqRel);
         Ok(())

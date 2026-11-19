@@ -167,6 +167,10 @@ pub struct VuFrontend {
     /// Error fds of the enabled queues with their queue indexes, alive
     /// from activation to reset.
     err_fds: Vec<(usize, Notifier)>,
+    /// Where the back-end continues in each ring when the ring starts: the
+    /// initial position at activation, and the position at which the
+    /// back-end stopped the ring for a pause.
+    bases: Box<[u32]>,
 }
 
 impl VuFrontend {
@@ -232,6 +236,7 @@ impl VuFrontend {
             device_feature,
             num_queues,
             err_fds: Vec::new(),
+            bases: vec![0; num_queues as usize].into(),
         })
     }
 
@@ -243,7 +248,8 @@ impl VuFrontend {
         self.channel.as_ref()
     }
 
-    /// Configures the rings of `queues`, and starts all rings.
+    /// Configures the rings of `queues`, and starts all rings at their
+    /// bases.
     ///
     /// VHOST_USER_SET_VRING_KICK starts a ring, so it is the last request
     /// for each ring.
@@ -275,9 +281,13 @@ impl VuFrontend {
                 self.session.set_virtq_num(&virtq_num)?;
                 log::trace!("{name}: queue-{index}: set size: {}", virtq_num.val);
 
+                let Some(&base) = self.bases.get(index) else {
+                    let index = index as u16;
+                    return error::InvalidQueueIndex { index }.fail();
+                };
                 let virtq_base = VirtqState {
                     index: index as _,
-                    val: Q::INIT_VHOST_BASE,
+                    val: base,
                 };
                 self.session.set_virtq_base(&virtq_base)?;
                 log::trace!("{name}: queue-{index}: set base: {:#x}", virtq_base.val);
@@ -340,6 +350,32 @@ impl VuFrontend {
         let session = &self.session;
         let base = session.get_virtq_base_serving(&virtq_base, channel, serve)?;
         Ok(base.val)
+    }
+
+    /// Pauses the device like [`Virtio::pause`].
+    ///
+    /// `handle` gets the requests of the back-end that arrive while the
+    /// rings stop, see [`reset_with`](Self::reset_with).
+    pub fn pause_with<F>(&mut self, mut handle: F) -> Result<()>
+    where
+        F: FnMut(&str, &VuChannel, &Message, Option<OwnedFd>) -> VuResult<()>,
+    {
+        let name = &*self.name;
+        for index in 0..self.num_queues {
+            // VHOST_USER_GET_VRING_BASE stops a ring, after the back-end
+            // has completed the requests in flight. Once all rings are
+            // stopped, the back-end no longer touches guest memory or
+            // sends notifications.
+            //
+            // A back-end that fails to stop a ring is gone, or broke the
+            // protocol. The rings that it stopped before stay stopped.
+            let base = self.stop_ring(index, &mut handle)?;
+            log::trace!("{name}: queue-{index}: stopped at {base:#x}");
+            if let Some(stopped_at) = self.bases.get_mut(index as usize) {
+                *stopped_at = base;
+            }
+        }
+        Ok(())
     }
 
     /// Resets the device like [`VirtioMio::reset`].
@@ -420,15 +456,23 @@ impl Virtio for VuFrontend {
     }
 
     fn pause(&mut self) -> Result<()> {
-        error::PauseUnsupported.fail()
+        self.pause_with(reject_backend_req)
     }
 
-    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    fn resume<Q, S>(
+        &mut self,
+        queues: &[Option<Queue<Q>>],
+        notifiers: &[Notifier],
+        irq_sender: &S,
+    ) -> Result<()>
     where
         Q: VirtQueue,
         S: IrqSender,
     {
-        Ok(())
+        // A back-end may drop what it knows about a ring when it stops the
+        // ring, e.g. the fds. So the rings are configured again, and start
+        // where the back-end stopped them.
+        self.start_rings(queues, notifiers, irq_sender)
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
@@ -485,6 +529,7 @@ impl VirtioMio for VuFrontend {
             self.err_fds.push((index, fd));
         }
 
+        self.bases.fill(Q::INIT_VHOST_BASE);
         self.start_rings(
             active_mio.queues,
             &active_mio.notifiers,

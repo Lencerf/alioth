@@ -45,7 +45,7 @@ use crate::virtio::vu::conn::VuChannel;
 use crate::virtio::vu::frontend::VuFrontend;
 use crate::virtio::vu::{Error, error as vu_error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
-use crate::virtio::{DeviceId, IrqSender, Result, error as virtio_error};
+use crate::virtio::{DeviceId, IrqSender, Result};
 
 #[derive(Debug)]
 pub struct VuFs {
@@ -150,15 +150,25 @@ impl Virtio for VuFs {
     }
 
     fn pause(&mut self) -> Result<()> {
-        virtio_error::PauseUnsupported.fail()
+        // The back-end may need a mapping to complete a request in flight,
+        // before it stops a ring.
+        let dax_region = self.dax_region.as_ref();
+        self.frontend.pause_with(|name, channel, msg, fd| {
+            handle_backend_req(name, channel, dax_region, msg, fd)
+        })
     }
 
-    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    fn resume<Q, S>(
+        &mut self,
+        queues: &[Option<Queue<Q>>],
+        notifiers: &[Notifier],
+        irq_sender: &S,
+    ) -> Result<()>
     where
         Q: VirtQueue,
         S: IrqSender,
     {
-        Ok(())
+        self.frontend.resume(queues, notifiers, irq_sender)
     }
 
     fn spawn_worker<S>(self, param: WorkerParam<S>) -> Result<(JoinHandle<()>, Arc<Notifier>)>
