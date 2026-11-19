@@ -28,7 +28,7 @@ use zerocopy::IntoBytes;
 use crate::errors::DebugTrace;
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::sync::notifier::Notifier;
-use crate::virtio::dev::{RESET_TIMEOUT, StartParam, VirtioDevice, WakeEvent};
+use crate::virtio::dev::{PAUSE_TIMEOUT, RESET_TIMEOUT, StartParam, VirtioDevice, WakeEvent};
 use crate::virtio::queue::VirtQueue;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
@@ -131,6 +131,9 @@ struct VuQueueInit {
     /// the frontend set, or where the worker stopped since. `None` is the
     /// beginning of the ring.
     base: Option<u32>,
+    /// Whether the ring is started. VHOST_USER_SET_VRING_KICK starts a
+    /// ring, and VHOST_USER_GET_VRING_BASE stops it.
+    started: bool,
     notifier: Option<Notifier>,
     irqfd: Option<File>,
     errfd: Option<File>,
@@ -143,15 +146,24 @@ struct VuInit {
     regions: Vec<MemoryRegion>,
 }
 
+/// What the worker of a [`VuBackend`] does with the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VuWorkerState {
+    /// The worker has not started the device, or has reset it.
+    Stopped,
+    /// The worker serves the queues.
+    Running,
+    /// The worker has paused the device. It stays away from the queues,
+    /// and keeps the state of the device.
+    Paused,
+}
+
 pub struct VuBackend {
     session: VuSession,
     channel: Option<Arc<VuChannel>>,
     status: DevStatus,
-    /// Whether the worker has started and not stopped since.
-    ///
-    /// The frontend can stop the worker with GET_VRING_BASE, which does not
-    /// change the device status.
-    running: bool,
+    /// What the worker does, see [`sync_worker`](Self::sync_worker).
+    worker: VuWorkerState,
     memory: Arc<RamBus>,
     dev: VirtioDevice<VuIrqSender>,
     init: VuInit,
@@ -171,7 +183,7 @@ impl VuBackend {
             dev,
             memory,
             status: DevStatus::empty(),
-            running: false,
+            worker: VuWorkerState::Stopped,
             init: VuInit {
                 drv_feat: 0,
                 queues: (0..queue_num).map(|_| VuQueueInit::default()).collect(),
@@ -184,20 +196,77 @@ impl VuBackend {
         self.dev.name.as_ref()
     }
 
-    /// Stops the worker and waits until it no longer uses the queues.
+    /// Makes the worker reset the device, and waits until it no longer
+    /// uses the queues.
     ///
     /// The frontend takes the reply to its request as the completion of the
     /// stop, so the backend has to wait before replying.
     fn stop_worker(&mut self) -> Result<()> {
-        if !self.running {
+        if self.worker == VuWorkerState::Stopped {
             return Ok(());
         }
         let ctl = &self.dev.ctl;
         let seq = ctl.request_reset();
         ctl.wait_reset(seq, RESET_TIMEOUT)?;
-        self.running = false;
+        self.worker = VuWorkerState::Stopped;
         self.load_bases();
         Ok(())
+    }
+
+    /// Makes the worker pause the device, and waits until it no longer
+    /// uses the queues.
+    ///
+    /// Unlike a reset, a pause keeps the state of the device for the time
+    /// when the frontend starts the rings again, e.g. the connections of a
+    /// vsock device, and the requests that an io_uring worker cancelled. A
+    /// device that cannot pause is reset.
+    fn pause_worker(&mut self) -> Result<()> {
+        let ctl = &self.dev.ctl;
+        let seq = ctl.request_pause();
+        if let Err(e) = ctl.wait_pause(seq, PAUSE_TIMEOUT) {
+            let name = &*self.dev.name;
+            log::error!("{name}: failed to pause, resetting the device: {e:?}");
+            // The worker may still pause later.
+            ctl.wake(WakeEvent::Resume);
+            return self.stop_worker();
+        }
+        self.worker = VuWorkerState::Paused;
+        self.load_bases();
+        Ok(())
+    }
+
+    fn start_worker(&mut self) -> Result<()> {
+        let param = self.parse_init()?;
+        self.dev.ctl.wake(WakeEvent::Start { param });
+        self.worker = VuWorkerState::Running;
+        Ok(())
+    }
+
+    /// Makes the worker do what the device status `status` and the rings
+    /// ask for.
+    ///
+    /// The worker serves the queues while the driver is ready and all rings
+    /// are started. One worker serves all the queues, so it pauses as long
+    /// as the frontend has stopped any ring.
+    fn sync_worker(&mut self, status: DevStatus) -> Result<()> {
+        if !status.contains(DevStatus::DRIVER_OK) {
+            return self.stop_worker();
+        }
+        let started = self.init.queues.iter().all(|q| q.started);
+        match (self.worker, started) {
+            (VuWorkerState::Stopped, true) => self.start_worker(),
+            (VuWorkerState::Running, false) => self.pause_worker(),
+            (VuWorkerState::Paused, true) => {
+                // The worker goes on with the kick and call fds that it
+                // has. A frontend is expected to start a ring with the
+                // eventfds that it stopped the ring with, unless it resets
+                // the device in between.
+                self.dev.ctl.wake(WakeEvent::Resume);
+                self.worker = VuWorkerState::Running;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Takes over where the worker stopped in the rings.
@@ -220,10 +289,11 @@ impl VuBackend {
         }
     }
 
-    /// Kicks a running worker, so that it moves to the latest memory layout
-    /// and drops the old one.
+    /// Kicks a worker that has started, so that it moves to the latest
+    /// memory layout and drops the old one. A paused worker does so once it
+    /// resumes.
     fn kick_worker(&self) {
-        if self.running {
+        if self.worker != VuWorkerState::Stopped {
             self.dev.ctl.kick();
         }
     }
@@ -383,6 +453,9 @@ impl VuBackend {
                 };
                 log::debug!("{name}: queue-{index}: set kick fd: {}", fd.as_raw_fd());
                 q.notifier = Some(Notifier::try_from(fd)?);
+                // SET_VRING_KICK starts the ring.
+                q.started = true;
+                self.sync_worker(self.status)?;
             }
             (VuFrontMsg::SET_VIRTQ_NUM, 8) => {
                 let virtq_num: VirtqState = self.session.recv_payload()?;
@@ -396,23 +469,31 @@ impl VuBackend {
             (VuFrontMsg::SET_VIRTQ_BASE, 8) => {
                 let virtq_base: VirtqState = self.session.recv_payload()?;
                 let (index, base) = (virtq_base.index as u16, virtq_base.val);
-                let Some(q) = self.init.queues.get_mut(index as usize) else {
+                let init_base = self.init_base();
+                let Some(q) = self.init.queues.get(index as usize) else {
                     return error::InvalidQueue { index }.fail();
                 };
-                q.base = Some(base);
+                // A paused worker resumes where it paused. To continue at
+                // another base, the worker has to start the device again.
+                if self.worker == VuWorkerState::Paused && q.base.unwrap_or(init_base) != base {
+                    self.stop_worker()?;
+                }
+                if let Some(q) = self.init.queues.get_mut(index as usize) {
+                    q.base = Some(base);
+                }
                 log::debug!("{name}: queue-{index}: set base: {base:#x}");
             }
             (VuFrontMsg::GET_VIRTQ_BASE, 8) => {
                 let mut virtq_base: VirtqState = self.session.recv_payload()?;
                 let index = virtq_base.index as u16;
-                if index as usize >= self.init.queues.len() {
+                let Some(q) = self.init.queues.get_mut(index as usize) else {
                     return error::InvalidQueue { index }.fail();
-                }
-                // GET_VRING_BASE stops the ring. One worker serves all the
-                // queues, so stop all of them. The frontend has no way to
-                // learn about a failure other than waiting forever for the
-                // reply, so reply anyway.
-                if let Err(e) = self.stop_worker() {
+                };
+                // GET_VRING_BASE stops the ring, and the worker with it.
+                // The frontend has no way to learn about a failure other
+                // than waiting forever for the reply, so reply anyway.
+                q.started = false;
+                if let Err(e) = self.sync_worker(self.status) {
                     log::error!("{name}: queue-{index}: failed to stop: {e:?}");
                 }
                 // The frontend starts the ring again at this base, here or
@@ -477,7 +558,7 @@ impl VuBackend {
                 }
             }
             (VuFrontMsg::GET_STATUS, 0) => {
-                if self.running && self.dev.ctl.failed() {
+                if self.worker != VuWorkerState::Stopped && self.dev.ctl.failed() {
                     // VirtIO spec 1.4, Sec 2.1.2
                     self.status |= DevStatus::NEEDS_RESET;
                 }
@@ -490,12 +571,9 @@ impl VuBackend {
                 let status: u64 = self.session.recv_payload()?;
                 let new = DevStatus::from_bits_retain(status as u8);
                 log::debug!("{name}: set status: {:x?} -> {new:x?}", self.status);
-                if !new.contains(DevStatus::DRIVER_OK) {
-                    self.stop_worker()?;
-                } else if !self.running {
-                    let param = self.parse_init()?;
-                    self.dev.ctl.wake(WakeEvent::Start { param });
-                    self.running = true;
+                self.sync_worker(new)?;
+                if new.contains(DevStatus::DRIVER_OK) && self.worker == VuWorkerState::Stopped {
+                    log::warn!("{name}: driver is ready, but not all rings are started");
                 }
                 if new.is_empty() {
                     // The driver has reset the device, and sets up the
