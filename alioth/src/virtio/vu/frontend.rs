@@ -241,6 +241,78 @@ impl VuFrontend {
     pub fn channel(&self) -> Option<&VuChannel> {
         self.channel.as_ref()
     }
+
+    /// Configures the rings of `queues`, and starts all rings.
+    ///
+    /// VHOST_USER_SET_VRING_KICK starts a ring, so it is the last request
+    /// for each ring.
+    fn start_rings<Q, S>(
+        &self,
+        queues: &[Option<Queue<Q>>],
+        notifiers: &[Notifier],
+        irq_sender: &S,
+    ) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
+        let name = &*self.name;
+        for (index, queue) in queues.iter().enumerate() {
+            if let Some(queue) = queue {
+                let addrs = queue.addrs();
+
+                let _ = irq_sender.queue_irqfd(index as _, |fd| {
+                    self.session.set_virtq_call(&(index as u64), fd)?;
+                    log::trace!("{name}: queue-{index}: set call fd: {}", fd.as_raw_fd());
+                    Ok(())
+                });
+
+                let virtq_num = VirtqState {
+                    index: index as _,
+                    val: addrs.size as _,
+                };
+                self.session.set_virtq_num(&virtq_num)?;
+                log::trace!("{name}: queue-{index}: set size: {}", virtq_num.val);
+
+                let virtq_base = VirtqState {
+                    index: index as _,
+                    val: Q::INIT_VHOST_BASE,
+                };
+                self.session.set_virtq_base(&virtq_base)?;
+                log::trace!("{name}: queue-{index}: set base: {:#x}", virtq_base.val);
+
+                let mem = queue.ram();
+                let virtq_addr = VirtqAddr {
+                    index: index as _,
+                    flags: 0,
+                    desc_hva: mem.translate(addrs.desc)? as _,
+                    used_hva: mem.translate(addrs.device)? as _,
+                    avail_hva: mem.translate(addrs.driver)? as _,
+                    log_guest_addr: 0,
+                };
+                self.session.set_virtq_addr(&virtq_addr)?;
+                log::trace!("{name}: queue-{index}: set addr: {virtq_addr:x?}");
+
+                let virtq_enable = VirtqState {
+                    index: index as _,
+                    val: 1,
+                };
+                self.session.set_virtq_enable(&virtq_enable)?;
+                log::trace!("{name}: queue-{index}: set enabled: {}", virtq_enable.val);
+            } else {
+                log::trace!("{name}: queue-{index} is disabled");
+            }
+
+            let Some(notifier) = notifiers.get(index) else {
+                continue;
+            };
+            self.session
+                .set_virtq_kick(&(index as u64), notifier.as_fd())?;
+            let raw_fd = notifier.as_fd().as_raw_fd();
+            log::trace!("{name}: queue-{index}: set kick fd: {raw_fd}");
+        }
+        Ok(())
+    }
 }
 
 impl Virtio for VuFrontend {
@@ -320,26 +392,10 @@ impl VirtioMio for VuFrontend {
             .set_features(&((feature | VirtioFeature::VHOST_PROTOCOL.bits()) as u64))?;
         log::trace!("{name}: set driver feature: {feature:x?}");
 
-        for (index, notifier) in active_mio.notifiers.iter().enumerate() {
-            self.session
-                .set_virtq_kick(&(index as u64), notifier.as_fd())?;
-            let raw_fd = notifier.as_fd().as_raw_fd();
-            log::trace!("{name}: queue-{index}: set kick fd: {raw_fd}");
-        }
-
         for (index, queue) in active_mio.queues.iter().enumerate() {
-            let Some(queue) = queue else {
-                log::trace!("{name}: queue-{index} is disabled");
+            if queue.is_none() {
                 continue;
-            };
-            let addrs = queue.addrs();
-
-            let _ = active_mio.irq_sender.queue_irqfd(index as _, |fd| {
-                self.session.set_virtq_call(&(index as u64), fd)?;
-                log::trace!("{name}: queue-{index}: set call fd: {}", fd.as_raw_fd());
-                Ok(())
-            });
-
+            }
             // Each activation gets new error fds: an eventfd that has
             // signaled an error stays readable, and registering it again
             // would fail the device right away.
@@ -350,40 +406,13 @@ impl VirtioMio for VuFrontend {
             let registry = active_mio.poll.registry();
             registry.register(&mut fd, Token(index), Interest::READABLE)?;
             self.err_fds.push((index, fd));
-
-            let virtq_num = VirtqState {
-                index: index as _,
-                val: addrs.size as _,
-            };
-            self.session.set_virtq_num(&virtq_num)?;
-            log::trace!("{name}: queue-{index}: set size: {}", virtq_num.val);
-
-            let virtq_base = VirtqState {
-                index: index as _,
-                val: Q::INIT_VHOST_BASE,
-            };
-            self.session.set_virtq_base(&virtq_base)?;
-            log::trace!("{name}: queue-{index}: set base: {:#x}", virtq_base.val);
-
-            let mem = queue.ram();
-            let virtq_addr = VirtqAddr {
-                index: index as _,
-                flags: 0,
-                desc_hva: mem.translate(addrs.desc)? as _,
-                used_hva: mem.translate(addrs.device)? as _,
-                avail_hva: mem.translate(addrs.driver)? as _,
-                log_guest_addr: 0,
-            };
-            self.session.set_virtq_addr(&virtq_addr)?;
-            log::trace!("{name}: queue-{index}: set addr: {virtq_addr:x?}");
-
-            let virtq_enable = VirtqState {
-                index: index as _,
-                val: 1,
-            };
-            self.session.set_virtq_enable(&virtq_enable)?;
-            log::trace!("{name}: queue-{index}: set enabled: {}", virtq_enable.val);
         }
+
+        self.start_rings(
+            active_mio.queues,
+            active_mio.notifiers,
+            active_mio.irq_sender,
+        )?;
 
         if self.vu_feature.contains(VuFeature::STATUS) {
             let dev_status = DevStatus::from_bits_retain(0xf);
