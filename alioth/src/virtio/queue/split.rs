@@ -85,6 +85,10 @@ impl SplitQueue {
         unsafe { &*self.avail_hdr }.idx.load(Ordering::Acquire)
     }
 
+    pub fn used_index(&self) -> u16 {
+        unsafe { &*self.used_hdr }.idx.load(Ordering::Acquire)
+    }
+
     pub fn set_used_index(&self, val: u16) {
         unsafe { &*self.used_hdr }.idx.store(val, Ordering::Release)
     }
@@ -295,6 +299,20 @@ impl VirtQueue for SplitQueue {
 
     fn index_add(&self, index: Self::Index, _: u16) -> Self::Index {
         index.wrapping_add(1)
+    }
+
+    fn vhost_indices(&self, base: u32) -> Result<(u16, u16)> {
+        let Ok(avail) = u16::try_from(base) else {
+            return error::InvalidVringBase { base }.fail();
+        };
+        // The base of a split queue is the index of the next available
+        // descriptor only. The device finds the other index in the used
+        // ring.
+        Ok((avail, self.used_index()))
+    }
+
+    fn vhost_base(&self, avail: u16, _: u16) -> u32 {
+        avail as u32
     }
 }
 

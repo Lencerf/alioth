@@ -22,14 +22,14 @@ use assert_matches::assert_matches;
 use flume::TryRecvError;
 use rstest::rstest;
 
-use crate::mem::mapped::{ArcMemPages, Ram};
+use crate::mem::mapped::{ArcMemPages, Ram, RamBus};
 use crate::virtio::Error;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::{
     DescChain, Queue, QueueReg, RingAddrs, Status, VirtQueue, copy_from_reader, copy_to_writer,
 };
-use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, fixture_queues, fixture_ram_bus};
+use crate::virtio::tests::{DATA_ADDR, FakeIrqSender, QUEUE_SIZE, fixture_queues, fixture_ram_bus};
 
 /// Guest memory plugged by tests, beyond the fixture memory.
 const EXTRA_GPA: u64 = 4 << 20;
@@ -850,4 +850,164 @@ fn test_handle_desc_irq_before_invalid_chain() {
     assert_eq!(irq_rx.try_recv(), Ok(0));
     assert_matches!(guest_q.get_used(), Some(UsedDesc { id: used, .. }) if used == id);
     assert!(guest_q.notification_enabled());
+}
+
+/// Completes the chains that are available in `host_q`, and returns their
+/// IDs.
+fn complete_chains<Q>(host_q: &mut Queue<Q>, irq_sender: &FakeIrqSender) -> Vec<u16>
+where
+    Q: VirtQueue,
+{
+    let mut ids = vec![];
+    let complete = |chain: &mut DescChain| {
+        ids.push(chain.id());
+        Ok(Status::Done { len: 0 })
+    };
+    host_q.handle_desc(0, irq_sender, complete).unwrap();
+    ids
+}
+
+fn check_vhost_base<Q>(reg: &QueueReg, ram_bus: Arc<RamBus>, mut guest_q: GuestQueue<Q>)
+where
+    Q: VirtQueueGuest,
+{
+    let (irq_tx, _irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+    let mut host_q = Queue::<Q>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_q.vhost_base(), Q::INIT_VHOST_BASE);
+
+    // The device goes around the rings once, and a bit further.
+    for _ in 0..QUEUE_SIZE + 3 {
+        let id = guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+        assert_eq!(complete_chains(&mut host_q, &irq_sender), [id]);
+        assert_eq!(guest_q.get_used().unwrap().id, id);
+    }
+    let base = host_q.vhost_base();
+    assert_ne!(base, Q::INIT_VHOST_BASE);
+
+    // Another device takes over at the base, with two chains waiting.
+    drop(host_q);
+    let id_0 = guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    let id_1 = guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    let mut host_q = Queue::<Q>::with_base(reg, ram_bus, false, base)
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_q.vhost_base(), base);
+
+    // It takes the chains that the first one left, and no chain twice. The
+    // driver finds them where it looks for the next used chains.
+    assert_eq!(complete_chains(&mut host_q, &irq_sender), [id_0, id_1]);
+    assert_eq!(guest_q.get_used().unwrap().id, id_0);
+    assert_eq!(guest_q.get_used().unwrap().id, id_1);
+    assert!(guest_q.get_used().is_none());
+    assert_ne!(host_q.vhost_base(), base);
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+fn test_vhost_base(#[case] packed: bool) {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let ram = ram_bus.load();
+    let reg = &queues[0];
+    if packed {
+        let guest_q = PackedQueue::new(reg, &ram, false).unwrap().unwrap();
+        check_vhost_base(reg, ram_bus, GuestQueue::new(guest_q, reg));
+    } else {
+        let guest_q = SplitQueue::new(reg, &ram, false).unwrap().unwrap();
+        check_vhost_base(reg, ram_bus, GuestQueue::new(guest_q, reg));
+    }
+}
+
+fn check_vhost_base_in_flight<Q>(
+    reg: &QueueReg,
+    ram_bus: Arc<RamBus>,
+    mut guest_q: GuestQueue<Q>,
+    base: u32,
+) where
+    Q: VirtQueueGuest,
+{
+    let (irq_tx, _irq_rx) = flume::unbounded();
+    let irq_sender = FakeIrqSender { q_tx: irq_tx };
+    let mut host_q = Queue::<Q>::new(reg, ram_bus.clone(), false)
+        .unwrap()
+        .unwrap();
+
+    // The device completes a chain, and stops with two more in flight.
+    let id_0 = guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    assert_eq!(complete_chains(&mut host_q, &irq_sender), [id_0]);
+    for _ in 0..2 {
+        guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    }
+    host_q
+        .handle_desc(0, &irq_sender, |_| Ok(Status::Deferred))
+        .unwrap();
+    assert_eq!(host_q.vhost_base(), base);
+    drop(host_q);
+
+    // Another device at the base does not take the chains in flight. The
+    // driver finds what it completes right after the chain that the first
+    // device completed.
+    let id_3 = guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    let mut host_q = Queue::<Q>::with_base(reg, ram_bus, false, base)
+        .unwrap()
+        .unwrap();
+    assert_eq!(host_q.vhost_base(), base);
+    assert_eq!(complete_chains(&mut host_q, &irq_sender), [id_3]);
+    assert_eq!(guest_q.get_used().unwrap().id, id_0);
+    assert_eq!(guest_q.get_used().unwrap().id, id_3);
+    assert!(guest_q.get_used().is_none());
+}
+
+#[rstest]
+// The base of a split queue is the index of the next available descriptor.
+#[case(false, 3)]
+// The base of a packed queue has the offset of the next available
+// descriptor in bits 0 to 14 and that of the next used descriptor in bits
+// 16 to 30, each followed by its wrap counter.
+#[case(true, 0x8001_8003)]
+fn test_vhost_base_in_flight(#[case] packed: bool, #[case] base: u32) {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let ram = ram_bus.load();
+    let reg = &queues[0];
+    if packed {
+        let guest_q = PackedQueue::new(reg, &ram, false).unwrap().unwrap();
+        check_vhost_base_in_flight(reg, ram_bus, GuestQueue::new(guest_q, reg), base);
+    } else {
+        let guest_q = SplitQueue::new(reg, &ram, false).unwrap().unwrap();
+        check_vhost_base_in_flight(reg, ram_bus, GuestQueue::new(guest_q, reg), base);
+    }
+}
+
+#[test]
+fn test_with_base_disabled_queue() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    queues[0].enabled.store(false, Ordering::Release);
+    let host_q = Queue::<SplitQueue>::with_base(&queues[0], ram_bus, false, 1).unwrap();
+    assert!(host_q.is_none());
+}
+
+#[rstest]
+// The base of a split queue is a 16-bit index.
+#[case(false, 0x1_0000)]
+// The offsets of a packed queue are within the ring: the one of the next
+// available descriptor, and the one of the next used descriptor.
+#[case(true, QUEUE_SIZE as u32)]
+#[case(true, (QUEUE_SIZE as u32) << 16)]
+#[case(true, 0x7fff_0000)]
+fn test_with_base_invalid(#[case] packed: bool, #[case] base: u32) {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let queues = fixture_queues(1);
+    let reg = &queues[0];
+    let err = if packed {
+        Queue::<PackedQueue>::with_base(reg, ram_bus, false, base).err()
+    } else {
+        Queue::<SplitQueue>::with_base(reg, ram_bus, false, base).err()
+    };
+    assert_matches!(err, Some(Error::InvalidVringBase { base: b, .. }) if b == base);
 }

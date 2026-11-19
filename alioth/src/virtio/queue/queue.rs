@@ -143,6 +143,14 @@ pub trait VirtQueue: Sized {
     fn enable_notification(&self, enabled: bool);
     fn interrupt_enabled(&self, index: Self::Index, delta: u16) -> bool;
     fn index_add(&self, index: Self::Index, delta: u16) -> Self::Index;
+    /// Returns the indices of the next available and the next used
+    /// descriptor of a queue at `base`, a vring base as taken by the vhost
+    /// and vhost-user SET_VRING_BASE requests.
+    fn vhost_indices(&self, base: u32) -> Result<(Self::Index, Self::Index)>;
+    /// Returns the vring base of a queue whose next available and next used
+    /// descriptors are at `avail` and `used`, as returned by the vhost and
+    /// vhost-user GET_VRING_BASE requests.
+    fn vhost_base(&self, avail: Self::Index, used: Self::Index) -> u32;
 }
 
 #[derive(Debug)]
@@ -190,6 +198,29 @@ where
             deferred: HashMap::new(),
             ram_bus,
         }))
+    }
+
+    /// Creates the queue like [`new`](Self::new), with the device at vring
+    /// base `base` in the rings, instead of at their start.
+    pub fn with_base(
+        reg: &QueueReg,
+        ram_bus: Arc<RamBus>,
+        event_idx: bool,
+        base: u32,
+    ) -> Result<Option<Self>> {
+        let Some(mut queue) = Self::new(reg, ram_bus, event_idx)? else {
+            return Ok(None);
+        };
+        (queue.avail, queue.used) = queue.q.vhost_indices(base)?;
+        Ok(Some(queue))
+    }
+
+    /// Returns where the device stands in the rings, as a vring base.
+    ///
+    /// The base does not tell which chains the device has taken and not
+    /// completed yet.
+    pub fn vhost_base(&self) -> u32 {
+        self.q.vhost_base(self.avail, self.used)
     }
 
     /// Returns the ring addresses.

@@ -77,6 +77,8 @@ pub enum Error {
     InvalidQueueIndex { index: u16 },
     #[snafu(display("Invalid queue size {size}"))]
     InvalidQueueSize { size: u16 },
+    #[snafu(display("Invalid vring base {base:#x}"))]
+    InvalidVringBase { base: u32 },
     #[snafu(display("Invalid msix vector {vector}"))]
     InvalidMsixVector { vector: u16 },
     #[snafu(display("Invalid virtq buffer"))]

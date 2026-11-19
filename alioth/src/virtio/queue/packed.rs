@@ -262,6 +262,21 @@ impl VirtQueue for PackedQueue {
     fn index_add(&self, index: Self::Index, delta: u16) -> Self::Index {
         index.wrapping_add(delta, self.size)
     }
+
+    fn vhost_indices(&self, base: u32) -> Result<(WrappedIndex, WrappedIndex)> {
+        let avail = WrappedIndex(base as u16);
+        let used = WrappedIndex((base >> 16) as u16);
+        // The queue goes to the descriptors at these offsets without
+        // checking them again.
+        if avail.offset() >= self.size || used.offset() >= self.size {
+            return error::InvalidVringBase { base }.fail();
+        }
+        Ok((avail, used))
+    }
+
+    fn vhost_base(&self, avail: WrappedIndex, used: WrappedIndex) -> u32 {
+        (used.0 as u32) << 16 | avail.0 as u32
+    }
 }
 
 #[cfg(test)]
