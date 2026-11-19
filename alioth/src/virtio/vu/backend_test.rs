@@ -21,18 +21,22 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use assert_matches::assert_matches;
 use flume::{Receiver, Sender};
 use mio::{Events, Interest, Poll, Token};
 use rstest::rstest;
 
 use crate::mem;
 use crate::mem::emulated::{Action, Mmio};
-use crate::mem::mapped::RamBus;
+use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::sync::notifier::Notifier;
-use crate::virtio::dev::{VirtioDevice, WakeEvent, WorkerCtl, WorkerReport};
+use crate::virtio::dev::entropy::EntropySpec;
+use crate::virtio::dev::{DevSpec, VirtioDevice, WakeEvent, WorkerCtl, WorkerReport};
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
+use crate::virtio::queue::tests::{GuestQueue, UsedDesc};
 use crate::virtio::queue::{QueueReg, VirtQueue};
+use crate::virtio::tests::{DATA_ADDR, MEM_SIZE, QUEUE_SIZE, fixture_queues};
 use crate::virtio::vu::backend::{VuBackend, VuIrqSender};
 use crate::virtio::vu::bindings::{MemoryRegion, MemorySingleRegion, VirtqAddr, VirtqState};
 use crate::virtio::vu::conn::VuSession;
@@ -131,11 +135,11 @@ fn driver_ok() -> u64 {
     status.bits() as u64
 }
 
-/// Starts ring `index`. The backend takes the kick fd when it starts the
-/// worker.
-fn start_ring(frontend: &VuSession, index: u64) {
+/// Starts ring `index`, and returns its kick fd.
+fn start_ring(frontend: &VuSession, index: u64) -> Notifier {
     let kick = Notifier::new().unwrap();
     frontend.set_virtq_kick(&index, kick.as_fd()).unwrap();
+    kick
 }
 
 /// Starts a device with one queue.
@@ -152,6 +156,15 @@ fn take_signals(eventfd: &Notifier) -> u64 {
         Ok(_) => u64::from_ne_bytes(count),
         Err(e) if e.kind() == ErrorKind::WouldBlock => 0,
         Err(e) => panic!("cannot read eventfd: {e:?}"),
+    }
+}
+
+/// Waits until `eventfd` is signalled.
+fn wait_signal(eventfd: &Notifier) {
+    let deadline = Instant::now() + TIMEOUT;
+    while take_signals(eventfd) == 0 {
+        assert!(Instant::now() < deadline, "eventfd not signalled");
+        thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -693,6 +706,228 @@ fn test_vu_backend_call_fd() {
     }
     assert_eq!(take_signals(&masked), 1);
     assert_eq!(calls.each_ref().map(take_signals), [1, 0]);
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+}
+
+/// What the fake worker of [`spawn_kick_backend`] was asked to do.
+#[derive(Debug)]
+enum KickEvent {
+    /// To start the device with these queue notifiers.
+    Start(Option<Arc<[Notifier]>>),
+    Pause,
+    /// To resume the device with these queue notifiers.
+    Resume(Option<Arc<[Notifier]>>),
+    Reset,
+}
+
+/// Serves a device with `num_queues` queues, whose fake worker tells what
+/// it is asked to do.
+fn spawn_kick_backend(num_queues: usize) -> (VuSession, JoinHandle<()>, Receiver<KickEvent>) {
+    let queue_regs = (0..num_queues).map(|_| QueueReg::default());
+    let (event_tx, events) = flume::unbounded();
+    let worker = move |event_rx: TestWakeReceiver, report_tx: Sender<WorkerReport>| {
+        for event in event_rx.iter() {
+            let event = match event {
+                WakeEvent::Start { param } => KickEvent::Start(param.notifiers),
+                WakeEvent::Pause { seq } => {
+                    report_tx.send(WorkerReport::Paused { seq }).unwrap();
+                    KickEvent::Pause
+                }
+                WakeEvent::Resume { notifiers } => KickEvent::Resume(notifiers),
+                WakeEvent::Reset { seq } => {
+                    report_tx.send(WorkerReport::ResetDone { seq }).unwrap();
+                    KickEvent::Reset
+                }
+                event => panic!("unexpected event: {event:?}"),
+            };
+            event_tx.send(event).unwrap();
+        }
+    };
+    let notifier = Arc::new(Notifier::new().unwrap());
+    let (frontend, backend_thread) =
+        spawn_backend_with(queue_regs.collect(), Arc::default(), notifier, worker);
+    (frontend, backend_thread, events)
+}
+
+/// Returns how often each of `notifiers` was signalled since the last
+/// call.
+fn take_all_signals(notifiers: &[Notifier]) -> Vec<u64> {
+    notifiers.iter().map(take_signals).collect()
+}
+
+#[test]
+fn test_vu_backend_hands_kick_fds_to_worker() {
+    let (frontend, backend_thread, events) = spawn_kick_backend(2);
+    let kick_0 = start_ring(&frontend, 0);
+    let kick_1 = start_ring(&frontend, 1);
+    frontend.set_status(&driver_ok()).unwrap();
+
+    // The worker starts with notifiers for the kick fds of the rings.
+    let event = events.recv_timeout(TIMEOUT);
+    let Ok(KickEvent::Start(Some(notifiers))) = event else {
+        panic!("unexpected event: {event:?}");
+    };
+    kick_1.notify().unwrap();
+    assert_eq!(take_all_signals(&notifiers), [0, 1]);
+
+    // The frontend stops ring 0, and starts it again with another kick fd.
+    // The worker resumes with a notifier for that one, and with a notifier
+    // for the kick fd that ring 1 still has.
+    stop_ring(&frontend, 0);
+    assert_matches!(events.recv_timeout(TIMEOUT), Ok(KickEvent::Pause));
+    let new_kick_0 = start_ring(&frontend, 0);
+    let event = events.recv_timeout(TIMEOUT);
+    let Ok(KickEvent::Resume(Some(notifiers))) = event else {
+        panic!("unexpected event: {event:?}");
+    };
+    kick_0.notify().unwrap();
+    assert_eq!(take_all_signals(&notifiers), [0, 0]);
+    new_kick_0.notify().unwrap();
+    kick_1.notify().unwrap();
+    assert_eq!(take_all_signals(&notifiers), [1, 1]);
+
+    // A ring that is started takes another kick fd as well. A worker takes
+    // new notifiers only when it resumes, so it pauses first.
+    let new_kick_1 = start_ring(&frontend, 1);
+    assert_matches!(events.recv_timeout(TIMEOUT), Ok(KickEvent::Pause));
+    let event = events.recv_timeout(TIMEOUT);
+    let Ok(KickEvent::Resume(Some(notifiers))) = event else {
+        panic!("unexpected event: {event:?}");
+    };
+    kick_1.notify().unwrap();
+    assert_eq!(take_all_signals(&notifiers), [0, 0]);
+    new_kick_0.notify().unwrap();
+    new_kick_1.notify().unwrap();
+    assert_eq!(take_all_signals(&notifiers), [1, 1]);
+
+    // The rings keep their kick fds when the driver resets the device.
+    frontend.set_status(&0).unwrap();
+    assert_matches!(events.recv_timeout(TIMEOUT), Ok(KickEvent::Reset));
+    frontend.set_status(&driver_ok()).unwrap();
+    let event = events.recv_timeout(TIMEOUT);
+    let Ok(KickEvent::Start(Some(notifiers))) = event else {
+        panic!("unexpected event: {event:?}");
+    };
+    new_kick_1.notify().unwrap();
+    assert_eq!(take_all_signals(&notifiers), [0, 1]);
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+    assert_eq!(events.try_iter().count(), 0);
+}
+
+/// Makes a buffer available to the device, and returns its ID.
+fn add_buffer(guest_q: &mut GuestQueue<SplitQueue>) -> u16 {
+    guest_q.add_desc(&[], &[(DATA_ADDR, 64)])
+}
+
+/// Checks that the device has filled buffer `id`, and no other one.
+fn check_filled(guest_q: &mut GuestQueue<SplitQueue>, id: u16) {
+    assert_matches!(guest_q.get_used(), Some(UsedDesc { id: i, len: 64, .. }) if i == id);
+    assert_matches!(guest_q.get_used(), None);
+}
+
+#[test]
+fn test_vu_backend_serves_ring_with_new_fds() {
+    // An entropy device with its worker behind the backend.
+    let memory = Arc::new(RamBus::new());
+    let dev = EntropySpec { source: None }.build("entropy").unwrap();
+    let dev = VirtioDevice::new("entropy", dev, memory.clone(), false).unwrap();
+    let (frontend_conn, backend_conn) = UnixStream::pair().unwrap();
+    let mut backend = VuBackend::new(backend_conn, dev, memory).unwrap();
+    let backend_thread = thread::spawn(move || backend.run().unwrap());
+    let frontend = VuSession::from(frontend_conn);
+
+    // The guest memory, which the frontend shares with the backend, and
+    // the queue of the driver in it.
+    let file = tempfile::tempfile().unwrap();
+    file.set_len(MEM_SIZE as u64).unwrap();
+    let hva = 0x7f00_0000_0000;
+    let region = MemorySingleRegion {
+        _padding: 0,
+        region: MemoryRegion {
+            gpa: 0,
+            size: MEM_SIZE as u64,
+            hva,
+            mmap_offset: 0,
+        },
+    };
+    frontend.add_mem_region(&region, file.as_fd()).unwrap();
+    let prot = libc::PROT_READ | libc::PROT_WRITE;
+    let pages = ArcMemPages::from_file(file, 0, MEM_SIZE, prot).unwrap();
+    let ram_bus = RamBus::new();
+    ram_bus.update(|ram| ram.add(0, pages)).unwrap();
+    let ram = ram_bus.load();
+    let queue_regs = fixture_queues(1);
+    let reg = &queue_regs[0];
+    let guest_q = SplitQueue::new(reg, &ram, false).unwrap().unwrap();
+    let mut guest_q = GuestQueue::new(guest_q, reg);
+
+    let virtq_num = VirtqState {
+        index: 0,
+        val: QUEUE_SIZE as u32,
+    };
+    frontend.set_virtq_num(&virtq_num).unwrap();
+    let virtq_addr = VirtqAddr {
+        index: 0,
+        flags: 0,
+        desc_hva: hva + reg.desc.load(Ordering::Acquire),
+        used_hva: hva + reg.device.load(Ordering::Acquire),
+        avail_hva: hva + reg.driver.load(Ordering::Acquire),
+        log_guest_addr: 0,
+    };
+    frontend.set_virtq_addr(&virtq_addr).unwrap();
+    let virtq_enable = VirtqState { index: 0, val: 1 };
+    frontend.set_virtq_enable(&virtq_enable).unwrap();
+    let call = Notifier::new().unwrap();
+    frontend.set_virtq_call(&0, call.as_fd()).unwrap();
+    let kick = start_ring(&frontend, 0);
+    frontend.set_status(&driver_ok()).unwrap();
+
+    // The device fills a buffer of the driver, and signals the call fd.
+    let id = add_buffer(&mut guest_q);
+    kick.notify().unwrap();
+    wait_signal(&call);
+    check_filled(&mut guest_q, id);
+
+    // The frontend stops the ring, and starts it again with other
+    // eventfds. The driver made a buffer available meanwhile. The device
+    // fills it without a notification, and signals the new call fd.
+    assert_eq!(stop_ring(&frontend, 0), 1);
+    let id = add_buffer(&mut guest_q);
+    let new_call = Notifier::new().unwrap();
+    frontend.set_virtq_call(&0, new_call.as_fd()).unwrap();
+    let new_kick = start_ring(&frontend, 0);
+    wait_signal(&new_call);
+    check_filled(&mut guest_q, id);
+    assert_eq!(take_signals(&call), 0);
+
+    // The device waits on the new kick fd only.
+    let id = add_buffer(&mut guest_q);
+    kick.notify().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    assert_matches!(guest_q.get_used(), None);
+    new_kick.notify().unwrap();
+    wait_signal(&new_call);
+    check_filled(&mut guest_q, id);
+
+    // The frontend replaces both fds of the ring without stopping it.
+    let id = add_buffer(&mut guest_q);
+    let newer_call = Notifier::new().unwrap();
+    frontend.set_virtq_call(&0, newer_call.as_fd()).unwrap();
+    let newer_kick = start_ring(&frontend, 0);
+    wait_signal(&newer_call);
+    check_filled(&mut guest_q, id);
+    assert_eq!(take_signals(&new_call), 0);
+    let id = add_buffer(&mut guest_q);
+    new_kick.notify().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    assert_matches!(guest_q.get_used(), None);
+    newer_kick.notify().unwrap();
+    wait_signal(&newer_call);
+    check_filled(&mut guest_q, id);
 
     drop(frontend);
     backend_thread.join().unwrap();

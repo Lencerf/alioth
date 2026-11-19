@@ -140,7 +140,10 @@ struct VuQueueInit {
     /// Whether the ring is started. VHOST_USER_SET_VRING_KICK starts a
     /// ring, and VHOST_USER_GET_VRING_BASE stops it.
     started: bool,
-    notifier: Option<Notifier>,
+    /// The kick fd of the ring. The backend keeps it, since the frontend
+    /// sends one only with a ring that it starts, and gives the worker a
+    /// notifier of its own for it.
+    kick: Option<OwnedFd>,
     errfd: Option<File>,
 }
 
@@ -266,17 +269,33 @@ impl VuBackend {
         match (self.worker, started) {
             (VuWorkerState::Stopped, true) => self.start_worker(),
             (VuWorkerState::Running, false) => self.pause_worker(),
-            (VuWorkerState::Paused, true) => {
-                // The worker goes on with the kick and call fds that it
-                // has. A frontend is expected to start a ring with the
-                // eventfds that it stopped the ring with, unless it resets
-                // the device in between.
-                self.dev.ctl.wake(WakeEvent::Resume { notifiers: None });
-                self.worker = VuWorkerState::Running;
-                Ok(())
-            }
+            (VuWorkerState::Paused, true) => self.resume_worker(),
             _ => Ok(()),
         }
+    }
+
+    /// Lets a paused worker serve the queues again.
+    fn resume_worker(&mut self) -> Result<()> {
+        // The frontend sent a kick fd with each ring that it started
+        // again, so the worker gives up the notifiers that it has.
+        let notifiers = Some(self.notifiers()?);
+        self.dev.ctl.wake(WakeEvent::Resume { notifiers });
+        self.worker = VuWorkerState::Running;
+        Ok(())
+    }
+
+    /// Returns notifiers for the worker to wait on the kick fds of the
+    /// rings.
+    fn notifiers(&self) -> Result<Arc<[Notifier]>> {
+        let mut notifiers = Vec::with_capacity(self.init.queues.len());
+        for (index, q) in self.init.queues.iter().enumerate() {
+            let Some(kick) = &q.kick else {
+                let index = index as u16;
+                return error::MissingNotifier { index }.fail();
+            };
+            notifiers.push(Notifier::try_from(kick.try_clone()?)?);
+        }
+        Ok(notifiers.into())
     }
 
     /// Takes over where the worker stopped in the rings.
@@ -317,7 +336,7 @@ impl VuBackend {
         error::Convert { hva }.fail()
     }
 
-    fn parse_init(&mut self) -> Result<StartParam<VuIrqSender>> {
+    fn parse_init(&self) -> Result<StartParam<VuIrqSender>> {
         let init_base = self.init_base();
         for (index, (param, queue)) in zip(&self.init.queues, &*self.dev.queue_regs).enumerate() {
             let index = index as u16;
@@ -345,25 +364,13 @@ impl VuBackend {
             queue.driver.store(drv_gpa, Ordering::Release);
         }
 
-        let queues = &mut self.init.queues;
-
-        let mut notifiers = vec![];
-        for (index, q) in queues.iter_mut().enumerate() {
-            match q.notifier.take() {
-                Some(notifier) => notifiers.push(notifier),
-                None => {
-                    let index = index as u16;
-                    return error::MissingNotifier { index }.fail();
-                }
-            }
-        }
-
+        let queues = &self.init.queues;
         let bases = queues.iter().map(|q| q.base.unwrap_or(init_base));
 
         Ok(StartParam {
             feature: self.init.drv_feat as u128,
             irq_sender: self.irq_sender.clone(),
-            notifiers: Some(notifiers.into()),
+            notifiers: Some(self.notifiers()?),
             bases: Some(bases.collect()),
         })
     }
@@ -459,9 +466,15 @@ impl VuBackend {
                     return error::InvalidQueue { index }.fail();
                 };
                 log::debug!("{name}: queue-{index}: set kick fd: {}", fd.as_raw_fd());
-                q.notifier = Some(Notifier::try_from(fd)?);
+                q.kick = Some(fd);
                 // SET_VRING_KICK starts the ring.
                 q.started = true;
+                // The worker takes the kick fds when it starts or resumes.
+                // If it runs, the ring was started before, and the worker
+                // pauses for the new kick fd.
+                if self.worker == VuWorkerState::Running {
+                    self.pause_worker()?;
+                }
                 self.sync_worker(self.status)?;
             }
             (VuFrontMsg::SET_VIRTQ_NUM, 8) => {
