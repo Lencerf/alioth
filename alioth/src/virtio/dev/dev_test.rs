@@ -1077,7 +1077,7 @@ fn test_mio_resume_dev() {
     let mut active_mio = ActiveMio {
         queues: &mut queues,
         irq_sender: &irq_sender,
-        notifiers: &notifiers,
+        notifiers: Arc::from(notifiers),
         poll: &mut poll,
     };
 
@@ -1109,7 +1109,7 @@ fn test_mio_resume_notifies_offloaded_queues() {
     let mut active_mio = ActiveMio {
         queues: &mut queues,
         irq_sender: &irq_sender,
-        notifiers: &notifiers,
+        notifiers: Arc::from(notifiers),
         poll: &mut poll,
     };
 

@@ -74,13 +74,12 @@ fn test_vhost_vsock_handle_event_and_queue() {
         .unwrap();
     let event = events.iter().next().unwrap();
 
-    let notifiers = [kick_0];
     let mut queues: [Option<Queue<SplitQueue>>; 0] = [];
     let irq_sender = DummyIrqSender;
     let mut active_mio = ActiveMio {
         queues: &mut queues,
         irq_sender: &irq_sender,
-        notifiers: &notifiers,
+        notifiers: Arc::new([kick_0]),
         poll: &mut poll,
     };
 

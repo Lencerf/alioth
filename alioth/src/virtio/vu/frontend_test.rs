@@ -213,7 +213,7 @@ where
 {
     queues: Box<[Option<Queue<Q>>]>,
     irq_sender: TestIrqSender,
-    notifiers: [Notifier; 2],
+    notifiers: Arc<[Notifier]>,
     poll: Poll,
 }
 
@@ -234,7 +234,7 @@ where
         Rings {
             queues,
             irq_sender: TestIrqSender::default(),
-            notifiers: [Notifier::new().unwrap(), Notifier::new().unwrap()],
+            notifiers: Arc::new([Notifier::new().unwrap(), Notifier::new().unwrap()]),
             poll: Poll::new().unwrap(),
         }
     }
@@ -243,7 +243,7 @@ where
         let mut active_mio = ActiveMio {
             queues: &mut self.queues,
             irq_sender: &self.irq_sender,
-            notifiers: &self.notifiers,
+            notifiers: self.notifiers.clone(),
             poll: &mut self.poll,
         };
         frontend.activate(feature, &mut active_mio).unwrap();
@@ -518,7 +518,7 @@ fn test_vu_frontend_queue_err() {
     let mut active_mio = ActiveMio {
         queues: &mut queues,
         irq_sender: &irq_sender,
-        notifiers: &notifiers,
+        notifiers: Arc::from(notifiers),
         poll: &mut poll,
     };
     let feature = VirtioFeature::VERSION_1.bits();
@@ -577,13 +577,12 @@ fn test_vu_frontend_handle_queue() {
     poll.registry()
         .register(&mut kick, Token(0), Interest::READABLE)
         .unwrap();
-    let notifiers = [kick];
     let mut queues: [Option<Queue<SplitQueue>>; 0] = [];
     let irq_sender = TestIrqSender::default();
     let mut active_mio = ActiveMio {
         queues: &mut queues,
         irq_sender: &irq_sender,
-        notifiers: &notifiers,
+        notifiers: Arc::new([kick]),
         poll: &mut poll,
     };
 

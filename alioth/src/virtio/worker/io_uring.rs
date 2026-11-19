@@ -128,7 +128,7 @@ where
             ring: io_uring::IoUring::new(RING_SIZE as u32)?,
             shared_count: RING_SIZE - 1 - num_queues * QUEUE_RESERVE_SIZE,
             irq_sender: &*param.irq_sender,
-            notifiers: param.notifiers.as_deref().unwrap_or(&[]),
+            notifiers: param.notifiers.clone().unwrap_or_default(),
             queues,
             submit_counts,
             cancelling: Vec::new(),
@@ -136,17 +136,7 @@ where
         };
         self.submit_notifier(&mut active_ring.ring.submission())?;
         context.dev.activate(param.feature, &mut active_ring)?;
-
-        if let Some(notifiers) = &param.notifiers {
-            let sq = &mut active_ring.ring.submission();
-            for (index, notifier) in notifiers.iter().enumerate() {
-                if context.dev.notifier_offloaded(index as u16)? {
-                    continue;
-                }
-                submit_queue_notifier(index as u16, notifier, sq)?;
-                active_ring.shared_count -= 1;
-            }
-        }
+        active_ring.submit_notifiers(&context.dev)?;
 
         let ret = active_ring.run(context);
         let drained = active_ring.drain();
@@ -161,7 +151,9 @@ where
     ring: io_uring::IoUring,
     pub queues: &'a mut [Option<Queue<Q>>],
     pub irq_sender: &'a S,
-    pub notifiers: &'a [Notifier],
+    /// The notifiers of the queues. The event loop waits on those of the
+    /// queues that the worker serves itself.
+    pub notifiers: Arc<[Notifier]>,
     shared_count: u16,
     submit_counts: Box<[u16]>,
     /// The chains, by queue index and ID, whose requests are being
@@ -221,6 +213,23 @@ where
     Q: VirtQueue,
     S: IrqSender,
 {
+    /// Waits for the notifications of the queues that the worker serves
+    /// itself.
+    fn submit_notifiers<D>(&mut self, dev: &D) -> Result<()>
+    where
+        D: Virtio,
+    {
+        let sq = &mut self.ring.submission();
+        for (index, notifier) in self.notifiers.iter().enumerate() {
+            if dev.notifier_offloaded(index as u16)? {
+                continue;
+            }
+            submit_queue_notifier(index as u16, notifier, sq)?;
+            self.shared_count -= 1;
+        }
+        Ok(())
+    }
+
     fn run<D>(&mut self, context: &mut Context<D, S>) -> Result<()>
     where
         D: VirtioIoUring,
@@ -487,7 +496,7 @@ where
     }
 
     fn resume_dev(&mut self, dev: &mut D) -> Result<()> {
-        dev.resume(self.queues, self.notifiers, self.irq_sender)
+        dev.resume(self.queues, &self.notifiers, self.irq_sender)
     }
 }
 

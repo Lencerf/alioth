@@ -114,7 +114,7 @@ where
         let mut active_mio = ActiveMio {
             queues,
             irq_sender: &*param.irq_sender,
-            notifiers: param.notifiers.as_deref().unwrap_or(&[]),
+            notifiers: param.notifiers.clone().unwrap_or_default(),
             poll: &mut self.poll,
         };
         let ret = active_mio.run(context, param.feature);
@@ -131,7 +131,9 @@ where
 {
     pub queues: &'a mut [Option<Queue<Q>>],
     pub irq_sender: &'a S,
-    pub notifiers: &'a [Notifier],
+    /// The notifiers of the queues. The event loop waits on those of the
+    /// queues that the worker serves itself.
+    pub notifiers: Arc<[Notifier]>,
     pub poll: &'a mut Poll,
 }
 
@@ -148,7 +150,7 @@ where
     {
         context.dev.activate(feature, self)?;
         // The driver may have notified the queues since it set DRIVER_OK.
-        context.dev.notify_offloaded(self.notifiers)?;
+        context.dev.notify_offloaded(&self.notifiers)?;
         self.register_notifiers(&context.dev)?;
         let mut events = Events::with_capacity(128);
         loop {
@@ -254,10 +256,10 @@ where
     fn resume(&mut self, dev: &mut D) -> Result<()> {
         // Whatever serves the offloaded queues was stopped while the
         // device was paused, like before the device was activated.
-        dev.notify_offloaded(self.notifiers)
+        dev.notify_offloaded(&self.notifiers)
     }
 
     fn resume_dev(&mut self, dev: &mut D) -> Result<()> {
-        dev.resume(self.queues, self.notifiers, self.irq_sender)
+        dev.resume(self.queues, &self.notifiers, self.irq_sender)
     }
 }

@@ -487,7 +487,7 @@ impl VirtioMio for VuFrontend {
 
         self.start_rings(
             active_mio.queues,
-            active_mio.notifiers,
+            &active_mio.notifiers,
             active_mio.irq_sender,
         )?;
 
