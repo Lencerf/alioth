@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use alioth_macros::trace_error;
+use parking_lot::RwLock;
 use snafu::Snafu;
 use zerocopy::IntoBytes;
 
@@ -76,9 +77,13 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Signals the call fds of the rings.
+///
+/// The frontend may replace the call fd of a ring at any time, also while
+/// the worker serves the ring, e.g. when the driver masks an interrupt.
 #[derive(Debug)]
 pub struct VuIrqSender {
-    queues: Box<[Option<File>]>,
+    queues: Box<[RwLock<Option<File>>]>,
 }
 
 impl VuIrqSender {
@@ -100,7 +105,8 @@ impl IrqSender for VuIrqSender {
             log::error!("invalid queue index: {idx}");
             return;
         };
-        let Some(fd) = queue.as_ref() else {
+        let fd = queue.read();
+        let Some(fd) = fd.as_ref() else {
             log::error!("queue-{idx} irqfd is not available");
             return;
         };
@@ -135,7 +141,6 @@ struct VuQueueInit {
     /// ring, and VHOST_USER_GET_VRING_BASE stops it.
     started: bool,
     notifier: Option<Notifier>,
-    irqfd: Option<File>,
     errfd: Option<File>,
 }
 
@@ -166,6 +171,7 @@ pub struct VuBackend {
     worker: VuWorkerState,
     memory: Arc<RamBus>,
     dev: VirtioDevice<VuIrqSender>,
+    irq_sender: Arc<VuIrqSender>,
     init: VuInit,
 }
 
@@ -177,10 +183,14 @@ impl VuBackend {
     ) -> Result<Self> {
         conn.set_nonblocking(false)?;
         let queue_num = dev.queue_regs.len();
+        let irq_sender = VuIrqSender {
+            queues: (0..queue_num).map(|_| RwLock::new(None)).collect(),
+        };
         Ok(VuBackend {
             session: VuSession::from(conn),
             channel: None,
             dev,
+            irq_sender: Arc::new(irq_sender),
             memory,
             status: DevStatus::empty(),
             worker: VuWorkerState::Stopped,
@@ -337,11 +347,6 @@ impl VuBackend {
 
         let queues = &mut self.init.queues;
 
-        let queue_irqfds = queues.iter_mut().map(|q| q.irqfd.take()).collect();
-        let irq_sender = VuIrqSender {
-            queues: queue_irqfds,
-        };
-
         let mut notifiers = vec![];
         for (index, q) in queues.iter_mut().enumerate() {
             match q.notifier.take() {
@@ -357,7 +362,7 @@ impl VuBackend {
 
         Ok(StartParam {
             feature: self.init.drv_feat as u128,
-            irq_sender: Arc::new(irq_sender),
+            irq_sender: self.irq_sender.clone(),
             notifiers: Some(notifiers.into()),
             bases: Some(bases.collect()),
         })
@@ -437,11 +442,13 @@ impl VuBackend {
                 let Some(fd) = fds[0].take() else {
                     return error::MissingFd { req: msg.request }.fail();
                 };
-                let Some(q) = self.init.queues.get_mut(index as usize) else {
+                let Some(irqfd) = self.irq_sender.queues.get(index as usize) else {
                     return error::InvalidQueue { index }.fail();
                 };
                 log::debug!("{name}: queue-{index}: set call fd: {}", fd.as_raw_fd());
-                q.irqfd = Some(File::from(fd));
+                // The worker signals the new fd from now on, also if it
+                // serves the ring at the moment.
+                *irqfd.write() = Some(File::from(fd));
             }
             (VuFrontMsg::SET_VIRTQ_KICK, 8) => {
                 let index = self.session.recv_payload::<u64>()? as u16;

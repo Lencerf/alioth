@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs::File;
+use std::io::{ErrorKind, Read};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -34,7 +36,7 @@ use crate::virtio::queue::{QueueReg, VirtQueue};
 use crate::virtio::vu::backend::{VuBackend, VuIrqSender};
 use crate::virtio::vu::bindings::{MemoryRegion, MemorySingleRegion, VirtqAddr, VirtqState};
 use crate::virtio::vu::conn::VuSession;
-use crate::virtio::{DevStatus, DeviceId, VirtioFeature};
+use crate::virtio::{DevStatus, DeviceId, IrqSender, VirtioFeature};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -140,6 +142,17 @@ fn start_ring(frontend: &VuSession, index: u64) {
 fn start(frontend: &VuSession) {
     start_ring(frontend, 0);
     frontend.set_status(&driver_ok()).unwrap();
+}
+
+/// Returns how often `eventfd` was signalled since the last call.
+fn take_signals(eventfd: &Notifier) -> u64 {
+    let mut eventfd = File::from(eventfd.as_fd().try_clone_to_owned().unwrap());
+    let mut count = [0u8; 8];
+    match eventfd.read(&mut count) {
+        Ok(_) => u64::from_ne_bytes(count),
+        Err(e) if e.kind() == ErrorKind::WouldBlock => 0,
+        Err(e) => panic!("cannot read eventfd: {e:?}"),
+    }
 }
 
 #[test]
@@ -616,6 +629,70 @@ fn test_vu_backend_ring_starts_at_beginning(#[case] feature: u128, #[case] base:
     assert_eq!(stop_ring(&frontend, 0), base);
     start(&frontend);
     assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[base])));
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+}
+
+#[test]
+fn test_vu_backend_call_fd() {
+    // A fake worker of a device with two queues, which hands out the
+    // interrupt sender that it starts with.
+    let (irq_tx, irq_rx) = flume::unbounded();
+    let worker = move |event_rx: TestWakeReceiver, report_tx: Sender<WorkerReport>| {
+        for event in event_rx.iter() {
+            match event {
+                WakeEvent::Start { param } => irq_tx.send(param.irq_sender).unwrap(),
+                WakeEvent::Reset { seq } => {
+                    report_tx.send(WorkerReport::ResetDone { seq }).unwrap()
+                }
+                event => panic!("unexpected event: {event:?}"),
+            }
+        }
+    };
+    let queue_regs = Arc::new([QueueReg::default(), QueueReg::default()]);
+    let notifier = Arc::new(Notifier::new().unwrap());
+    let (frontend, backend_thread) =
+        spawn_backend_with(queue_regs, Arc::default(), notifier, worker);
+    // Starts both rings, with a call fd for each.
+    let start = || {
+        for index in 0..2 {
+            let kick = Notifier::new().unwrap();
+            frontend.set_virtq_kick(&index, kick.as_fd()).unwrap();
+        }
+        frontend.set_status(&driver_ok()).unwrap();
+    };
+
+    let calls = [Notifier::new().unwrap(), Notifier::new().unwrap()];
+    for (index, call) in calls.iter().enumerate() {
+        frontend
+            .set_virtq_call(&(index as u64), call.as_fd())
+            .unwrap();
+    }
+    start();
+    let irq_sender = irq_rx.recv_timeout(TIMEOUT).unwrap();
+    irq_sender.queue_irq(1);
+    assert_eq!(calls.each_ref().map(take_signals), [0, 1]);
+
+    // The frontend replaces the call fd of ring 1 while the worker serves
+    // the ring, e.g. when the driver masks the interrupt. The worker
+    // signals the new one right away.
+    let masked = Notifier::new().unwrap();
+    frontend.set_virtq_call(&1, masked.as_fd()).unwrap();
+    irq_sender.queue_irq(1);
+    assert_eq!(take_signals(&masked), 1);
+    irq_sender.queue_irq(0);
+    assert_eq!(calls.each_ref().map(take_signals), [1, 0]);
+
+    // The call fds stay when the worker starts again.
+    frontend.set_status(&0).unwrap();
+    start();
+    let irq_sender = irq_rx.recv_timeout(TIMEOUT).unwrap();
+    for index in 0..2 {
+        irq_sender.queue_irq(index);
+    }
+    assert_eq!(take_signals(&masked), 1);
+    assert_eq!(calls.each_ref().map(take_signals), [1, 0]);
 
     drop(frontend);
     backend_thread.join().unwrap();
