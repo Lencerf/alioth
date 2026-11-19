@@ -111,55 +111,17 @@ where
         S: IrqSender,
         Q: VirtQueue,
     {
-        let mut events = Events::with_capacity(128);
         let mut active_mio = ActiveMio {
             queues,
             irq_sender: &*param.irq_sender,
             notifiers: param.notifiers.as_deref().unwrap_or(&[]),
             poll: &mut self.poll,
         };
-        context.dev.activate(param.feature, &mut active_mio)?;
-        // The driver may have notified the queues since it set DRIVER_OK.
-        context.dev.notify_offloaded(active_mio.notifiers)?;
-        // Only KVM offers ioeventfds, see [`crate::hv::NotifierRegistry`].
-        #[cfg(target_os = "linux")]
-        for (index, notifier) in active_mio.notifiers.iter().enumerate() {
-            if context.dev.notifier_offloaded(index as u16)? {
-                continue;
-            }
-            let token = index as u64 | TOKEN_QUEUE;
-            let registry = active_mio.poll.registry();
-            registry
-                .register(
-                    &mut SourceFd(&notifier.as_fd().as_raw_fd()),
-                    Token(token as usize),
-                    Interest::READABLE,
-                )
-                .context(error::EventSource)?;
-        }
-        'out: loop {
-            active_mio
-                .poll
-                .poll(&mut events, None)
-                .context(error::PollEvents)?;
-            for event in events.iter() {
-                context.handle_event(event, &mut active_mio)?;
-                if context.state != WorkerState::Running {
-                    break 'out;
-                }
-            }
-        }
-        #[cfg(target_os = "linux")]
-        for (index, notifier) in active_mio.notifiers.iter().enumerate() {
-            if context.dev.notifier_offloaded(index as u16)? {
-                continue;
-            }
-            let registry = active_mio.poll.registry();
-            registry
-                .deregister(&mut SourceFd(&notifier.as_fd().as_raw_fd()))
-                .context(error::EventSource)?;
-        }
-        Ok(())
+        let ret = active_mio.run(context, param.feature);
+        // The poll outlives the event loop. The next loop cannot wait for a
+        // notifier that is still in the poll, so take the notifiers out
+        // even if the loop failed.
+        ret.and(active_mio.deregister_notifiers(&context.dev))
     }
 }
 
@@ -171,6 +133,90 @@ where
     pub irq_sender: &'a S,
     pub notifiers: &'a [Notifier],
     pub poll: &'a mut Poll,
+}
+
+impl<Q, S> ActiveMio<'_, Q, S>
+where
+    Q: VirtQueue,
+    S: IrqSender,
+{
+    /// Activates the device of `context`, and handles its events until the
+    /// device is reset or the worker shuts down.
+    fn run<D>(&mut self, context: &mut Context<D, S>, feature: u128) -> Result<()>
+    where
+        D: VirtioMio,
+    {
+        context.dev.activate(feature, self)?;
+        // The driver may have notified the queues since it set DRIVER_OK.
+        context.dev.notify_offloaded(self.notifiers)?;
+        self.register_notifiers(&context.dev)?;
+        let mut events = Events::with_capacity(128);
+        loop {
+            self.poll
+                .poll(&mut events, None)
+                .context(error::PollEvents)?;
+            for event in events.iter() {
+                context.handle_event(event, self)?;
+                if context.state != WorkerState::Running {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    /// Waits for the notifications of the queues that the worker serves
+    /// itself.
+    #[cfg(target_os = "linux")]
+    fn register_notifiers<D>(&self, dev: &D) -> Result<()>
+    where
+        D: Virtio,
+    {
+        for (index, notifier) in self.notifiers.iter().enumerate() {
+            if dev.notifier_offloaded(index as u16)? {
+                continue;
+            }
+            let token = index as u64 | TOKEN_QUEUE;
+            let registry = self.poll.registry();
+            registry
+                .register(
+                    &mut SourceFd(&notifier.as_fd().as_raw_fd()),
+                    Token(token as usize),
+                    Interest::READABLE,
+                )
+                .context(error::EventSource)?;
+        }
+        Ok(())
+    }
+
+    /// Stops waiting for the notifications of the queues. It goes on after
+    /// a failure, and returns the first one.
+    #[cfg(target_os = "linux")]
+    fn deregister_notifiers<D>(&self, dev: &D) -> Result<()>
+    where
+        D: Virtio,
+    {
+        let mut ret = Ok(());
+        for (index, notifier) in self.notifiers.iter().enumerate() {
+            if matches!(dev.notifier_offloaded(index as u16), Ok(true)) {
+                continue;
+            }
+            let registry = self.poll.registry();
+            let deregistered = registry.deregister(&mut SourceFd(&notifier.as_fd().as_raw_fd()));
+            ret = ret.and(deregistered.context(error::EventSource));
+        }
+        ret
+    }
+
+    /// Only KVM offers ioeventfds, see [`crate::hv::NotifierRegistry`].
+    #[cfg(not(target_os = "linux"))]
+    fn register_notifiers<D>(&self, _: &D) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn deregister_notifiers<D>(&self, _: &D) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<D, Q, S> ActiveBackend<D> for ActiveMio<'_, Q, S>

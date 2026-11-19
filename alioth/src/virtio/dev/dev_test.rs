@@ -368,6 +368,16 @@ impl TestWorker {
         }
     }
 
+    /// Waits until the device has completed `count` chains.
+    #[cfg(target_os = "linux")]
+    fn wait_chains(&self, count: u32) {
+        let deadline = Instant::now() + TIMEOUT;
+        while self.chains.load(Ordering::Acquire) < count {
+            assert!(Instant::now() < deadline, "chains not completed");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// Waits until the worker reports a failure.
     fn wait_failed(&self) {
         let deadline = Instant::now() + TIMEOUT;
@@ -506,6 +516,40 @@ fn test_worker_fails_without_rings() {
     worker.wait_activations(2);
     worker.reset();
     assert_eq!(worker.resets(), 2);
+    assert!(!worker.ctl.failed());
+    worker.shutdown();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_failed_worker_starts_with_same_notifiers() {
+    let worker = TestWorker::spawn();
+    let ram = worker.ram_bus.load();
+    let reg = &worker.queue_regs[0];
+    let guest_q = SplitQueue::new(reg, &ram, false).unwrap().unwrap();
+    let mut guest_q = GuestQueue::new(guest_q, reg);
+    // A transport like virtio-pci starts the device with the same queue
+    // notifiers every time.
+    let notifiers = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    worker.start_with(Some(notifiers.clone()));
+    guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    notifiers[0].notify().unwrap();
+    worker.wait_chains(1);
+
+    // The event loop fails once the rings are gone.
+    drop(ram);
+    let pages = worker.ram_bus.update(|ram| ram.remove(0)).unwrap();
+    notifiers[0].notify().unwrap();
+    worker.wait_failed();
+    worker.reset();
+    worker.ram_bus.update(|ram| ram.add(0, pages)).unwrap();
+
+    // The worker no longer waits on the notifiers, so the next event loop
+    // takes them again.
+    worker.start_param(Some(notifiers.clone()), Some(Arc::new([1])));
+    guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    notifiers[0].notify().unwrap();
+    worker.wait_chains(2);
     assert!(!worker.ctl.failed());
     worker.shutdown();
 }
