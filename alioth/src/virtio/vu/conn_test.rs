@@ -21,11 +21,12 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 use zerocopy::{FromZeros, IntoBytes};
 
-use crate::virtio::vu::Error;
 use crate::virtio::vu::bindings::{
-    DeviceConfig, MAX_CONFIG_SIZE, Message, MessageFlag, VuFrontMsg,
+    DeviceConfig, MAX_CONFIG_SIZE, Message, MessageFlag, VhostUserMmap, VirtqState, VuBackMsg,
+    VuFrontMsg,
 };
-use crate::virtio::vu::conn::VuSession;
+use crate::virtio::vu::conn::{VuChannel, VuSession};
+use crate::virtio::vu::{Error, error};
 
 /// Reads a request with its payload from `conn`, and returns its header.
 fn read_request(mut conn: &UnixStream) -> Message {
@@ -154,4 +155,121 @@ fn test_vu_session_concurrent_requests() {
     }
     drop(client);
     server_thread.join().unwrap();
+}
+
+#[test]
+fn test_vu_session_get_virtq_base_serving() {
+    let (client_conn, server_conn) = UnixStream::pair().unwrap();
+    let (front_conn, back_conn) = UnixStream::pair().unwrap();
+    let client = VuSession::from(client_conn);
+    let front = VuChannel { conn: front_conn };
+    let (closed_tx, closed_rx) = flume::bounded(1);
+    // A frontend that does not answer fails the test, instead of blocking
+    // it.
+    let timeout = Duration::from_secs(5);
+
+    // The back-end stops the ring once the frontend answered two requests.
+    let server_thread = thread::spawn(move || {
+        let server = VuSession::from(server_conn);
+        let back = VuChannel { conn: back_conn };
+        back.conn.set_read_timeout(Some(timeout)).unwrap();
+
+        let msg = server.recv_msg(&mut []).unwrap();
+        assert_eq!(msg.request, VuFrontMsg::GET_VIRTQ_BASE.raw());
+        let mut state: VirtqState = server.recv_payload().unwrap();
+        let unmap = VhostUserMmap {
+            len: 0x1000,
+            ..Default::default()
+        };
+        let answers = [back.shmem_unmap(&unmap), back.shmem_unmap(&unmap)];
+        state.val = 0x1234;
+        server
+            .reply(VuFrontMsg::GET_VIRTQ_BASE, &state, &[])
+            .unwrap();
+        // A back-end may close the channel right after the reply.
+        drop(back);
+        closed_tx.send(()).unwrap();
+        answers
+    });
+
+    let mut served = 0;
+    let serve = || {
+        let msg = front.recv_msg(&mut [])?;
+        let _: VhostUserMmap = front.recv_payload()?;
+        served += 1;
+        front.reply(VuBackMsg::from(msg.request), &0u64, &[])?;
+        if served == 2 {
+            // When the session looks again, the reply is there, and the
+            // channel is closed.
+            closed_rx.recv_timeout(timeout).unwrap();
+        }
+        Ok(())
+    };
+    let state = VirtqState { index: 1, val: 0 };
+    let base = client.get_virtq_base_serving(&state, &front, serve);
+    assert_matches!(
+        base,
+        Ok(VirtqState {
+            index: 1,
+            val: 0x1234
+        })
+    );
+    assert_eq!(served, 2);
+    assert_matches!(server_thread.join().unwrap(), [Ok(()), Ok(())]);
+}
+
+#[test]
+fn test_vu_session_get_virtq_base_serve_error() {
+    let (client_conn, server_conn) = UnixStream::pair().unwrap();
+    let (front_conn, mut back_conn) = UnixStream::pair().unwrap();
+    let client = VuSession::from(client_conn);
+    let front = VuChannel { conn: front_conn };
+    let (failed_tx, failed_rx) = flume::bounded(1);
+    let timeout = Duration::from_secs(5);
+
+    // The back-end sends two requests that the frontend cannot answer, and
+    // stops the ring after the frontend has failed.
+    let server_thread = thread::spawn(move || {
+        let server = VuSession::from(server_conn);
+        let msg = server.recv_msg(&mut []).unwrap();
+        assert_eq!(msg.request, VuFrontMsg::GET_VIRTQ_BASE.raw());
+        let mut state: VirtqState = server.recv_payload().unwrap();
+        let msg = Message {
+            request: VuBackMsg::CONFIG_CHANGE_MSG.raw(),
+            flag: MessageFlag::sender(),
+            size: 0,
+        };
+        back_conn.write_all(msg.as_bytes()).unwrap();
+        back_conn.write_all(msg.as_bytes()).unwrap();
+        failed_rx.recv_timeout(timeout).unwrap();
+        state.val = 0x1234;
+        server
+            .reply(VuFrontMsg::GET_VIRTQ_BASE, &state, &[])
+            .unwrap();
+
+        let msg = server.recv_msg(&mut []).unwrap();
+        assert_eq!(msg.request, VuFrontMsg::GET_FEATURES.raw());
+        server
+            .reply(VuFrontMsg::GET_FEATURES, &0xdead_beef_u64, &[])
+            .unwrap();
+        back_conn
+    });
+
+    let mut served = 0;
+    let serve = || {
+        let msg = front.recv_msg(&mut [])?;
+        served += 1;
+        failed_tx.send(()).unwrap();
+        error::UnsupportedReq { req: msg.request }.fail()
+    };
+    let state = VirtqState { index: 0, val: 0 };
+    assert_matches!(
+        client.get_virtq_base_serving(&state, &front, serve),
+        Err(Error::UnsupportedReq { req: 2, .. })
+    );
+    // The session does not go on with a channel that it cannot answer.
+    assert_eq!(served, 1);
+    // The session took the reply, so the next request gets its own.
+    assert_matches!(client.get_features(), Ok(0xdead_beef));
+    drop(server_thread.join().unwrap());
 }

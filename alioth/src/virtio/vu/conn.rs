@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{IoSlice, IoSliceMut, Read, Write};
-use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
+use libc::{POLLIN, pollfd};
 use parking_lot::Mutex;
 use snafu::ResultExt;
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
@@ -29,17 +30,16 @@ use crate::virtio::vu::bindings::{
 };
 use crate::virtio::vu::{Result, error};
 
-fn send<T, R>(
-    mut conn: &UnixStream,
+/// Sends a request, without waiting for the reply.
+fn send_req<T>(
+    conn: &UnixStream,
     req: u32,
     payload: &T,
     in_: &[u8],
-    out: &mut [u8],
     fds: &[BorrowedFd],
-) -> Result<R>
+) -> Result<()>
 where
     T: IntoBytes + Immutable,
-    R: FromBytes + IntoBytes,
 {
     let vhost_msg = Message {
         request: req,
@@ -56,7 +56,14 @@ where
     if done != want {
         return error::PartialWrite { done, want }.fail();
     }
+    Ok(())
+}
 
+/// Receives the reply to request `req`.
+fn recv_reply<R>(mut conn: &UnixStream, req: u32, out: &mut [u8]) -> Result<R>
+where
+    R: FromBytes + IntoBytes,
+{
     let mut resp = Message::new_zeroed();
     let mut payload = R::new_zeroed();
     let mut ret_code = u64::MAX;
@@ -93,6 +100,50 @@ where
     }
 
     Ok(payload)
+}
+
+fn send<T, R>(
+    conn: &UnixStream,
+    req: u32,
+    payload: &T,
+    in_: &[u8],
+    out: &mut [u8],
+    fds: &[BorrowedFd],
+) -> Result<R>
+where
+    T: IntoBytes + Immutable,
+    R: FromBytes + IntoBytes,
+{
+    send_req(conn, req, payload, in_, fds)?;
+    recv_reply(conn, req, out)
+}
+
+/// Waits until `conn` has the reply to a request. Meanwhile, calls `serve`
+/// each time `channel` has a request of the back-end, and gives up once
+/// `serve` fails.
+fn wait_reply<F>(conn: &UnixStream, channel: &UnixStream, mut serve: F) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    let mut fds = [conn, channel].map(|stream| pollfd {
+        fd: stream.as_raw_fd(),
+        events: POLLIN,
+        revents: 0,
+    });
+    loop {
+        match ffi!(unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, -1) }) {
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e)?,
+        }
+        // With the reply, the back-end no longer waits for an answer.
+        if fds[0].revents != 0 {
+            return Ok(());
+        }
+        if fds[1].revents != 0 {
+            serve()?;
+        }
+    }
 }
 
 fn reply<T>(conn: &UnixStream, req: u32, payload: &T, fds: &[BorrowedFd]) -> Result<()>
@@ -286,6 +337,34 @@ impl VuSession {
 
     pub fn get_virtq_base(&self, payload: &VirtqState) -> Result<VirtqState> {
         self.send(VuFrontMsg::GET_VIRTQ_BASE, payload, &[])
+    }
+
+    /// Stops a ring like [`get_virtq_base`](Self::get_virtq_base), and
+    /// calls `serve` each time the back-end sends a request on `channel`
+    /// before it replies.
+    ///
+    /// The back-end completes the requests in flight before it stops a
+    /// ring, for which it may need an answer on the channel.
+    ///
+    /// Once `serve` fails, the session no longer calls it. It still waits
+    /// for the reply, and then returns the error of `serve`.
+    pub fn get_virtq_base_serving<F>(
+        &self,
+        payload: &VirtqState,
+        channel: &VuChannel,
+        serve: F,
+    ) -> Result<VirtqState>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        let req = VuFrontMsg::GET_VIRTQ_BASE.raw();
+        let conn = self.conn.lock();
+        send_req(&conn, req, payload, &[], &[])?;
+        let served = wait_reply(&conn, &channel.conn, serve);
+        // A reply that stays behind would answer the next request.
+        let base = recv_reply(&conn, req, &mut [])?;
+        served?;
+        Ok(base)
     }
 
     pub fn get_queue_num(&self) -> Result<u64> {

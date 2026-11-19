@@ -14,7 +14,7 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -22,6 +22,7 @@ use std::thread;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
+use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 use rstest::rstest;
 use zerocopy::IntoBytes;
@@ -33,8 +34,10 @@ use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::queue::{Queue, VirtQueue};
 use crate::virtio::tests::{fixture_queues, fixture_ram_bus};
 use crate::virtio::vu::Error as VuError;
-use crate::virtio::vu::bindings::{VirtqAddr, VirtqState, VuFeature, VuFrontMsg};
-use crate::virtio::vu::conn::VuSession;
+use crate::virtio::vu::bindings::{
+    VhostUserMmap, VirtqAddr, VirtqState, VuBackMsg, VuFeature, VuFrontMsg,
+};
+use crate::virtio::vu::conn::{VuChannel, VuSession};
 use crate::virtio::vu::frontend::VuFrontend;
 use crate::virtio::worker::mio::{ActiveMio, VirtioMio};
 use crate::virtio::{DeviceId, Error, IrqSender, Result, VirtioFeature};
@@ -131,6 +134,76 @@ fn test_vu_frontend_reset_stops_rings() {
             (VuFrontMsg::SET_STATUS, 0),
         ]
     );
+}
+
+#[test]
+fn test_vu_frontend_reset_answers_backend() {
+    let (frontend_conn, backend_conn) = UnixStream::pair().unwrap();
+    let (front_conn, back_conn) = UnixStream::pair().unwrap();
+    let backend = VuSession::from(backend_conn);
+    let back = VuChannel { conn: back_conn };
+    // A frontend that does not answer fails the test, instead of blocking
+    // it.
+    let timeout = Duration::from_secs(5);
+    back.conn.set_read_timeout(Some(timeout)).unwrap();
+    let backend_thread = thread::spawn(move || {
+        let mut answers = vec![];
+        while let Ok(msg) = backend.recv_msg(&mut []) {
+            let req = VuFrontMsg::from(msg.request);
+            let state: VirtqState = backend.recv_payload().unwrap();
+            match req {
+                VuFrontMsg::GET_VIRTQ_BASE => {
+                    // The back-end does not stop ring 1 before the frontend
+                    // has answered two requests on the back-end channel.
+                    if state.index == 1 {
+                        let unmap = VhostUserMmap {
+                            shm_offset: 0x2000,
+                            len: 0x1000,
+                            ..Default::default()
+                        };
+                        answers.push(back.shmem_unmap(&unmap));
+                        answers.push(back.shmem_unmap(&unmap));
+                    }
+                    backend.reply(req, &state, &[]).unwrap();
+                }
+                VuFrontMsg::SET_VIRTQ_ENABLE => backend.reply(req, &0u64, &[]).unwrap(),
+                req => panic!("unexpected request: {req:?}"),
+            }
+        }
+        answers
+    });
+
+    let mut frontend = VuFrontend {
+        name: "vu-frontend".into(),
+        session: Arc::new(VuSession::from(frontend_conn)),
+        channel: Some(VuChannel { conn: front_conn }),
+        id: DeviceId::FILE_SYSTEM,
+        vu_feature: VuFeature::BACKEND_REQ,
+        device_feature: 0,
+        num_queues: 2,
+        err_fds: Vec::new(),
+    };
+    // The worker watches the back-end channel of an active device.
+    let poll = Poll::new().unwrap();
+    let channel_fd = frontend.channel().unwrap().conn.as_raw_fd();
+    let registry = poll.registry();
+    registry
+        .register(&mut SourceFd(&channel_fd), Token(2), Interest::READABLE)
+        .unwrap();
+
+    let mut handled = vec![];
+    frontend.reset_with(registry, |name, channel, msg, fd| {
+        let unmap: VhostUserMmap = channel.recv_payload()?;
+        handled.push((name.to_owned(), msg.request, unmap.shm_offset, fd.is_some()));
+        channel.reply(VuBackMsg::from(msg.request), &0u64, &[])
+    });
+    drop(frontend);
+
+    let answers = backend_thread.join().unwrap();
+    assert_matches!(answers[..], [Ok(()), Ok(())]);
+    let unmap = VuBackMsg::SHMEM_UNMAP.raw();
+    let request = ("vu-frontend".to_owned(), unmap, 0x2000, false);
+    assert_eq!(handled, [request.clone(), request]);
 }
 
 /// What a transport hands to a device with two queues.

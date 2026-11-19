@@ -220,12 +220,6 @@ impl VirtioMio for VuFs {
             .fail()?;
         }
 
-        let Some(dax_region) = &self.dax_region else {
-            return vu_error::ProtocolFeature {
-                feature: VuFeature::BACKEND_REQ,
-            }
-            .fail()?;
-        };
         let Some(channel) = self.frontend.channel() else {
             return vu_error::ProtocolFeature {
                 feature: VuFeature::BACKEND_REQ,
@@ -239,7 +233,7 @@ impl VirtioMio for VuFs {
                 Err(Error::System { error, .. }) if error.kind() == ErrorKind::WouldBlock => break,
                 Err(e) => return Err(e)?,
             };
-            handle_backend_req(self.name(), channel, dax_region, &msg, fd)?;
+            handle_backend_req(self.name(), channel, self.dax_region.as_ref(), &msg, fd)?;
         }
         Ok(())
     }
@@ -253,7 +247,13 @@ impl VirtioMio for VuFs {
     }
 
     fn reset(&mut self, registry: &Registry) {
-        self.frontend.reset(registry)
+        // The back-end may need a mapping to complete a request in flight,
+        // before it stops a ring.
+        let dax_region = self.dax_region.as_ref();
+        self.frontend
+            .reset_with(registry, |name, channel, msg, fd| {
+                handle_backend_req(name, channel, dax_region, msg, fd)
+            })
     }
 }
 
@@ -262,15 +262,21 @@ impl VirtioMio for VuFs {
 fn handle_backend_req(
     name: &str,
     channel: &VuChannel,
-    dax_region: &ArcMemPages,
+    dax_region: Option<&ArcMemPages>,
     msg: &Message,
     fd: Option<OwnedFd>,
-) -> Result<()> {
+) -> Result<(), Error> {
+    let Some(dax_region) = dax_region else {
+        return vu_error::ProtocolFeature {
+            feature: VuFeature::BACKEND_REQ,
+        }
+        .fail();
+    };
     let req = VuBackMsg::from(msg.request);
     // The frontend negotiates only the SHMEM requests. The payload of
     // another request is unknown, so the channel cannot go on.
     if !matches!(req, VuBackMsg::SHMEM_MAP | VuBackMsg::SHMEM_UNMAP) {
-        return vu_error::UnsupportedReq { req: msg.request }.fail()?;
+        return vu_error::UnsupportedReq { req: msg.request }.fail();
     }
     let want = size_of::<VhostUserMmap>();
     if msg.size as usize != want {
@@ -278,13 +284,13 @@ fn handle_backend_req(
             want,
             got: msg.size,
         }
-        .fail()?;
+        .fail();
     }
     let payload: VhostUserMmap = channel.recv_payload()?;
     let (offset, len) = (payload.shm_offset, payload.len);
     let ret = if req == VuBackMsg::SHMEM_MAP {
         let Some(fd) = fd else {
-            return vu_error::MissingFd { req: msg.request }.fail()?;
+            return vu_error::MissingFd { req: msg.request }.fail();
         };
         let mut flag = FuseSetupmappingFlag::READ;
         if payload.flags.contains(VhostUserMmapFlag::RW) {

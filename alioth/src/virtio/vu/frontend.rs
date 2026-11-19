@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
+use std::slice;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -30,10 +31,10 @@ use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevSpec, Virtio, WorkerParam};
 use crate::virtio::queue::{Queue, VirtQueue};
 use crate::virtio::vu::bindings::{
-    DeviceConfig, MemoryRegion, MemorySingleRegion, VirtqAddr, VirtqState, VuFeature,
+    DeviceConfig, MemoryRegion, MemorySingleRegion, Message, VirtqAddr, VirtqState, VuFeature,
 };
 use crate::virtio::vu::conn::{VuChannel, VuSession};
-use crate::virtio::vu::error as vu_error;
+use crate::virtio::vu::{Result as VuResult, error as vu_error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{DevStatus, DeviceId, IrqSender, Result, VirtioFeature, error};
 use crate::{bitflags, mem};
@@ -313,6 +314,82 @@ impl VuFrontend {
         }
         Ok(())
     }
+
+    /// Stops ring `index`, and returns where the back-end stopped it.
+    ///
+    /// Before it stops a ring, the back-end completes the requests in
+    /// flight, for which it may need an answer on the back-end channel,
+    /// e.g. to map a file into a shared memory region. So `handle` gets
+    /// the requests that arrive on the channel meanwhile.
+    fn stop_ring<F>(&self, index: u16, handle: &mut F) -> Result<u32>
+    where
+        F: FnMut(&str, &VuChannel, &Message, Option<OwnedFd>) -> VuResult<()>,
+    {
+        let virtq_base = VirtqState {
+            index: index as _,
+            val: 0,
+        };
+        let Some(channel) = &self.channel else {
+            return Ok(self.session.get_virtq_base(&virtq_base)?.val);
+        };
+        let serve = || {
+            let mut fd = None;
+            let msg = channel.recv_msg(slice::from_mut(&mut fd))?;
+            handle(&self.name, channel, &msg, fd)
+        };
+        let session = &self.session;
+        let base = session.get_virtq_base_serving(&virtq_base, channel, serve)?;
+        Ok(base.val)
+    }
+
+    /// Resets the device like [`VirtioMio::reset`].
+    ///
+    /// `handle` gets the requests of the back-end that arrive while the
+    /// rings stop: the name of the device, the back-end channel, the
+    /// header of the request and its file descriptor.
+    pub fn reset_with<F>(&mut self, registry: &Registry, mut handle: F)
+    where
+        F: FnMut(&str, &VuChannel, &Message, Option<OwnedFd>) -> VuResult<()>,
+    {
+        let name = &*self.name;
+        for index in 0..self.num_queues {
+            // A disabled ring is still processed. Only GET_VRING_BASE stops
+            // it, and once all rings are stopped, the backend no longer
+            // touches guest memory or sends notifications.
+            match self.stop_ring(index, &mut handle) {
+                Ok(base) => log::trace!("{name}: queue-{index}: stopped at {base}"),
+                Err(e) => log::error!("{name}: failed to stop queue-{index}: {e:?}"),
+            }
+            let disable = VirtqState {
+                index: index as _,
+                val: 0,
+            };
+            if let Err(e) = self.session.set_virtq_enable(&disable) {
+                log::error!("{name}: failed to disable queue-{index}: {e:?}")
+            }
+        }
+        if self.vu_feature.contains(VuFeature::STATUS)
+            && let Err(e) = self.session.set_status(&0)
+        {
+            log::error!("{name}: failed to reset device status: {e:?}");
+        }
+        for (index, mut fd) in self.err_fds.drain(..) {
+            if let Err(e) = registry.deregister(&mut fd) {
+                log::error!("{name}: queue-{index}: failed to deregister error fd: {e:?}");
+            }
+        }
+        if let Some(channel) = &self.channel {
+            let channel_fd = channel.conn.as_fd();
+            if let Err(e) = registry.deregister(&mut SourceFd(&channel_fd.as_raw_fd())) {
+                log::error!("{name}: failed to deregister backend channel fd: {e:?}")
+            }
+        }
+    }
+}
+
+/// Rejects a request of the back-end, for a device that expects none.
+fn reject_backend_req(_: &str, _: &VuChannel, msg: &Message, _: Option<OwnedFd>) -> VuResult<()> {
+    vu_error::UnsupportedReq { req: msg.request }.fail()
 }
 
 impl Virtio for VuFrontend {
@@ -455,43 +532,7 @@ impl VirtioMio for VuFrontend {
     }
 
     fn reset(&mut self, registry: &Registry) {
-        let name = &*self.name;
-        for index in 0..self.num_queues {
-            // A disabled ring is still processed. Only GET_VRING_BASE stops
-            // it, and once all rings are stopped, the backend no longer
-            // touches guest memory or sends notifications.
-            let virtq_base = VirtqState {
-                index: index as _,
-                val: 0,
-            };
-            match self.session.get_virtq_base(&virtq_base) {
-                Ok(base) => log::trace!("{name}: queue-{index}: stopped at {}", base.val),
-                Err(e) => log::error!("{name}: failed to stop queue-{index}: {e:?}"),
-            }
-            let disable = VirtqState {
-                index: index as _,
-                val: 0,
-            };
-            if let Err(e) = self.session.set_virtq_enable(&disable) {
-                log::error!("{name}: failed to disable queue-{index}: {e:?}")
-            }
-        }
-        if self.vu_feature.contains(VuFeature::STATUS)
-            && let Err(e) = self.session.set_status(&0)
-        {
-            log::error!("{name}: failed to reset device status: {e:?}");
-        }
-        for (index, mut fd) in self.err_fds.drain(..) {
-            if let Err(e) = registry.deregister(&mut fd) {
-                log::error!("{name}: queue-{index}: failed to deregister error fd: {e:?}");
-            }
-        }
-        if let Some(channel) = &self.channel {
-            let channel_fd = channel.conn.as_fd();
-            if let Err(e) = registry.deregister(&mut SourceFd(&channel_fd.as_raw_fd())) {
-                log::error!("{name}: failed to deregister backend channel fd: {e:?}")
-            }
-        }
+        self.reset_with(registry, reject_backend_req)
     }
 }
 
