@@ -23,6 +23,7 @@ use flume::{Receiver, Sender};
 use mio::event::Event;
 use mio::{Events, Interest, Poll, Registry, Token};
 use parking_lot::Mutex;
+use rstest::rstest;
 
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::mem::{MemRegion, MemRegionType, Memory};
@@ -32,9 +33,11 @@ use crate::virtio::dev::{
     ActiveBackend, BackendEvent, Context, KickWorker, Register, StartParam, Virtio, WakeEvent,
     WorkerCtl, WorkerParam, WorkerReport, WorkerState,
 };
+use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
-use crate::virtio::queue::{Queue, VirtQueue};
-use crate::virtio::tests::{MEM_SIZE, fixture_queues, fixture_ram_bus};
+use crate::virtio::queue::tests::{GuestQueue, VirtQueueGuest};
+use crate::virtio::queue::{Queue, QueueReg, Status, VirtQueue};
+use crate::virtio::tests::{DATA_ADDR, MEM_SIZE, fixture_queues, fixture_ram_bus};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{DeviceId, Error, IrqSender, Result, VirtioFeature, error};
 
@@ -57,7 +60,8 @@ fn test_virtio_register_get_driver_feature() {
     assert_eq!(reg.get_driver_feature(), expected);
 }
 
-/// A device that only records what the worker does to it.
+/// A device that completes the chains of its queue right away, and
+/// records what the worker does to it.
 ///
 /// It borrows the config and feature types of the entropy device, which
 /// has neither.
@@ -69,6 +73,8 @@ struct FakeDev {
     fail_activate: Arc<AtomicBool>,
     /// Counts successful activations.
     activations: Arc<AtomicU32>,
+    /// Counts the chains that the device completed.
+    chains: Arc<AtomicU32>,
     /// Counts the calls to [`VirtioMio::reset`].
     resets: Arc<AtomicU32>,
     /// Makes [`Virtio::pause`] fail, like a backend that cannot be stopped.
@@ -157,16 +163,18 @@ impl VirtioMio for FakeDev {
         Ok(())
     }
 
-    fn handle_queue<Q, S>(
-        &mut self,
-        _index: u16,
-        _active_mio: &mut ActiveMio<'_, Q, S>,
-    ) -> Result<()>
+    fn handle_queue<Q, S>(&mut self, index: u16, active_mio: &mut ActiveMio<'_, Q, S>) -> Result<()>
     where
         Q: VirtQueue,
         S: IrqSender,
     {
-        Ok(())
+        let Some(Some(queue)) = active_mio.queues.get_mut(index as usize) else {
+            return Ok(());
+        };
+        queue.handle_desc(index, active_mio.irq_sender, |_| {
+            self.chains.fetch_add(1, Ordering::AcqRel);
+            Ok(Status::Done { len: 0 })
+        })
     }
 
     fn handle_event<Q, S>(
@@ -217,10 +225,14 @@ impl IrqSender for TestIrqSender {
 struct TestWorker {
     ctl: Arc<WorkerCtl<TestIrqSender>>,
     handle: JoinHandle<()>,
+    /// The features that the driver accepts when it starts the device.
+    feature: u128,
     irq_sender: Arc<TestIrqSender>,
     ram_bus: Arc<RamBus>,
+    queue_regs: Arc<[QueueReg]>,
     fail_activate: Arc<AtomicBool>,
     activations: Arc<AtomicU32>,
+    chains: Arc<AtomicU32>,
     resets: Arc<AtomicU32>,
     fail_pause: Arc<AtomicBool>,
     pauses: Arc<AtomicU32>,
@@ -240,26 +252,31 @@ impl TestWorker {
     fn spawn_dev(dev: FakeDev, ram_bus: Arc<RamBus>) -> Self {
         let fail_activate = dev.fail_activate.clone();
         let activations = dev.activations.clone();
+        let chains = dev.chains.clone();
         let resets = dev.resets.clone();
         let fail_pause = dev.fail_pause.clone();
         let pauses = dev.pauses.clone();
         let resumes = dev.resumes.clone();
         let (event_tx, event_rx) = flume::unbounded();
         let (report_tx, report_rx) = flume::unbounded();
+        let queue_regs = Arc::<[QueueReg]>::from(fixture_queues(1));
         let param = WorkerParam {
             event_rx,
             report_tx,
             memory: ram_bus.clone(),
-            queue_regs: Arc::from(fixture_queues(1)),
+            queue_regs: queue_regs.clone(),
         };
         let (handle, notifier) = dev.spawn_worker(param).unwrap();
         TestWorker {
             ctl: Arc::new(WorkerCtl::new("fake".into(), event_tx, notifier, report_rx)),
             handle,
+            feature: VirtioFeature::VERSION_1.bits(),
             irq_sender: Arc::default(),
             ram_bus,
+            queue_regs,
             fail_activate,
             activations,
+            chains,
             resets,
             fail_pause,
             pauses,
@@ -268,17 +285,45 @@ impl TestWorker {
     }
 
     fn start(&self) {
-        self.start_with(None)
+        self.start_param(None, None)
     }
 
     /// Starts the device with the queue notifiers of a transport.
     fn start_with(&self, notifiers: Option<Arc<[Notifier]>>) {
+        self.start_param(notifiers, None)
+    }
+
+    /// Starts the device at the vring base `base` of its queue.
+    fn start_at(&self, base: u32) {
+        self.start_param(None, Some(Arc::new([base])))
+    }
+
+    fn start_param(&self, notifiers: Option<Arc<[Notifier]>>, bases: Option<Arc<[u32]>>) {
         let param = StartParam {
-            feature: VirtioFeature::VERSION_1.bits(),
+            feature: self.feature,
             irq_sender: self.irq_sender.clone(),
             notifiers,
+            bases,
         };
         assert!(self.ctl.wake(WakeEvent::Start { param }));
+    }
+
+    /// Returns where the worker recorded that the device stands in the
+    /// rings of its queue.
+    fn base(&self) -> u32 {
+        self.queue_regs[0].base.load(Ordering::Acquire)
+    }
+
+    /// Makes `count` chains available in `guest_q`, the queue of the
+    /// device as the driver sees it, and notifies the device.
+    fn add_chains<Q>(&self, guest_q: &mut GuestQueue<Q>, count: usize) -> Vec<u16>
+    where
+        Q: VirtQueueGuest,
+    {
+        let ids = (0..count).map(|_| guest_q.add_desc(&[(DATA_ADDR, 8)], &[]));
+        let ids = ids.collect();
+        assert!(self.ctl.wake(WakeEvent::Notify { q_index: 0 }));
+        ids
     }
 
     fn reset(&self) {
@@ -581,6 +626,7 @@ fn test_handle_event_syncs_ram_once_per_layout() {
         feature: 0,
         irq_sender: Arc::new(TestIrqSender::default()),
         notifiers: None,
+        bases: None,
     };
     event_tx.send(WakeEvent::Start { param }).unwrap();
     assert!(context.wait_start().is_some());
@@ -1046,4 +1092,74 @@ fn test_pause_fails_in_device() {
     );
     assert_eq!((backend.pauses, backend.resumes), (1, 1));
     assert_eq!(context.state, WorkerState::Running);
+}
+
+/// Checks that `worker` records the vring bases `bases` of its queue, of
+/// which `guest_q` is the driver side: after 3, 5 and 6 chains.
+fn check_worker_records_bases<Q>(worker: TestWorker, mut guest_q: GuestQueue<Q>, bases: [u32; 3])
+where
+    Q: VirtQueueGuest,
+{
+    let mut ids = vec![];
+
+    // The worker tells where the device stopped when it leaves the event
+    // loop.
+    worker.start();
+    ids.extend(worker.add_chains(&mut guest_q, 3));
+    worker.reset();
+    assert_eq!(worker.base(), bases[0]);
+
+    // The device continues there, instead of at the start of the rings.
+    worker.start_at(bases[0]);
+    ids.extend(worker.add_chains(&mut guest_q, 2));
+    // The worker also tells where the device stands while it is paused.
+    worker.pause();
+    assert_eq!(worker.base(), bases[1]);
+    worker.resume(1);
+    ids.extend(worker.add_chains(&mut guest_q, 1));
+    worker.reset();
+    assert_eq!(worker.base(), bases[2]);
+
+    // The device took every chain once, and the driver finds all of them
+    // where it looks for the used ones.
+    assert_eq!(worker.chains.load(Ordering::Acquire), 6);
+    for id in ids {
+        assert_eq!(guest_q.get_used().unwrap().id, id);
+    }
+    assert!(guest_q.get_used().is_none());
+    worker.shutdown();
+}
+
+#[rstest]
+#[case(false, [3, 5, 6])]
+#[case(true, [0x8003_8003, 0x8005_8005, 0x8006_8006])]
+fn test_worker_records_bases(#[case] packed: bool, #[case] bases: [u32; 3]) {
+    let mut worker = TestWorker::spawn();
+    let ram = worker.ram_bus.load();
+    let queue_regs = worker.queue_regs.clone();
+    let reg = &queue_regs[0];
+    if packed {
+        worker.feature |= VirtioFeature::RING_PACKED.bits();
+        let guest_q = PackedQueue::new(reg, &ram, false).unwrap().unwrap();
+        check_worker_records_bases(worker, GuestQueue::new(guest_q, reg), bases);
+    } else {
+        let guest_q = SplitQueue::new(reg, &ram, false).unwrap().unwrap();
+        check_worker_records_bases(worker, GuestQueue::new(guest_q, reg), bases);
+    }
+}
+
+#[test]
+fn test_worker_fails_at_invalid_base() {
+    let worker = TestWorker::spawn();
+    // The base of a split queue is a 16-bit index.
+    worker.start_at(0x1_0000);
+    worker.wait_failed();
+    assert_eq!(worker.activations.load(Ordering::Acquire), 0);
+
+    // A reset brings the device back into service.
+    worker.reset();
+    assert!(!worker.ctl.failed());
+    worker.start();
+    worker.wait_activations(1);
+    worker.shutdown();
 }

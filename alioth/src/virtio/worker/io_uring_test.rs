@@ -171,6 +171,7 @@ fn io_uring_drain_test() {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
         notifiers: Option::<Arc<[Notifier]>>::None,
+        bases: None,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();
@@ -381,6 +382,7 @@ fn io_uring_reset_test() {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender: irq_sender.clone(),
         notifiers: None,
+        bases: None,
     };
     assert!(ctl.wake(WakeEvent::Start { param: start() }));
 
@@ -610,6 +612,7 @@ fn io_uring_worker_pause_resume() {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
         notifiers: Option::<Arc<[Notifier]>>::None,
+        bases: None,
     };
     assert!(ctl.wake(WakeEvent::Start { param }));
 

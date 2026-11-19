@@ -92,6 +92,7 @@ fn entropy_test() {
         feature: VirtioFeature::VERSION_1.bits(),
         irq_sender,
         notifiers: Option::<Arc<[Notifier]>>::None,
+        bases: None,
     };
     tx.send(WakeEvent::Start { param: start_param }).unwrap();
     notifier.notify().unwrap();
@@ -193,6 +194,7 @@ impl EntropyWorker {
             feature: VirtioFeature::VERSION_1.bits(),
             irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
             notifiers: None,
+            bases: None,
         };
         tx.send(WakeEvent::Start { param: start_param }).unwrap();
         notifier.notify().unwrap();

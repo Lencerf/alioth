@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::os::fd::BorrowedFd;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
 
 use flume::Sender;
 use rstest::rstest;
@@ -44,6 +44,7 @@ pub fn fixture_queues(count: u16) -> Box<[QueueReg]> {
                 driver: AtomicU64::new(base + 0x1000),
                 device: AtomicU64::new(base + 0x1400),
                 enabled: AtomicBool::new(true),
+                base: AtomicU32::new(0),
             }
         })
         .collect()

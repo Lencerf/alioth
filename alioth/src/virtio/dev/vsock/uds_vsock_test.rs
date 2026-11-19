@@ -144,6 +144,7 @@ impl<'m> VsockTest<'m> {
             feature: VirtioFeature::VERSION_1.bits(),
             irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
             notifiers: Option::<Arc<[Notifier]>>::None,
+            bases: None,
         };
         tx.send(WakeEvent::Start { param: start_param }).unwrap();
 

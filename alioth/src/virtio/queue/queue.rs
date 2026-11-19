@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{ErrorKind, IoSlice, IoSliceMut, Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering, fence};
 
 use crate::bitflags;
 use crate::mem::mapped::{Ram, RamBus};
@@ -44,6 +44,12 @@ pub struct QueueReg {
     pub driver: AtomicU64,
     pub device: AtomicU64,
     pub enabled: AtomicBool,
+    /// Where the device stood in the rings when its worker last paused or
+    /// left the event loop, as a vring base.
+    ///
+    /// Unlike the other registers, the worker sets it, and only for an
+    /// enabled queue.
+    pub base: AtomicU32,
 }
 
 /// The ring addresses of a queue, copied from its [`QueueReg`].

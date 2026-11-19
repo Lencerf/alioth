@@ -582,6 +582,7 @@ where
                             feature: reg.get_driver_feature(),
                             irq_sender: self.irq_sender.clone(),
                             notifiers: self.notifiers.clone(),
+                            bases: None,
                         };
                         self.ctl.wake(WakeEvent::Start { param });
                     }

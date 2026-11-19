@@ -258,6 +258,7 @@ impl VuBackend {
             feature: self.init.drv_feat as u128,
             irq_sender: Arc::new(irq_sender),
             notifiers: Some(notifiers.into()),
+            bases: None,
         })
     }
 

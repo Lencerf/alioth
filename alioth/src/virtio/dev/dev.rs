@@ -23,6 +23,7 @@ pub mod net;
 pub mod vsock;
 
 use std::fmt::Debug;
+use std::iter::zip;
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
@@ -150,6 +151,9 @@ where
     pub(crate) feature: u128,
     pub(crate) irq_sender: Arc<S>,
     pub(crate) notifiers: Option<Arc<[Notifier]>>,
+    /// The vring bases at which the device starts in the rings of its
+    /// queues, or `None` to start at the beginning of the rings.
+    pub(crate) bases: Option<Arc<[u32]>>,
 }
 
 /// Parameters a transport hands to the worker thread of a virtio device.
@@ -661,6 +665,19 @@ where
         self.reset_seq = Some(seq);
     }
 
+    /// Tells the transport where the device stands in the rings, see
+    /// [`QueueReg::base`].
+    fn record_bases<Q>(&self, queues: &[Option<Queue<Q>>])
+    where
+        Q: VirtQueue,
+    {
+        for (reg, queue) in zip(&*self.param.queue_regs, queues) {
+            if let Some(queue) = queue {
+                reg.base.store(queue.vhost_base(), Ordering::Release);
+            }
+        }
+    }
+
     fn handle_wake_events<B>(&mut self, backend: &mut B) -> Result<()>
     where
         B: ActiveBackend<D>,
@@ -709,6 +726,7 @@ where
                 continue;
             }
             log::debug!("{}: pause {seq} completed", self.dev.name());
+            self.record_bases(backend.queues());
             self.report(WorkerReport::Paused { seq });
             // The backend continues once the device resumes.
             self.wait_resume(backend)?;
@@ -851,8 +869,12 @@ where
         Q: VirtQueue,
     {
         let ram_bus = &self.context.param.memory;
-        let new_queue = |reg| Queue::<Q>::new(reg, ram_bus.clone(), event_idx);
-        let queue_regs = self.context.param.queue_regs.iter();
+        let bases = param.bases.as_deref();
+        let new_queue = |(index, reg)| match bases.and_then(|bases| bases.get(index)) {
+            Some(base) => Queue::<Q>::with_base(reg, ram_bus.clone(), event_idx, *base),
+            None => Queue::<Q>::new(reg, ram_bus.clone(), event_idx),
+        };
+        let queue_regs = self.context.param.queue_regs.iter().enumerate();
         let mut queues = queue_regs.map(new_queue).collect::<Result<Box<_>>>()?;
         log::debug!(
             "{}: activated with {:x?}, {:x?}",
@@ -866,6 +888,9 @@ where
         // Clean up even if the event loop failed, since the device might
         // have been partially activated.
         let reset = self.backend.reset(&mut self.context.dev);
+        // The transport learns where the device stopped, e.g. to start it
+        // there again.
+        self.context.record_bases(&queues);
         ret.and(reset)
     }
 
