@@ -29,6 +29,9 @@ use crate::errors::DebugTrace;
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{RESET_TIMEOUT, StartParam, VirtioDevice, WakeEvent};
+use crate::virtio::queue::VirtQueue;
+use crate::virtio::queue::packed::PackedQueue;
+use crate::virtio::queue::split::SplitQueue;
 use crate::virtio::vu::Error as VuError;
 use crate::virtio::vu::bindings::{
     MAX_CONFIG_SIZE, MemoryRegion, MemorySingleRegion, Message, VirtqAddr, VirtqState, VuFeature,
@@ -124,6 +127,10 @@ struct VuQueueInit {
     enable: bool,
     size: Option<u16>,
     addr: Option<VirtqAddr>,
+    /// The vring base at which the worker starts in the ring: the one that
+    /// the frontend set, or where the worker stopped since. `None` is the
+    /// beginning of the ring.
+    base: Option<u32>,
     notifier: Option<Notifier>,
     irqfd: Option<File>,
     errfd: Option<File>,
@@ -189,7 +196,28 @@ impl VuBackend {
         let seq = ctl.request_reset();
         ctl.wait_reset(seq, RESET_TIMEOUT)?;
         self.running = false;
+        self.load_bases();
         Ok(())
+    }
+
+    /// Takes over where the worker stopped in the rings.
+    fn load_bases(&mut self) {
+        for (q, reg) in zip(&mut self.init.queues, &*self.dev.queue_regs) {
+            // The worker serves the enabled queues only.
+            if reg.enabled.load(Ordering::Acquire) {
+                q.base = Some(reg.base.load(Ordering::Acquire));
+            }
+        }
+    }
+
+    /// Returns the vring base of a ring that no device has served yet.
+    fn init_base(&self) -> u32 {
+        let feature = VirtioFeature::from_bits_retain(self.init.drv_feat as u128);
+        if feature.contains(VirtioFeature::RING_PACKED) {
+            PackedQueue::INIT_VHOST_BASE
+        } else {
+            SplitQueue::INIT_VHOST_BASE
+        }
     }
 
     /// Kicks a running worker, so that it moves to the latest memory layout
@@ -210,6 +238,7 @@ impl VuBackend {
     }
 
     fn parse_init(&mut self) -> Result<StartParam<VuIrqSender>> {
+        let init_base = self.init_base();
         for (index, (param, queue)) in zip(&self.init.queues, &*self.dev.queue_regs).enumerate() {
             let index = index as u16;
             queue.enabled.store(param.enable, Ordering::Release);
@@ -254,11 +283,13 @@ impl VuBackend {
             }
         }
 
+        let bases = queues.iter().map(|q| q.base.unwrap_or(init_base));
+
         Ok(StartParam {
             feature: self.init.drv_feat as u128,
             irq_sender: Arc::new(irq_sender),
             notifiers: Some(notifiers.into()),
-            bases: None,
+            bases: Some(bases.collect()),
         })
     }
 
@@ -365,17 +396,18 @@ impl VuBackend {
             (VuFrontMsg::SET_VIRTQ_BASE, 8) => {
                 let virtq_base: VirtqState = self.session.recv_payload()?;
                 let (index, base) = (virtq_base.index as u16, virtq_base.val);
-                let Some(_q) = self.init.queues.get_mut(index as usize) else {
+                let Some(q) = self.init.queues.get_mut(index as usize) else {
                     return error::InvalidQueue { index }.fail();
                 };
-                log::warn!("{name}: queue-{index}: set base: {base}");
+                q.base = Some(base);
+                log::debug!("{name}: queue-{index}: set base: {base:#x}");
             }
             (VuFrontMsg::GET_VIRTQ_BASE, 8) => {
                 let mut virtq_base: VirtqState = self.session.recv_payload()?;
-                let (index, base) = (virtq_base.index as u16, virtq_base.val);
-                let Some(_q) = self.init.queues.get_mut(index as usize) else {
+                let index = virtq_base.index as u16;
+                if index as usize >= self.init.queues.len() {
                     return error::InvalidQueue { index }.fail();
-                };
+                }
                 // GET_VRING_BASE stops the ring. One worker serves all the
                 // queues, so stop all of them. The frontend has no way to
                 // learn about a failure other than waiting forever for the
@@ -383,10 +415,13 @@ impl VuBackend {
                 if let Err(e) = self.stop_worker() {
                     log::error!("{name}: queue-{index}: failed to stop: {e:?}");
                 }
-                virtq_base.val = 0;
+                // The frontend starts the ring again at this base, here or
+                // in another backend.
+                let base = self.init.queues[index as usize].base;
+                virtq_base.val = base.unwrap_or(self.init_base());
                 self.session.reply(req, &virtq_base, &[])?;
                 msg.flag.set_need_reply(false);
-                log::warn!("{name}: queue-{index}: get base: {base}");
+                log::debug!("{name}: queue-{index}: get base: {:#x}", virtq_base.val);
             }
             (VuFrontMsg::SET_VIRTQ_ADDR, 40) => {
                 let virtq_addr: VirtqAddr = self.session.recv_payload()?;
@@ -461,6 +496,13 @@ impl VuBackend {
                     let param = self.parse_init()?;
                     self.dev.ctl.wake(WakeEvent::Start { param });
                     self.running = true;
+                }
+                if new.is_empty() {
+                    // The driver has reset the device, and sets up the
+                    // rings from their beginning.
+                    for q in &mut self.init.queues {
+                        q.base = None;
+                    }
                 }
                 self.status = new;
             }

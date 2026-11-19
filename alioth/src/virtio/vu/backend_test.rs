@@ -21,17 +21,22 @@ use std::time::{Duration, Instant};
 
 use flume::{Receiver, Sender};
 use mio::{Events, Interest, Poll, Token};
+use rstest::rstest;
 
 use crate::mem;
 use crate::mem::emulated::{Action, Mmio};
 use crate::mem::mapped::RamBus;
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{VirtioDevice, WakeEvent, WorkerCtl, WorkerReport};
-use crate::virtio::queue::QueueReg;
+use crate::virtio::queue::packed::PackedQueue;
+use crate::virtio::queue::split::SplitQueue;
+use crate::virtio::queue::{QueueReg, VirtQueue};
 use crate::virtio::vu::backend::{VuBackend, VuIrqSender};
-use crate::virtio::vu::bindings::{MemoryRegion, MemorySingleRegion, VirtqState};
+use crate::virtio::vu::bindings::{MemoryRegion, MemorySingleRegion, VirtqAddr, VirtqState};
 use crate::virtio::vu::conn::VuSession;
-use crate::virtio::{DevStatus, DeviceId};
+use crate::virtio::{DevStatus, DeviceId, VirtioFeature};
+
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 struct TestDevConfig;
@@ -74,6 +79,21 @@ fn spawn_backend_on<W>(
 where
     W: FnOnce(TestWakeReceiver, Sender<WorkerReport>) + Send + 'static,
 {
+    let queue_regs = Arc::new([QueueReg::default()]);
+    spawn_backend_with(queue_regs, memory, notifier, worker)
+}
+
+/// Like [`spawn_backend_on`], with the queue registers of the device, which
+/// the backend shares with the worker.
+fn spawn_backend_with<W>(
+    queue_regs: Arc<[QueueReg]>,
+    memory: Arc<RamBus>,
+    notifier: Arc<Notifier>,
+    worker: W,
+) -> (VuSession, JoinHandle<()>)
+where
+    W: FnOnce(TestWakeReceiver, Sender<WorkerReport>) + Send + 'static,
+{
     let (event_tx, event_rx) = flume::unbounded();
     let (report_tx, report_rx) = flume::unbounded();
     let dev = VirtioDevice {
@@ -81,7 +101,7 @@ where
         id: DeviceId::NET,
         device_config: Arc::new(TestDevConfig),
         device_feature: 0,
-        queue_regs: Arc::new([QueueReg::default()]),
+        queue_regs,
         shared_mem_regions: None,
         ctl: Arc::new(WorkerCtl::new(
             "vu-backend".into(),
@@ -238,6 +258,202 @@ fn test_vu_backend_changes_memory_while_running() {
     poll.poll(&mut events, Some(Duration::from_secs(5)))
         .unwrap();
     assert!(!events.is_empty());
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+}
+
+/// What a [`RingWorker`] did.
+#[derive(Debug, PartialEq, Eq)]
+enum RingEvent {
+    /// The worker started the device at these vring bases.
+    Start(Option<Arc<[u32]>>),
+    /// The worker reset the device.
+    Reset,
+}
+
+/// A fake worker that tells where it stands in queue 0. Whenever it serves
+/// the queue, it takes [`RingWorker::CHAINS`] chains from it right away.
+struct RingWorker {
+    queue_regs: Arc<[QueueReg]>,
+    event_tx: Sender<RingEvent>,
+}
+
+impl RingWorker {
+    const CHAINS: u32 = 5;
+
+    fn run(self, event_rx: TestWakeReceiver, report_tx: Sender<WorkerReport>) {
+        let reg = &self.queue_regs[0];
+        let mut base = 0;
+        for event in event_rx.iter() {
+            let event = match event {
+                WakeEvent::Start { param } => {
+                    let start = param.bases.as_ref().map_or(0, |bases| bases[0]);
+                    base = start + Self::CHAINS;
+                    RingEvent::Start(param.bases)
+                }
+                WakeEvent::Reset { seq } => {
+                    // Like a real worker, tell where the device stopped.
+                    reg.base.store(base, Ordering::Release);
+                    report_tx.send(WorkerReport::ResetDone { seq }).unwrap();
+                    RingEvent::Reset
+                }
+                event => panic!("unexpected event: {event:?}"),
+            };
+            self.event_tx.send(event).unwrap();
+        }
+    }
+}
+
+/// Serves a device with `num_queues` queues, whose worker is a
+/// [`RingWorker`]. Returns what [`spawn_backend`] returns, and what the
+/// worker does.
+fn spawn_ring_backend(num_queues: usize) -> (VuSession, JoinHandle<()>, Receiver<RingEvent>) {
+    let queue_regs = (0..num_queues).map(|_| QueueReg::default());
+    let queue_regs = queue_regs.collect::<Arc<[_]>>();
+    let (event_tx, event_rx) = flume::unbounded();
+    let worker = RingWorker {
+        queue_regs: queue_regs.clone(),
+        event_tx,
+    };
+    let notifier = Arc::new(Notifier::new().unwrap());
+    let (frontend, backend_thread) = spawn_backend_with(
+        queue_regs,
+        Arc::default(),
+        notifier,
+        |event_rx, report_tx| worker.run(event_rx, report_tx),
+    );
+    (frontend, backend_thread, event_rx)
+}
+
+/// Enables queue 0, with its rings in guest memory that the backend maps.
+fn enable_queue(frontend: &VuSession) {
+    let (hva, size) = (0x5_0000, 0x3000);
+    let file = tempfile::tempfile().unwrap();
+    file.set_len(size).unwrap();
+    let region = MemorySingleRegion {
+        _padding: 0,
+        region: MemoryRegion {
+            gpa: 0x2_0000,
+            size,
+            hva,
+            mmap_offset: 0,
+        },
+    };
+    frontend.add_mem_region(&region, file.as_fd()).unwrap();
+    let virtq_num = VirtqState { index: 0, val: 16 };
+    frontend.set_virtq_num(&virtq_num).unwrap();
+    let virtq_addr = VirtqAddr {
+        index: 0,
+        flags: 0,
+        desc_hva: hva,
+        used_hva: hva + 0x1000,
+        avail_hva: hva + 0x2000,
+        log_guest_addr: 0,
+    };
+    frontend.set_virtq_addr(&virtq_addr).unwrap();
+    let virtq_enable = VirtqState { index: 0, val: 1 };
+    frontend.set_virtq_enable(&virtq_enable).unwrap();
+}
+
+/// Stops ring `index`, and returns where the backend stopped it.
+fn stop_ring(frontend: &VuSession, index: u32) -> u32 {
+    let virtq_base = VirtqState { index, val: 0 };
+    frontend.get_virtq_base(&virtq_base).unwrap().val
+}
+
+fn set_base(frontend: &VuSession, index: u32, base: u32) {
+    let virtq_base = VirtqState { index, val: base };
+    frontend.set_virtq_base(&virtq_base).unwrap();
+}
+
+fn start_bases(bases: &[u32]) -> RingEvent {
+    RingEvent::Start(Some(Arc::from(bases)))
+}
+
+#[test]
+fn test_vu_backend_keeps_ring_position() {
+    let (frontend, backend_thread, events) = spawn_ring_backend(1);
+    enable_queue(&frontend);
+
+    // The worker starts at the base that the frontend sets.
+    set_base(&frontend, 0, 7);
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[7])));
+
+    // The frontend learns where the worker stopped the ring, and the ring
+    // stays there.
+    let stopped_at = 7 + RingWorker::CHAINS;
+    for _ in 0..2 {
+        assert_eq!(stop_ring(&frontend, 0), stopped_at);
+    }
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(RingEvent::Reset));
+
+    // The worker continues there, even if the frontend does not set the
+    // base again.
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[stopped_at])));
+    assert_eq!(stop_ring(&frontend, 0), stopped_at + RingWorker::CHAINS);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(RingEvent::Reset));
+
+    // A base that the frontend sets replaces the one of the worker.
+    set_base(&frontend, 0, 3);
+    assert_eq!(stop_ring(&frontend, 0), 3);
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[3])));
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+}
+
+#[test]
+fn test_vu_backend_forgets_ring_position_on_reset() {
+    let (frontend, backend_thread, events) = spawn_ring_backend(1);
+    enable_queue(&frontend);
+    set_base(&frontend, 0, 7);
+    // The driver is on its way to DRIVER_OK, which is not a reset.
+    let features_ok = DevStatus::ACK | DevStatus::DRIVER | DevStatus::FEATURES_OK;
+    frontend.set_status(&(features_ok.bits() as u64)).unwrap();
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[7])));
+
+    // The driver resets the device, and sets up the rings again from their
+    // beginning.
+    frontend.set_status(&0).unwrap();
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(RingEvent::Reset));
+    assert_eq!(stop_ring(&frontend, 0), 0);
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[0])));
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+}
+
+#[test]
+fn test_vu_backend_keeps_base_of_disabled_queue() {
+    let (frontend, backend_thread, events) = spawn_ring_backend(1);
+    // The worker does not serve a disabled queue, so the ring stays at the
+    // base that the frontend set.
+    set_base(&frontend, 0, 7);
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[7])));
+    assert_eq!(stop_ring(&frontend, 0), 7);
+
+    drop(frontend);
+    backend_thread.join().unwrap();
+}
+
+#[rstest]
+#[case(0, SplitQueue::INIT_VHOST_BASE)]
+#[case(VirtioFeature::RING_PACKED.bits(), PackedQueue::INIT_VHOST_BASE)]
+fn test_vu_backend_ring_starts_at_beginning(#[case] feature: u128, #[case] base: u32) {
+    let (frontend, backend_thread, events) = spawn_ring_backend(1);
+    frontend.set_features(&(feature as u64)).unwrap();
+
+    // The frontend has not set a base.
+    assert_eq!(stop_ring(&frontend, 0), base);
+    start(&frontend);
+    assert_eq!(events.recv_timeout(TIMEOUT), Ok(start_bases(&[base])));
 
     drop(frontend);
     backend_thread.join().unwrap();
