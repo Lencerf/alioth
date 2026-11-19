@@ -356,7 +356,7 @@ impl RingWorker {
                     RingEvent::Pause
                 }
                 // A worker that has not paused keeps serving the queue.
-                WakeEvent::Resume => {
+                WakeEvent::Resume { .. } => {
                     if paused {
                         base += Self::CHAINS;
                     }

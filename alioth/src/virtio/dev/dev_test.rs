@@ -14,7 +14,7 @@
 
 use std::os::fd::BorrowedFd;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -85,6 +85,8 @@ struct FakeDev {
     resumes: Arc<AtomicU32>,
     /// The numbers of queues and notifiers of the last [`Virtio::resume`].
     resumed_with: Arc<Mutex<Option<(usize, usize)>>>,
+    /// The address of the notifiers of the last [`Virtio::resume`].
+    resumed_notifiers: Arc<AtomicUsize>,
 }
 
 impl Virtio for FakeDev {
@@ -133,8 +135,11 @@ impl Virtio for FakeDev {
         Q: VirtQueue,
         S: IrqSender,
     {
-        self.resumes.fetch_add(1, Ordering::AcqRel);
         *self.resumed_with.lock() = Some((queues.len(), notifiers.len()));
+        let addr = notifiers.as_ptr() as usize;
+        self.resumed_notifiers.store(addr, Ordering::Release);
+        // Tests wait for the count, so it comes last.
+        self.resumes.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
@@ -237,6 +242,7 @@ struct TestWorker {
     fail_pause: Arc<AtomicBool>,
     pauses: Arc<AtomicU32>,
     resumes: Arc<AtomicU32>,
+    resumed_notifiers: Arc<AtomicUsize>,
 }
 
 impl TestWorker {
@@ -257,6 +263,7 @@ impl TestWorker {
         let fail_pause = dev.fail_pause.clone();
         let pauses = dev.pauses.clone();
         let resumes = dev.resumes.clone();
+        let resumed_notifiers = dev.resumed_notifiers.clone();
         let (event_tx, event_rx) = flume::unbounded();
         let (report_tx, report_rx) = flume::unbounded();
         let queue_regs = Arc::<[QueueReg]>::from(fixture_queues(1));
@@ -281,6 +288,7 @@ impl TestWorker {
             fail_pause,
             pauses,
             resumes,
+            resumed_notifiers,
         }
     }
 
@@ -347,7 +355,13 @@ impl TestWorker {
 
     /// Resumes the device, and waits until it has resumed `count` times.
     fn resume(&self, count: u32) {
-        assert!(self.ctl.wake(WakeEvent::Resume));
+        self.resume_with(count, None)
+    }
+
+    /// Resumes the device like [`resume`](Self::resume), with new queue
+    /// notifiers from the transport, if any.
+    fn resume_with(&self, count: u32, notifiers: Option<Arc<[Notifier]>>) {
+        assert!(self.ctl.wake(WakeEvent::Resume { notifiers }));
         let deadline = Instant::now() + TIMEOUT;
         while self.resumes.load(Ordering::Acquire) < count {
             assert!(Instant::now() < deadline, "device not resumed");
@@ -630,6 +644,10 @@ impl ActiveBackend<FakeDev> for SyncCounter {
     fn resume_dev(&mut self, _: &mut FakeDev) -> Result<()> {
         Ok(())
     }
+
+    fn set_notifiers(&mut self, _: &FakeDev, _: Arc<[Notifier]>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[test]
@@ -814,7 +832,7 @@ fn test_worker_pause_before_start() {
     assert_eq!(worker.pauses(), 0);
 
     // Neither is there anything to resume.
-    assert!(worker.ctl.wake(WakeEvent::Resume));
+    assert!(worker.ctl.wake(WakeEvent::Resume { notifiers: None }));
     worker.start();
     worker.wait_activations(1);
     assert_eq!(worker.resumes.load(Ordering::Acquire), 0);
@@ -943,6 +961,8 @@ struct SlowBackend {
     resumes: u32,
     /// How often the device had resumed when the backend resumed last.
     dev_resumes: u32,
+    /// How often the backend got new notifiers.
+    notifiers_set: u32,
 }
 
 impl ActiveBackend<FakeDev> for SlowBackend {
@@ -979,6 +999,11 @@ impl ActiveBackend<FakeDev> for SlowBackend {
     fn resume_dev(&mut self, dev: &mut FakeDev) -> Result<()> {
         dev.resume::<SplitQueue, TestIrqSender>(&[], &[], &TestIrqSender::default())
     }
+
+    fn set_notifiers(&mut self, _: &FakeDev, _: Arc<[Notifier]>) -> Result<()> {
+        self.notifiers_set += 1;
+        Ok(())
+    }
 }
 
 type SlowWorker = (
@@ -1012,6 +1037,7 @@ fn fixture_slow_worker(wake: Option<WakeEvent<TestIrqSender>>) -> SlowWorker {
         pauses: 0,
         resumes: 0,
         dev_resumes: 0,
+        notifiers_set: 0,
     };
     event_tx.send(WakeEvent::Pause { seq: 1 }).unwrap();
     (context, backend, event_tx, report_rx)
@@ -1021,12 +1047,30 @@ fn fixture_slow_worker(wake: Option<WakeEvent<TestIrqSender>>) -> SlowWorker {
 fn test_pause_called_off() {
     // The transport gives up while the requests in flight end.
     let (mut context, mut backend, _event_tx, report_rx) =
-        fixture_slow_worker(Some(WakeEvent::Resume));
+        fixture_slow_worker(Some(WakeEvent::Resume { notifiers: None }));
     context.handle_wake_events(&mut backend).unwrap();
 
     // The backend continues the requests that it stopped.
     assert_eq!((backend.pauses, backend.resumes), (1, 1));
     assert_eq!(context.dev.pauses.load(Ordering::Acquire), 0);
+    assert_eq!(context.state, WorkerState::Running);
+    assert!(report_rx.try_recv().is_err());
+}
+
+#[test]
+fn test_running_device_refuses_new_notifiers() {
+    // The transport calls a pause off, and hands over new notifiers with
+    // the request.
+    let notifiers = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    let resume = WakeEvent::Resume {
+        notifiers: Some(notifiers),
+    };
+    let (mut context, mut backend, _event_tx, report_rx) = fixture_slow_worker(Some(resume));
+    context.handle_wake_events(&mut backend).unwrap();
+
+    // Only a device that resumes takes new notifiers.
+    assert_eq!(backend.notifiers_set, 0);
+    assert_eq!((backend.pauses, backend.resumes), (1, 1));
     assert_eq!(context.state, WorkerState::Running);
     assert!(report_rx.try_recv().is_err());
 }
@@ -1051,7 +1095,9 @@ fn test_pause_interrupted_by_other_event() {
         fixture_slow_worker(Some(WakeEvent::Notify { q_index: 0 }));
     let resumer = thread::spawn(move || {
         let report = report_rx.recv_timeout(TIMEOUT);
-        event_tx.send(WakeEvent::Resume).unwrap();
+        event_tx
+            .send(WakeEvent::Resume { notifiers: None })
+            .unwrap();
         report
     });
     context.handle_wake_events(&mut backend).unwrap();
@@ -1205,5 +1251,185 @@ fn test_worker_fails_at_invalid_base() {
     assert!(!worker.ctl.failed());
     worker.start();
     worker.wait_activations(1);
+    worker.shutdown();
+}
+
+/// What the worker asks a [`RecordingBackend`] to do.
+#[derive(Debug, PartialEq, Eq)]
+enum BackendCall {
+    /// To wait on this many new notifiers.
+    SetNotifiers(usize),
+    ResumeDev,
+    Resume,
+    HandleQueue(u16),
+}
+
+/// A backend with queues, which records what the worker asks it to do.
+struct RecordingBackend {
+    queues: Box<[Option<Queue<SplitQueue>>]>,
+    calls: Vec<BackendCall>,
+}
+
+impl ActiveBackend<FakeDev> for RecordingBackend {
+    type Event = DeviceEvent;
+    type Q = SplitQueue;
+
+    fn queues(&mut self) -> &mut [Option<Queue<SplitQueue>>] {
+        &mut self.queues
+    }
+
+    fn handle_event(&mut self, _: &mut FakeDev, _: &DeviceEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_queue(&mut self, _: &mut FakeDev, index: u16) -> Result<()> {
+        self.calls.push(BackendCall::HandleQueue(index));
+        Ok(())
+    }
+
+    fn pause(&mut self, _: &mut FakeDev) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn resume(&mut self, _: &mut FakeDev) -> Result<()> {
+        self.calls.push(BackendCall::Resume);
+        Ok(())
+    }
+
+    fn resume_dev(&mut self, _: &mut FakeDev) -> Result<()> {
+        self.calls.push(BackendCall::ResumeDev);
+        Ok(())
+    }
+
+    fn set_notifiers(&mut self, _: &FakeDev, notifiers: Arc<[Notifier]>) -> Result<()> {
+        self.calls.push(BackendCall::SetNotifiers(notifiers.len()));
+        Ok(())
+    }
+}
+
+#[test]
+fn test_resume_with_new_notifiers() {
+    let (event_tx, event_rx) = flume::unbounded::<WakeEvent<TestIrqSender>>();
+    let ram_bus = Arc::new(fixture_ram_bus());
+    // The driver did not enable queue 1, and something else serves queue 2.
+    let queue_regs = fixture_queues(3);
+    queue_regs[1].enabled.store(false, Ordering::Release);
+    let new_queue = |reg| Queue::<SplitQueue>::new(reg, ram_bus.clone(), false);
+    let queues = queue_regs.iter().map(new_queue);
+    let mut backend = RecordingBackend {
+        queues: queues.collect::<Result<_>>().unwrap(),
+        calls: Vec::new(),
+    };
+    let dev = FakeDev {
+        offloaded: Some(2),
+        ..Default::default()
+    };
+    let mut context = Context {
+        dev,
+        param: WorkerParam {
+            event_rx,
+            report_tx: flume::unbounded().0,
+            memory: ram_bus.clone(),
+            queue_regs: Arc::from(queue_regs),
+        },
+        state: WorkerState::Running,
+        reset_seq: None,
+        pause_seq: None,
+        ram_generation: None,
+    };
+
+    // A paused device resumes with the notifiers that it has.
+    let resume = WakeEvent::Resume { notifiers: None };
+    event_tx.send(resume).unwrap();
+    context.wait_resume(&mut backend).unwrap();
+    assert_eq!(backend.calls, [BackendCall::ResumeDev, BackendCall::Resume]);
+
+    // The event loop takes new notifiers before the device resumes with
+    // them. The driver may have notified a queue through its old notifier,
+    // so the worker then looks at the queues that it serves itself.
+    backend.calls.clear();
+    let notifiers = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    let resume = WakeEvent::Resume {
+        notifiers: Some(notifiers),
+    };
+    event_tx.send(resume).unwrap();
+    context.wait_resume(&mut backend).unwrap();
+    let calls = [
+        BackendCall::SetNotifiers(1),
+        BackendCall::ResumeDev,
+        BackendCall::Resume,
+        BackendCall::HandleQueue(0),
+    ];
+    assert_eq!(backend.calls, calls);
+    assert_eq!(context.state, WorkerState::Running);
+}
+
+#[test]
+fn test_device_resumes_with_notifiers_of_event_loop() {
+    let worker = TestWorker::spawn();
+    let old = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    worker.start_with(Some(old.clone()));
+
+    // The device resumes with the notifiers that it started with.
+    worker.pause();
+    worker.resume(1);
+    let resumed_notifiers = worker.resumed_notifiers.load(Ordering::Acquire);
+    assert_eq!(resumed_notifiers, old.as_ptr() as usize);
+
+    // Or with the ones that the transport hands over with the resume.
+    worker.pause();
+    let new = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    worker.resume_with(2, Some(new.clone()));
+    let resumed_notifiers = worker.resumed_notifiers.load(Ordering::Acquire);
+    assert_eq!(resumed_notifiers, new.as_ptr() as usize);
+    worker.shutdown();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_worker_resumes_with_new_notifiers() {
+    let worker = TestWorker::spawn();
+    let ram = worker.ram_bus.load();
+    let reg = &worker.queue_regs[0];
+    let guest_q = SplitQueue::new(reg, &ram, false).unwrap().unwrap();
+    let mut guest_q = GuestQueue::new(guest_q, reg);
+    let old = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    worker.start_with(Some(old.clone()));
+    guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    old[0].notify().unwrap();
+    worker.wait_chains(1);
+
+    // While the device is paused, the driver notifies the queue through
+    // the old notifier, and the transport gets a new one, which nobody has
+    // signalled.
+    worker.pause();
+    guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    old[0].notify().unwrap();
+    let new = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    worker.resume_with(1, Some(new.clone()));
+    // The notification is gone with the old notifier, so the worker looks
+    // at the queue itself.
+    worker.wait_chains(2);
+
+    // Wait until the worker has nothing left to do: once it resumes again,
+    // only a notification makes it look at the queue.
+    worker.pause();
+    worker.resume(2);
+    guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    // The worker waits on the new notifier only.
+    old[0].notify().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(worker.chains.load(Ordering::Acquire), 2);
+    new[0].notify().unwrap();
+    worker.wait_chains(3);
+
+    // The event loop gives up the new notifier when it ends, so the next
+    // one takes it again.
+    worker.reset();
+    worker.start_param(Some(new.clone()), Some(Arc::new([3])));
+    guest_q.add_desc(&[(DATA_ADDR, 8)], &[]);
+    new[0].notify().unwrap();
+    worker.wait_chains(4);
+    assert!(!worker.ctl.failed());
     worker.shutdown();
 }

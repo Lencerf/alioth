@@ -284,7 +284,7 @@ where
         let seq = self.ctl.request_pause();
         if let Err(e) = self.ctl.wait_pause(seq, timeout) {
             // The worker may still get to the pause later.
-            self.ctl.wake(WakeEvent::Resume);
+            self.ctl.wake(WakeEvent::Resume { notifiers: None });
             return Err(e);
         }
         // The worker has handled what the driver requested before the
@@ -1107,7 +1107,8 @@ where
 
     fn resume(&self) -> device::Result<()> {
         // A worker that has exited has nothing to resume.
-        self.registers.ctl.wake(WakeEvent::Resume);
+        let ctl = &self.registers.ctl;
+        ctl.wake(WakeEvent::Resume { notifiers: None });
         Ok(())
     }
 }

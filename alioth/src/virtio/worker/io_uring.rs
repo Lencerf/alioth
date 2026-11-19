@@ -198,16 +198,6 @@ where
     }
 }
 
-fn submit_queue_notifier(index: u16, notifier: &Notifier, sq: &mut SubmissionQueue) -> Result<()> {
-    let token = index as u64 | TOKEN_QUEUE;
-
-    let fd = types::Fd(notifier.as_fd().as_raw_fd());
-    let poll = opcode::PollAdd::new(fd, libc::EPOLLIN as _).multi(true);
-    let entry = poll.build().user_data(token);
-    unsafe { sq.push(&entry) }.unwrap();
-    Ok(())
-}
-
 impl<Q, S> ActiveIoUring<'_, Q, S>
 where
     Q: VirtQueue,
@@ -219,13 +209,39 @@ where
     where
         D: Virtio,
     {
-        let sq = &mut self.ring.submission();
         for (index, notifier) in self.notifiers.iter().enumerate() {
             if dev.notifier_offloaded(index as u16)? {
                 continue;
             }
-            submit_queue_notifier(index as u16, notifier, sq)?;
+            let token = index as u64 | TOKEN_QUEUE;
+            let fd = types::Fd(notifier.as_fd().as_raw_fd());
+            let poll = opcode::PollAdd::new(fd, libc::EPOLLIN as _).multi(true);
+            let entry = poll.build().user_data(token);
+            while unsafe { self.ring.submission().push(&entry) }.is_err() {
+                self.ring.submit()?;
+            }
             self.shared_count -= 1;
+        }
+        Ok(())
+    }
+
+    /// Stops waiting for the notifications of the queues.
+    fn cancel_notifiers<D>(&mut self, dev: &D) -> Result<()>
+    where
+        D: Virtio,
+    {
+        for index in 0..self.notifiers.len() {
+            if dev.notifier_offloaded(index as u16)? {
+                continue;
+            }
+            let token = index as u64 | TOKEN_QUEUE;
+            let cancel = opcode::AsyncCancel::new(token)
+                .build()
+                .user_data(TOKEN_CANCEL);
+            while unsafe { self.ring.submission().push(&cancel) }.is_err() {
+                self.ring.submit()?;
+            }
+            self.shared_count += 1;
         }
         Ok(())
     }
@@ -497,6 +513,15 @@ where
 
     fn resume_dev(&mut self, dev: &mut D) -> Result<()> {
         dev.resume(self.queues, &self.notifiers, self.irq_sender)
+    }
+
+    fn set_notifiers(&mut self, dev: &D, notifiers: Arc<[Notifier]>) -> Result<()> {
+        // The kernel takes the requests in order. So a request to cancel
+        // finds the poll of an old notifier, not the one of the new
+        // notifier with the same token.
+        self.cancel_notifiers(dev)?;
+        self.notifiers = notifiers;
+        self.submit_notifiers(dev)
     }
 }
 

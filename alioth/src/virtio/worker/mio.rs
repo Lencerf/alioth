@@ -262,4 +262,10 @@ where
     fn resume_dev(&mut self, dev: &mut D) -> Result<()> {
         dev.resume(self.queues, &self.notifiers, self.irq_sender)
     }
+
+    fn set_notifiers(&mut self, dev: &D, notifiers: Arc<[Notifier]>) -> Result<()> {
+        self.deregister_notifiers(dev)?;
+        self.notifiers = notifiers;
+        self.register_notifiers(dev)
+    }
 }

@@ -18,12 +18,12 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flume::{Receiver, Sender};
 use io_uring::cqueue::Entry as Cqe;
 use io_uring::opcode;
-use io_uring::types::Fd;
+use io_uring::types::{Fd, SubmitArgs, Timespec};
 
 use crate::ffi;
 use crate::mem::mapped::{ArcMemPages, RamBus};
@@ -35,7 +35,7 @@ use crate::virtio::queue::tests::GuestQueue;
 use crate::virtio::queue::{self, DescChain, Queue, QueueReg, VirtQueue};
 use crate::virtio::tests::{self, DATA_ADDR, FakeIrqSender, fixture_queues, fixture_ram_bus};
 use crate::virtio::worker::io_uring::{
-    ActiveIoUring, BufferAction, IoUring, RING_SIZE, VirtioIoUring,
+    ActiveIoUring, BufferAction, IoUring, RING_SIZE, TOKEN_CANCEL, TOKEN_QUEUE, VirtioIoUring,
 };
 use crate::virtio::{DeviceId, FEATURE_BUILT_IN, IrqSender, Result, VirtioFeature};
 
@@ -637,7 +637,7 @@ fn io_uring_worker_pause_resume() {
     assert_eq!(completed.load(Ordering::Relaxed), 0);
 
     // It reads the pipe again once the device resumes.
-    assert!(ctl.wake(WakeEvent::Resume));
+    assert!(ctl.wake(WakeEvent::Resume { notifiers: None }));
     assert_eq!(submitted_rx.recv_timeout(TIMEOUT), Ok(id));
     assert_eq!(irq_rx.recv_timeout(TIMEOUT), Ok(0));
     let mut guest_buf = [0u8; 20];
@@ -656,4 +656,136 @@ fn io_uring_resume_dev() {
     // The device resumes with the queue of the event loop.
     active.resume_dev(&mut f.dev).unwrap();
     assert_eq!(f.dev.resumed_queues.load(Ordering::Acquire), 1);
+}
+
+/// Returns the tokens and the results of the next `count` completions, or
+/// of those that arrive in time.
+fn completions(
+    active: &mut ActiveIoUring<'_, SplitQueue, FakeIrqSender>,
+    count: usize,
+) -> Vec<(u64, i32)> {
+    let mut completions = Vec::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while completions.len() < count && Instant::now() < deadline {
+        let timeout = Timespec::new().nsec(10_000_000);
+        let args = SubmitArgs::new().timespec(&timeout);
+        match active.ring.submitter().submit_with_args(1, &args) {
+            Ok(_) => {}
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ETIME | libc::EINTR)) => {}
+            Err(e) => panic!("cannot wait for completions: {e:?}"),
+        }
+        let cqes = active.ring.completion();
+        completions.extend(cqes.map(|cqe| (cqe.user_data(), cqe.result())));
+    }
+    completions
+}
+
+#[test]
+fn io_uring_set_notifiers() {
+    let mut f = fixture_pipe_reader();
+    let mut active = ActiveIoUring {
+        ring: io_uring::IoUring::new(RING_SIZE as u32).unwrap(),
+        queues: &mut f.queues,
+        irq_sender: &f.irq_sender,
+        notifiers: Arc::new([]),
+        shared_count: RING_SIZE - 1,
+        submit_counts: Box::new([0]),
+        cancelling: Vec::new(),
+        held: Vec::new(),
+    };
+
+    // The event loop waits on the notifier that it takes.
+    let old = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    active.set_notifiers(&f.dev, old.clone()).unwrap();
+    assert_eq!(active.shared_count, RING_SIZE - 2);
+    active.ring.submit().unwrap();
+    old[0].notify().unwrap();
+    let readable = libc::EPOLLIN;
+    assert_eq!(completions(&mut active, 1), [(TOKEN_QUEUE, readable)]);
+
+    // Once the kernel has the requests for a new notifier, the wait on the
+    // old one is over. Both waits have the token of the queue, and it is
+    // the old one that ends: the old notifier no longer wakes the loop up.
+    let new = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    active.set_notifiers(&f.dev, new.clone()).unwrap();
+    assert_eq!(active.shared_count, RING_SIZE - 2);
+    active.ring.submit().unwrap();
+    let mut completed = completions(&mut active, 2);
+    completed.sort();
+    let cancelled = [(TOKEN_CANCEL, 0), (TOKEN_QUEUE, -libc::ECANCELED)];
+    assert_eq!(completed, cancelled);
+    old[0].notify().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(active.ring.completion().count(), 0);
+
+    // The loop waits on the new notifier.
+    new[0].notify().unwrap();
+    assert_eq!(completions(&mut active, 1), [(TOKEN_QUEUE, readable)]);
+}
+
+#[test]
+fn io_uring_worker_resumes_with_new_notifiers() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let regs: Arc<[QueueReg]> = Arc::from(fixture_queues(1));
+
+    let (reader, _writer) = pipe();
+    let (submitted_tx, submitted_rx) = flume::unbounded();
+    let dev = PipeReader {
+        reader,
+        config: Arc::new(EntropyConfig),
+        submitted: submitted_tx,
+        completed: Arc::default(),
+        resets: Arc::default(),
+        resumed_queues: Arc::default(),
+    };
+
+    let (tx, rx) = flume::unbounded();
+    let (report_tx, report_rx) = flume::unbounded();
+    let (handle, notifier) = dev
+        .spawn_worker(WorkerParam {
+            event_rx: rx,
+            report_tx,
+            memory: ram_bus.clone(),
+            queue_regs: regs.clone(),
+        })
+        .unwrap();
+    let ctl = WorkerCtl::new("pipe-reader".into(), tx, notifier, report_rx);
+    let (irq_tx, _irq_rx) = flume::unbounded();
+    let old = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    let param = StartParam {
+        feature: VirtioFeature::VERSION_1.bits(),
+        irq_sender: Arc::new(FakeIrqSender { q_tx: irq_tx }),
+        notifiers: Some(old.clone()),
+        bases: None,
+    };
+    assert!(ctl.wake(WakeEvent::Start { param }));
+
+    // The pipe is empty, so the read stays in flight.
+    let ram = ram_bus.load();
+    let mut guest_q = GuestQueue::new(
+        SplitQueue::new(&regs[0], &ram, false).unwrap().unwrap(),
+        &regs[0],
+    );
+    let id_0 = guest_q.add_desc(&[], &[(DATA_ADDR, 4 << 10)]);
+    old[0].notify().unwrap();
+    assert_eq!(submitted_rx.recv_timeout(TIMEOUT), Ok(id_0));
+
+    // The transport hands over a new notifier with the resume. The worker
+    // submits the read again that it cancelled for the pause.
+    let seq = ctl.request_pause();
+    ctl.wait_pause(seq, TIMEOUT).unwrap();
+    let new = Arc::<[Notifier]>::from([Notifier::new().unwrap()]);
+    let resume = WakeEvent::Resume {
+        notifiers: Some(new.clone()),
+    };
+    assert!(ctl.wake(resume));
+    assert_eq!(submitted_rx.recv_timeout(TIMEOUT), Ok(id_0));
+
+    // The worker waits on the new notifier.
+    let id_1 = guest_q.add_desc(&[], &[(DATA_ADDR + (4 << 10), 4 << 10)]);
+    new[0].notify().unwrap();
+    assert_eq!(submitted_rx.recv_timeout(TIMEOUT), Ok(id_1));
+
+    assert!(ctl.wake(WakeEvent::Shutdown));
+    handle.join().unwrap();
 }

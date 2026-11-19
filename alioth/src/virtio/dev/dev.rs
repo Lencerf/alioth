@@ -68,9 +68,10 @@ pub trait Virtio: Debug + Send + Sync + 'static {
     /// Undoes [`pause`](Self::pause). A reset of a paused device ends the
     /// pause without it.
     ///
-    /// `queues`, `notifiers` and `irq_sender` are the ones that the device
-    /// was activated with, for a device that hands them over again to
-    /// whatever serves its queues.
+    /// `queues` and `irq_sender` are the ones that the device was activated
+    /// with. So are `notifiers`, unless the transport handed over new ones
+    /// with the resume, see [`WakeEvent::Resume`]. A device that hands
+    /// them over to whatever serves its queues does so again.
     fn resume<Q, S>(
         &mut self,
         queues: &[Option<Queue<Q>>],
@@ -212,7 +213,12 @@ where
     },
     /// Lets a paused device run again, or calls off a pause that the worker
     /// has not completed.
-    Resume,
+    ///
+    /// A paused device goes on with `notifiers` as the notifiers of its
+    /// queues, if the transport has new ones.
+    Resume {
+        notifiers: Option<Arc<[Notifier]>>,
+    },
 }
 
 /// What a worker reports to the transport.
@@ -624,6 +630,9 @@ pub trait ActiveBackend<D: Virtio> {
     /// Resumes `dev` with the queues, the notifiers and the interrupt
     /// sender of the event loop, see [`Virtio::resume`].
     fn resume_dev(&mut self, dev: &mut D) -> Result<()>;
+    /// Makes the event loop wait on `notifiers` for the notifications of
+    /// the driver, instead of on the notifiers that it has.
+    fn set_notifiers(&mut self, dev: &D, notifiers: Arc<[Notifier]>) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -678,6 +687,23 @@ where
         }
     }
 
+    /// Handles every queue that the worker serves itself, as if the driver
+    /// had notified it.
+    fn handle_queues<B>(&mut self, backend: &mut B) -> Result<()>
+    where
+        B: ActiveBackend<D>,
+    {
+        for index in 0..backend.queues().len() {
+            let queue = backend.queues().get(index);
+            let enabled = queue.is_some_and(Option::is_some);
+            let index = index as u16;
+            if enabled && !self.dev.notifier_offloaded(index)? {
+                backend.handle_queue(&mut self.dev, index)?;
+            }
+        }
+        Ok(())
+    }
+
     fn handle_wake_events<B>(&mut self, backend: &mut B) -> Result<()>
     where
         B: ActiveBackend<D>,
@@ -704,8 +730,17 @@ where
                         return Ok(());
                     }
                     WakeEvent::Pause { seq } => self.pause_seq = Some(seq),
-                    // The pause is called off before the worker completed it.
-                    WakeEvent::Resume => self.pause_seq = None,
+                    WakeEvent::Resume { notifiers } => {
+                        // The pause is called off before the worker
+                        // completed it.
+                        self.pause_seq = None;
+                        // Only a device that resumes learns about new
+                        // notifiers.
+                        if notifiers.is_some() {
+                            let name = self.dev.name();
+                            log::error!("{name}: got new notifiers while it is not paused");
+                        }
+                    }
                 }
             }
             let Some(seq) = self.pause_seq else {
@@ -751,10 +786,21 @@ where
                 return Ok(());
             };
             match event {
-                WakeEvent::Resume => {
+                WakeEvent::Resume { notifiers } => {
                     log::debug!("{}: resumed", self.dev.name());
+                    let rebound = notifiers.is_some();
+                    if let Some(notifiers) = notifiers {
+                        backend.set_notifiers(&self.dev, notifiers)?;
+                    }
                     backend.resume_dev(&mut self.dev)?;
-                    return backend.resume(&mut self.dev);
+                    backend.resume(&mut self.dev)?;
+                    if rebound {
+                        // The driver may have notified a queue through its
+                        // old notifier, which the event loop no longer
+                        // waits on.
+                        self.handle_queues(backend)?;
+                    }
+                    return Ok(());
                 }
                 // The device is paused already.
                 WakeEvent::Pause { seq } => self.report(WorkerReport::Paused { seq }),
@@ -789,7 +835,7 @@ where
                 WakeEvent::Reset { seq } => self.ack_reset(seq),
                 // Neither is there anything to pause.
                 WakeEvent::Pause { seq } => self.report(WorkerReport::Paused { seq }),
-                WakeEvent::Resume => {}
+                WakeEvent::Resume { .. } => {}
                 WakeEvent::Start { param } => {
                     self.state = WorkerState::Running;
                     self.ram_generation = None;

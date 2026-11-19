@@ -718,7 +718,10 @@ fn test_pause_sync_timeout() {
     );
     // The pause is called off, since the worker may still get to it.
     assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Pause { .. }));
-    assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Resume));
+    assert_matches!(
+        event_rx.try_recv(),
+        Ok(WakeEvent::Resume { notifiers: None })
+    );
 }
 
 #[test]
@@ -755,7 +758,10 @@ fn test_pci_device_pause_resume() {
         assert_matches!(pci_dev.pause(), Ok(()));
     });
     assert_matches!(pci_dev.resume(), Ok(()));
-    assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Resume));
+    assert_matches!(
+        event_rx.try_recv(),
+        Ok(WakeEvent::Resume { notifiers: None })
+    );
 
     // A device that cannot pause keeps running.
     thread::scope(|s| {

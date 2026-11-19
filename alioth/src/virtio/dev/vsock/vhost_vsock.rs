@@ -91,6 +91,19 @@ impl VhostVsock {
             error_fds: [None, None],
         })
     }
+
+    /// Makes the kernel wait on `notifiers` for the notifications of the
+    /// queues that it serves.
+    fn set_kicks(&self, notifiers: &[Notifier]) -> Result<()> {
+        for (index, notifier) in notifiers.iter().take(2).enumerate() {
+            let kick = VirtqFile {
+                index: index as u32,
+                fd: notifier.as_fd().as_raw_fd(),
+            };
+            self.vhost_dev.set_virtq_kick(&kick)?;
+        }
+        Ok(())
+    }
 }
 
 impl Virtio for VhostVsock {
@@ -137,11 +150,13 @@ impl Virtio for VhostVsock {
         Ok(())
     }
 
-    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], notifiers: &[Notifier], _: &S) -> Result<()>
     where
         Q: VirtQueue,
         S: IrqSender,
     {
+        // The transport may have handed over new notifiers with the resume.
+        self.set_kicks(notifiers)?;
         self.vhost_dev.vsock_set_running(true)?;
         Ok(())
     }
@@ -161,13 +176,7 @@ impl VirtioMio for VhostVsock {
         S: IrqSender,
     {
         self.vhost_dev.set_features(&(feature as u64))?;
-        for (index, notifier) in active_mio.notifiers.iter().take(2).enumerate() {
-            let kick = VirtqFile {
-                index: index as u32,
-                fd: notifier.as_fd().as_raw_fd(),
-            };
-            self.vhost_dev.set_virtq_kick(&kick)?;
-        }
+        self.set_kicks(&active_mio.notifiers)?;
         for (index, queue) in active_mio.queues.iter().take(2).enumerate() {
             let Some(queue) = queue else {
                 continue;

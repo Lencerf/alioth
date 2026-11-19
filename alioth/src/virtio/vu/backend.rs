@@ -227,7 +227,7 @@ impl VuBackend {
             let name = &*self.dev.name;
             log::error!("{name}: failed to pause, resetting the device: {e:?}");
             // The worker may still pause later.
-            ctl.wake(WakeEvent::Resume);
+            ctl.wake(WakeEvent::Resume { notifiers: None });
             return self.stop_worker();
         }
         self.worker = VuWorkerState::Paused;
@@ -261,7 +261,7 @@ impl VuBackend {
                 // has. A frontend is expected to start a ring with the
                 // eventfds that it stopped the ring with, unless it resets
                 // the device in between.
-                self.dev.ctl.wake(WakeEvent::Resume);
+                self.dev.ctl.wake(WakeEvent::Resume { notifiers: None });
                 self.worker = VuWorkerState::Running;
                 Ok(())
             }
