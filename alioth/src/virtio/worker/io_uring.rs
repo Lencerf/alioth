@@ -485,6 +485,10 @@ where
         }
         Ok(())
     }
+
+    fn resume_dev(&mut self, dev: &mut D) -> Result<()> {
+        dev.resume(self.queues, self.notifiers, self.irq_sender)
+    }
 }
 
 #[cfg(test)]

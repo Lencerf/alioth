@@ -27,7 +27,7 @@ use crate::sync::notifier::Notifier;
 use crate::sys::vhost::{VHOST_FILE_UNBIND, VirtqAddr, VirtqFile, VirtqState};
 use crate::virtio::dev::vsock::{VsockConfig, VsockFeature};
 use crate::virtio::dev::{DevSpec, DeviceId, Virtio, WorkerParam};
-use crate::virtio::queue::VirtQueue;
+use crate::virtio::queue::{Queue, VirtQueue};
 use crate::virtio::vhost::{UpdateVsockMem, VhostDev, error};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{IrqSender, Result, VirtioFeature};
@@ -137,7 +137,11 @@ impl Virtio for VhostVsock {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         self.vhost_dev.vsock_set_running(true)?;
         Ok(())
     }

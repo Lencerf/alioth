@@ -49,6 +49,8 @@ struct PipeReader {
     submitted: Sender<u16>,
     completed: Arc<AtomicUsize>,
     resets: Arc<AtomicUsize>,
+    /// The number of queues that the calls to [`Virtio::resume`] got.
+    resumed_queues: Arc<AtomicUsize>,
 }
 
 impl Virtio for PipeReader {
@@ -67,7 +69,13 @@ impl Virtio for PipeReader {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, queues: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
+        self.resumed_queues
+            .fetch_add(queues.len(), Ordering::AcqRel);
         Ok(())
     }
 
@@ -146,6 +154,7 @@ fn io_uring_drain_test() {
         submitted: submitted_tx,
         completed: completed.clone(),
         resets: resets.clone(),
+        resumed_queues: Arc::default(),
     };
 
     let (tx, rx) = flume::unbounded();
@@ -225,6 +234,7 @@ fn io_uring_drain_cancels_pending_reads() {
         submitted: submitted_tx,
         completed: completed.clone(),
         resets: Arc::default(),
+        resumed_queues: Arc::default(),
     };
 
     let (irq_tx, irq_rx) = flume::unbounded();
@@ -287,6 +297,7 @@ fn io_uring_request_in_flight_across_layout_change() {
         submitted: submitted_tx,
         completed: Arc::default(),
         resets: Arc::default(),
+        resumed_queues: Arc::default(),
     };
     let (irq_tx, irq_rx) = flume::unbounded();
     let irq_sender = FakeIrqSender { q_tx: irq_tx };
@@ -344,6 +355,7 @@ fn io_uring_reset_test() {
         submitted: submitted_tx,
         completed: completed.clone(),
         resets: resets.clone(),
+        resumed_queues: Arc::default(),
     };
 
     let (event_tx, event_rx) = flume::unbounded();
@@ -432,6 +444,7 @@ fn fixture_pipe_reader() -> PipeFixture {
         submitted: submitted_tx,
         completed: completed.clone(),
         resets: Arc::default(),
+        resumed_queues: Arc::default(),
     };
     let (irq_tx, irq_rx) = flume::unbounded();
     let queues = [Queue::<SplitQueue>::new(&regs[0], ram_bus.clone(), false).unwrap()];
@@ -578,6 +591,7 @@ fn io_uring_worker_pause_resume() {
         submitted: submitted_tx,
         completed: completed.clone(),
         resets: Arc::default(),
+        resumed_queues: Arc::default(),
     };
 
     let (tx, rx) = flume::unbounded();
@@ -629,4 +643,14 @@ fn io_uring_worker_pause_resume() {
 
     assert!(ctl.wake(WakeEvent::Shutdown));
     handle.join().unwrap();
+}
+
+#[test]
+fn io_uring_resume_dev() {
+    let mut f = fixture_pipe_reader();
+    let mut active = fixture_read_in_flight(&mut f.queues, &f.irq_sender, &mut f.dev);
+
+    // The device resumes with the queue of the event loop.
+    active.resume_dev(&mut f.dev).unwrap();
+    assert_eq!(f.dev.resumed_queues.load(Ordering::Acquire), 1);
 }

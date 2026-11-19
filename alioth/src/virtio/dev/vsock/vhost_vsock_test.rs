@@ -110,5 +110,6 @@ fn test_vhost_vsock_pause_resume_failure() {
     };
 
     assert_matches!(dev.pause(), Err(Error::Vhost { .. }));
-    assert_matches!(dev.resume(), Err(Error::Vhost { .. }));
+    let resumed = dev.resume::<SplitQueue, _>(&[], &[], &DummyIrqSender);
+    assert_matches!(resumed, Err(Error::Vhost { .. }));
 }

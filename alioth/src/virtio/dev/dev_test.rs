@@ -22,6 +22,7 @@ use assert_matches::assert_matches;
 use flume::{Receiver, Sender};
 use mio::event::Event;
 use mio::{Events, Interest, Poll, Registry, Token};
+use parking_lot::Mutex;
 
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::mem::{MemRegion, MemRegionType, Memory};
@@ -76,6 +77,8 @@ struct FakeDev {
     pauses: Arc<AtomicU32>,
     /// Counts the calls to [`Virtio::resume`].
     resumes: Arc<AtomicU32>,
+    /// The numbers of queues and notifiers of the last [`Virtio::resume`].
+    resumed_with: Arc<Mutex<Option<(usize, usize)>>>,
 }
 
 impl Virtio for FakeDev {
@@ -114,8 +117,18 @@ impl Virtio for FakeDev {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(
+        &mut self,
+        queues: &[Option<Queue<Q>>],
+        notifiers: &[Notifier],
+        _: &S,
+    ) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         self.resumes.fetch_add(1, Ordering::AcqRel);
+        *self.resumed_with.lock() = Some((queues.len(), notifiers.len()));
         Ok(())
     }
 
@@ -524,6 +537,10 @@ impl ActiveBackend<FakeDev> for SyncCounter {
     fn resume(&mut self, _: &mut FakeDev) -> Result<()> {
         Ok(())
     }
+
+    fn resume_dev(&mut self, _: &mut FakeDev) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[test]
@@ -868,6 +885,10 @@ impl ActiveBackend<FakeDev> for SlowBackend {
         self.dev_resumes = dev.resumes.load(Ordering::Acquire);
         Ok(())
     }
+
+    fn resume_dev(&mut self, dev: &mut FakeDev) -> Result<()> {
+        dev.resume::<SplitQueue, TestIrqSender>(&[], &[], &TestIrqSender::default())
+    }
 }
 
 type SlowWorker = (
@@ -954,6 +975,26 @@ fn test_pause_interrupted_by_other_event() {
     // The device resumes first, so that it serves its queues again by the
     // time the backend notifies them.
     assert_eq!(backend.dev_resumes, 1);
+}
+
+#[test]
+fn test_mio_resume_dev() {
+    let mut dev = FakeDev::default();
+    let notifiers = [Notifier::new().unwrap(), Notifier::new().unwrap()];
+    let mut poll = Poll::new().unwrap();
+    let mut queues: [Option<Queue<SplitQueue>>; 3] = [None, None, None];
+    let irq_sender = TestIrqSender::default();
+    let mut active_mio = ActiveMio {
+        queues: &mut queues,
+        irq_sender: &irq_sender,
+        notifiers: &notifiers,
+        poll: &mut poll,
+    };
+
+    // The device resumes with what the event loop works on.
+    active_mio.resume_dev(&mut dev).unwrap();
+    assert_eq!(dev.resumes.load(Ordering::Acquire), 1);
+    assert_eq!(*dev.resumed_with.lock(), Some((3, 2)));
 }
 
 #[test]

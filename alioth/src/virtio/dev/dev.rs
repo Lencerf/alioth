@@ -66,7 +66,19 @@ pub trait Virtio: Debug + Send + Sync + 'static {
     fn pause(&mut self) -> Result<()>;
     /// Undoes [`pause`](Self::pause). A reset of a paused device ends the
     /// pause without it.
-    fn resume(&mut self) -> Result<()>;
+    ///
+    /// `queues`, `notifiers` and `irq_sender` are the ones that the device
+    /// was activated with, for a device that hands them over again to
+    /// whatever serves its queues.
+    fn resume<Q, S>(
+        &mut self,
+        queues: &[Option<Queue<Q>>],
+        notifiers: &[Notifier],
+        irq_sender: &S,
+    ) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender;
     fn shared_mem_regions(&self) -> Option<Arc<MemRegion>> {
         None
     }
@@ -605,6 +617,9 @@ pub trait ActiveBackend<D: Virtio> {
     fn pause(&mut self, dev: &mut D) -> Result<bool>;
     /// Continues the requests that [`pause`](Self::pause) stopped.
     fn resume(&mut self, dev: &mut D) -> Result<()>;
+    /// Resumes `dev` with the queues, the notifiers and the interrupt
+    /// sender of the event loop, see [`Virtio::resume`].
+    fn resume_dev(&mut self, dev: &mut D) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -720,7 +735,7 @@ where
             match event {
                 WakeEvent::Resume => {
                     log::debug!("{}: resumed", self.dev.name());
-                    self.dev.resume()?;
+                    backend.resume_dev(&mut self.dev)?;
                     return backend.resume(&mut self.dev);
                 }
                 // The device is paused already.

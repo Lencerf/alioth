@@ -28,7 +28,7 @@ use crate::mem::mapped::ArcMemPages;
 use crate::mem::{LayoutChanged, MemRegion};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevSpec, Virtio, WorkerParam};
-use crate::virtio::queue::VirtQueue;
+use crate::virtio::queue::{Queue, VirtQueue};
 use crate::virtio::vu::bindings::{
     DeviceConfig, MemoryRegion, MemorySingleRegion, VirtqAddr, VirtqState, VuFeature,
 };
@@ -274,7 +274,11 @@ impl Virtio for VuFrontend {
         error::PauseUnsupported.fail()
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

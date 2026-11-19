@@ -1207,7 +1207,11 @@ impl Virtio for UdsVsock {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

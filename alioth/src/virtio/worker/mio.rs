@@ -210,4 +210,8 @@ where
         // device was paused, like before the device was activated.
         dev.notify_offloaded(self.notifiers)
     }
+
+    fn resume_dev(&mut self, dev: &mut D) -> Result<()> {
+        dev.resume(self.queues, self.notifiers, self.irq_sender)
+    }
 }

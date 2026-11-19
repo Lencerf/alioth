@@ -35,7 +35,7 @@ use crate::sync::notifier::Notifier;
 #[cfg(target_os = "linux")]
 use crate::virtio::dev::fs::vu::VuDaxRegion;
 use crate::virtio::dev::{Result, Virtio, WorkerParam};
-use crate::virtio::queue::{DescChain, Status, VirtQueue};
+use crate::virtio::queue::{DescChain, Queue, Status, VirtQueue};
 #[cfg(target_os = "linux")]
 use crate::virtio::vu::conn::VuChannel;
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
@@ -417,7 +417,11 @@ where
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

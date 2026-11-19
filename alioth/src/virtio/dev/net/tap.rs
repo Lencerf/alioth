@@ -41,7 +41,7 @@ use crate::virtio::dev::net::{
     CtrlAck, CtrlClass, CtrlHdr, CtrlMq, CtrlMqParisSet, NetConfig, NetFeature, VirtioNetHdr,
 };
 use crate::virtio::dev::{DevSpec, DeviceId, Result, Virtio, WorkerParam};
-use crate::virtio::queue::{DescChain, Status, VirtQueue, copy_from_reader, copy_to_writer};
+use crate::virtio::queue::{DescChain, Queue, Status, VirtQueue, copy_from_reader, copy_to_writer};
 use crate::virtio::worker::WorkerApi;
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
@@ -254,7 +254,11 @@ impl Virtio for Net {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

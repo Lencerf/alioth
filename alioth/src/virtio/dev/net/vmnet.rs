@@ -46,7 +46,7 @@ use crate::sys::xpc::{
 };
 use crate::virtio::dev::net::{NetConfig, NetFeature, VirtioNetHdr};
 use crate::virtio::dev::{DevSpec, DeviceId, Result, Virtio, WorkerParam};
-use crate::virtio::queue::{DescChain, Status, VirtQueue};
+use crate::virtio::queue::{DescChain, Queue, Status, VirtQueue};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{FEATURE_BUILT_IN, IrqSender};
 
@@ -262,7 +262,11 @@ impl Virtio for Net {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

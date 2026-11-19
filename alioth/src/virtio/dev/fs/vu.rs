@@ -37,7 +37,7 @@ use crate::mem::{LayoutChanged, MemRegion, MemRegionType};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::fs::{DAX_SHMEM_ID, FsConfig, FsFeature};
 use crate::virtio::dev::{DevSpec, Virtio, WorkerParam};
-use crate::virtio::queue::VirtQueue;
+use crate::virtio::queue::{Queue, VirtQueue};
 use crate::virtio::vu::bindings::{
     DeviceConfig, Message, VhostUserMmap, VhostUserMmapFlag, VuBackMsg, VuFeature,
 };
@@ -153,7 +153,11 @@ impl Virtio for VuFs {
         virtio_error::PauseUnsupported.fail()
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

@@ -36,7 +36,7 @@ use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevSpec, Virtio, WorkerParam};
-use crate::virtio::queue::{DescChain, Status as QStatus, VirtQueue};
+use crate::virtio::queue::{DescChain, Queue, Status as QStatus, VirtQueue};
 use crate::virtio::worker::WorkerApi;
 #[cfg(target_os = "linux")]
 use crate::virtio::worker::io_uring::{ActiveIoUring, BufferAction, IoUring, VirtioIoUring};
@@ -303,7 +303,11 @@ impl Virtio for Block {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 

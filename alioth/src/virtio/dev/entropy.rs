@@ -29,7 +29,7 @@ use snafu::ResultExt;
 use crate::mem::emulated::{Action, Mmio};
 use crate::sync::notifier::Notifier;
 use crate::virtio::dev::{DevSpec, DeviceId, Virtio, WorkerParam};
-use crate::virtio::queue::{VirtQueue, copy_from_reader};
+use crate::virtio::queue::{Queue, VirtQueue, copy_from_reader};
 use crate::virtio::worker::mio::{ActiveMio, Mio, VirtioMio};
 use crate::virtio::{FEATURE_BUILT_IN, IrqSender, Result, error};
 use crate::{bitflags, mem};
@@ -93,7 +93,11 @@ impl Virtio for Entropy {
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<()> {
+    fn resume<Q, S>(&mut self, _: &[Option<Queue<Q>>], _: &[Notifier], _: &S) -> Result<()>
+    where
+        Q: VirtQueue,
+        S: IrqSender,
+    {
         Ok(())
     }
 
