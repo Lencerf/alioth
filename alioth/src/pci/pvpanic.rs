@@ -92,7 +92,7 @@ impl Default for PvPanic {
 }
 
 impl Pause for PvPanic {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         Ok(())
     }
 

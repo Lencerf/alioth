@@ -51,7 +51,7 @@ impl Mmio for FwDbg {
 }
 
 impl Pause for FwDbg {
-    fn pause(&self) -> Result<()> {
+    fn request_pause(&self) -> Result<()> {
         Ok(())
     }
 

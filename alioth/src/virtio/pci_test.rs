@@ -17,7 +17,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use assert_matches::assert_matches;
 use flume::{Receiver, Sender};
@@ -84,6 +84,7 @@ fn create_test_mmio(queues: Arc<[QueueReg]>) -> (TestMmio, TestWakeReceiver, Sen
             report_rx,
         )),
         reset_seq: Mutex::new(None),
+        pause_seq: Mutex::new(None),
     };
     (mmio, event_rx, report_tx)
 }
@@ -698,30 +699,75 @@ where
 }
 
 #[test]
-fn test_pause_sync() {
+fn test_request_and_wait_pause() {
     let queues = Arc::new([QueueReg::default()]);
     let (mmio, event_rx, report_tx) = create_test_mmio(queues);
-    thread::scope(|s| {
-        s.spawn(|| answer_pause(&event_rx, &report_tx));
-        assert_matches!(mmio.pause_sync(Duration::from_secs(5)), Ok(()));
-    });
+
+    // A device that was not asked to pause has nothing to wait for.
+    assert_matches!(mmio.wait_pause(Instant::now()), Ok(()));
+
+    // The request does not wait for the worker.
+    mmio.request_pause();
+    answer_pause(&event_rx, &report_tx);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    assert_matches!(mmio.wait_pause(deadline), Ok(()));
     assert!(event_rx.is_empty());
 }
 
 #[test]
-fn test_pause_sync_timeout() {
+fn test_wait_pause_timeout() {
+    let queues = Arc::new([QueueReg::default()]);
+    let (mmio, event_rx, report_tx) = create_test_mmio(queues);
+    mmio.request_pause();
+    let start = Instant::now();
+    let deadline = start + Duration::from_millis(10);
+    assert_matches!(mmio.wait_pause(deadline), Err(Error::PauseTimeout { .. }));
+    // The wait ends at the deadline.
+    assert!(start.elapsed() < Duration::from_secs(5));
+    let Ok(WakeEvent::Pause { seq }) = event_rx.try_recv() else {
+        panic!("expected a pause event");
+    };
+    // The pause stands until the device resumes.
+    assert!(event_rx.is_empty());
+
+    // A worker that has paused is in time, whatever the deadline.
+    report_tx.send(WorkerReport::Paused { seq }).unwrap();
+    assert_matches!(mmio.wait_pause(Instant::now()), Ok(()));
+}
+
+#[test]
+fn test_resume_calls_off_pause() {
     let queues = Arc::new([QueueReg::default()]);
     let (mmio, event_rx, _report_tx) = create_test_mmio(queues);
-    assert_matches!(
-        mmio.pause_sync(Duration::from_millis(10)),
-        Err(Error::PauseTimeout { .. })
-    );
-    // The pause is called off, since the worker may still get to it.
+    mmio.request_pause();
+    mmio.resume();
     assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Pause { .. }));
     assert_matches!(
         event_rx.try_recv(),
         Ok(WakeEvent::Resume { notifiers: None })
     );
+
+    // The worker skips the pause, so nothing waits for it.
+    let deadline = Instant::now() + Duration::from_millis(10);
+    assert_matches!(mmio.wait_pause(deadline), Ok(()));
+}
+
+#[test]
+fn test_request_pause_follows_register_write() {
+    let queues = Arc::new([QueueReg::default()]);
+    let (mmio, event_rx, _report_tx) = create_test_mmio(queues);
+    thread::scope(|s| {
+        // A write to the registers is in progress.
+        let reset_seq = mmio.reset_seq.lock();
+        s.spawn(|| mmio.request_pause());
+        // The worker gets the pause after what the write asks it for.
+        assert!(event_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(reset_seq);
+        assert_matches!(
+            event_rx.recv_timeout(Duration::from_secs(5)),
+            Ok(WakeEvent::Pause { .. })
+        );
+    });
 }
 
 #[test]
@@ -732,14 +778,42 @@ fn test_pause_completes_reset_in_progress() {
 
     // The worker handles the reset before the pause.
     report_tx.send(WorkerReport::ResetDone { seq }).unwrap();
-    thread::scope(|s| {
-        s.spawn(|| answer_pause(&event_rx, &report_tx));
-        assert_matches!(mmio.pause_sync(Duration::from_secs(5)), Ok(()));
-    });
+    mmio.request_pause();
+    answer_pause(&event_rx, &report_tx);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    assert_matches!(mmio.wait_pause(deadline), Ok(()));
 
     // The registers are up to date before the driver reads them.
     assert_eq!(mmio.reg.status.load(Ordering::Acquire), 0);
     assert!(!queues[0].enabled.load(Ordering::Acquire));
+}
+
+#[test]
+fn test_pause_tells_driver_about_failed_worker() {
+    let queues = Arc::new([QueueReg::default()]);
+    let (mmio, event_rx, report_tx) = create_test_mmio(queues);
+    let driver_ok =
+        DevStatus::ACK | DevStatus::DRIVER | DevStatus::FEATURES_OK | DevStatus::DRIVER_OK;
+    assert_matches!(
+        mmio.write(
+            VirtioCommonCfg::OFFSET_DEVICE_STATUS as u64,
+            1,
+            driver_ok.bits() as u64
+        ),
+        Ok(Action::None)
+    );
+    assert_matches!(event_rx.try_recv(), Ok(WakeEvent::Start { .. }));
+
+    // The worker fails before the pause.
+    report_tx.send(WorkerReport::Failed).unwrap();
+    mmio.request_pause();
+    answer_pause(&event_rx, &report_tx);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    assert_matches!(mmio.wait_pause(deadline), Ok(()));
+
+    // The status is up to date before the driver reads it.
+    let needs_reset = driver_ok | DevStatus::NEEDS_RESET;
+    assert_eq!(mmio.reg.status.load(Ordering::Acquire), needs_reset.bits());
 }
 
 #[test]
@@ -753,26 +827,26 @@ fn test_pci_device_pause_resume() {
     )
     .unwrap();
 
-    thread::scope(|s| {
-        s.spawn(|| answer_pause(&event_rx, &report_tx));
-        assert_matches!(pci_dev.pause(), Ok(()));
-    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    assert_matches!(pci_dev.request_pause(), Ok(()));
+    answer_pause(&event_rx, &report_tx);
+    assert_matches!(pci_dev.wait_pause(deadline), Ok(()));
     assert_matches!(pci_dev.resume(), Ok(()));
     assert_matches!(
         event_rx.try_recv(),
         Ok(WakeEvent::Resume { notifiers: None })
     );
 
-    // A device that cannot pause keeps running.
-    thread::scope(|s| {
-        s.spawn(|| {
-            let Ok(WakeEvent::Pause { seq }) = event_rx.recv_timeout(Duration::from_secs(5)) else {
-                panic!("expected a pause event");
-            };
-            report_tx.send(WorkerReport::PauseFailed { seq }).unwrap();
-        });
-        assert_matches!(pci_dev.pause(), Err(device::Error::Pause { .. }));
-    });
+    // A device that cannot pause fails the wait.
+    assert_matches!(pci_dev.request_pause(), Ok(()));
+    let Ok(WakeEvent::Pause { seq }) = event_rx.try_recv() else {
+        panic!("expected a pause event");
+    };
+    report_tx.send(WorkerReport::PauseFailed { seq }).unwrap();
+    assert_matches!(
+        pci_dev.wait_pause(deadline),
+        Err(device::Error::Pause { .. })
+    );
 }
 
 #[test]
@@ -1575,6 +1649,7 @@ fn test_notify_with_notifiers() {
             flume::unbounded().1,
         )),
         reset_seq: Mutex::new(None),
+        pause_seq: Mutex::new(None),
     };
 
     assert_matches!(

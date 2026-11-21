@@ -529,7 +529,7 @@ impl Mmio for Mutex<FwCfg> {
 }
 
 impl Pause for Mutex<FwCfg> {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         Ok(())
     }
 

@@ -156,7 +156,7 @@ fn test_vfio_pci_dev_not_pausable() {
     )
     .unwrap();
 
-    assert_matches!(dev.pause(), Err(device::Error::NotPausable { .. }));
+    assert_matches!(dev.request_pause(), Err(device::Error::NotPausable { .. }));
     assert_matches!(dev.resume(), Err(device::Error::NotPausable { .. }));
 }
 

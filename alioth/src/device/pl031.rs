@@ -139,7 +139,7 @@ impl<C: Clock> Mmio for Pl031<C> {
 }
 
 impl<C: Clock> Pause for Pl031<C> {
-    fn pause(&self) -> Result<()> {
+    fn request_pause(&self) -> Result<()> {
         Ok(())
     }
 

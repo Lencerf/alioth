@@ -292,7 +292,7 @@ impl<M, C> Pause for Serial<M, C>
 where
     M: MsiSender,
 {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         self.thread.pause();
         Ok(())
     }

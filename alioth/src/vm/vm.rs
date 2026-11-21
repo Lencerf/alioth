@@ -18,7 +18,7 @@ use std::io::ErrorKind;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{mem, thread};
 
 use parking_lot::Mutex;
@@ -80,6 +80,9 @@ use crate::virtio::vu::frontend::VuFrontendSpec;
 use crate::vm::config::{BlkSpec, FsSpec, NetSpec, VmSpec, VsockSpec};
 
 pub mod config;
+
+/// How long a pause waits for a device to stop.
+const DEVICE_PAUSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]
@@ -667,20 +670,6 @@ where
         Ok(())
     }
 
-    /// Pauses all devices. If one of them fails, the devices that paused
-    /// before it resume.
-    fn pause_devices(&self) -> Result<()> {
-        let devices = self.ctx.board.devices();
-        for (index, (name, dev)) in devices.iter().enumerate() {
-            let Err(e) = dev.pause() else {
-                continue;
-            };
-            resume_devices(&devices[..index]);
-            return Err(e).context(error::PauseDevice { name });
-        }
-        Ok(())
-    }
-
     /// Resumes the devices if they are `paused`.
     fn resume_devices(&self, paused: &mut bool) {
         if mem::take(paused) {
@@ -713,7 +702,7 @@ where
         if *devices_paused {
             return Ok(());
         }
-        if let Err(e) = self.pause_devices() {
+        if let Err(e) = pause_devices(&self.ctx.board.devices()) {
             self.ctx.sync.lock().state = State::Running;
             self.ctx.cond.notify_all();
             return Err(e);
@@ -824,6 +813,24 @@ where
             log::error!("Failed to terminate the VM: {e:?}");
         }
     }
+}
+
+/// Pauses `devices`, one after the other. If a device fails, the devices
+/// that were asked to stop resume.
+fn pause_devices(devices: &[(String, Arc<dyn Pause>)]) -> Result<()> {
+    for (index, (name, dev)) in devices.iter().enumerate() {
+        if let Err(e) = dev.request_pause() {
+            resume_devices(&devices[..index]);
+            return Err(e).context(error::PauseDevice { name });
+        }
+        let deadline = Instant::now() + DEVICE_PAUSE_TIMEOUT;
+        if let Err(e) = dev.wait_pause(deadline) {
+            // The device may still stop later, unless it resumes.
+            resume_devices(&devices[..=index]);
+            return Err(e).context(error::PauseDevice { name });
+        }
+    }
+    Ok(())
 }
 
 /// Resumes `devices`, the last one first.

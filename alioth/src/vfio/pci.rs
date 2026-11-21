@@ -442,7 +442,7 @@ where
     M: MsiSender,
     D: Device,
 {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         device::error::NotPausable.fail()
     }
 

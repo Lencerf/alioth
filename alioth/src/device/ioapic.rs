@@ -169,7 +169,7 @@ impl<M: MsiSender> Mmio for IoApic<M> {
 }
 
 impl<M: MsiSender> Pause for IoApic<M> {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         Ok(())
     }
 

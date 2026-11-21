@@ -230,6 +230,6 @@ fn test_serial_loopback() {
 fn test_serial_pause_resume() {
     use crate::device::Pause;
     let (serial, _, _) = fixture_serial();
-    assert_matches!(serial.pause(), Ok(()));
+    assert_matches!(serial.request_pause(), Ok(()));
     assert_matches!(serial.resume(), Ok(()));
 }

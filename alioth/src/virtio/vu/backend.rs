@@ -20,6 +20,7 @@ use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use alioth_macros::trace_error;
 use parking_lot::RwLock;
@@ -29,7 +30,7 @@ use zerocopy::IntoBytes;
 use crate::errors::DebugTrace;
 use crate::mem::mapped::{ArcMemPages, RamBus};
 use crate::sync::notifier::Notifier;
-use crate::virtio::dev::{PAUSE_TIMEOUT, RESET_TIMEOUT, StartParam, VirtioDevice, WakeEvent};
+use crate::virtio::dev::{RESET_TIMEOUT, StartParam, VirtioDevice, WakeEvent};
 use crate::virtio::queue::VirtQueue;
 use crate::virtio::queue::packed::PackedQueue;
 use crate::virtio::queue::split::SplitQueue;
@@ -40,6 +41,9 @@ use crate::virtio::vu::bindings::{
 };
 use crate::virtio::vu::conn::{VuChannel, VuSession};
 use crate::virtio::{self, DevStatus, IrqSender, VirtioFeature};
+
+/// How long the back-end waits for its worker to pause a device.
+const PAUSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[trace_error]
 #[derive(Snafu, DebugTrace)]

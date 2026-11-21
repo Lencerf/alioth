@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
 use alioth_macros::trace_error;
 use snafu::Snafu;
 
@@ -52,12 +54,27 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// The vCPUs do not run while a device is paused, so a device only has to
 /// stop what it does on its own, e.g. in a worker thread. A device that
 /// acts only when a vCPU accesses it has nothing to do.
+///
+/// A pause takes two steps, so that a VM can ask all of its devices to
+/// stop before it waits for any of them.
 pub trait Pause {
-    /// Stops the device. Once this returns, the device does not access
-    /// guest memory, send interrupts, or change its state until it resumes.
-    fn pause(&self) -> Result<()>;
+    /// Asks the device to stop, without waiting for it.
+    ///
+    /// From then on the device stops, and stays stopped, until it resumes.
+    fn request_pause(&self) -> Result<()>;
 
-    /// Lets a paused device run again.
+    /// Waits until `deadline` for the device to stop, as
+    /// [`request_pause`](Self::request_pause) asked it to. Once this
+    /// returns `Ok`, the device does not access guest memory, send
+    /// interrupts, or change its state until it resumes.
+    ///
+    /// The provided method is for a device that has stopped when
+    /// `request_pause()` returns.
+    fn wait_pause(&self, _deadline: Instant) -> Result<()> {
+        Ok(())
+    }
+
+    /// Lets the device run again, whether it has stopped or not.
     fn resume(&self) -> Result<()>;
 }
 

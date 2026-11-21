@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use std::{fs, hint, thread};
 
 use assert_matches::assert_matches;
+use parking_lot::Mutex;
 use tempfile::TempDir;
 
 use crate::arch::x86_64::msr::MiscEnable;
@@ -33,7 +34,7 @@ use crate::pci::config::PciConfig;
 use crate::pci::pvpanic::PvPanic;
 use crate::pci::{self, Pci};
 use crate::vm::config::VmSpec;
-use crate::vm::{Error, Machine};
+use crate::vm::{self, Error, Machine};
 
 /// Real-mode code at the reset vector that powers off the VM.
 const POWER_OFF: [u8; 9] = [
@@ -558,7 +559,7 @@ impl TestPciDev {
 }
 
 impl Pause for TestPciDev {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         if self.fail_pause.load(Ordering::Acquire) {
             return device::error::NotPausable.fail();
         }
@@ -679,4 +680,120 @@ fn test_pause_passthrough_device() {
     vm.shutdown().unwrap();
     vm.wait_stopped();
     vm.terminate().unwrap();
+}
+
+/// A step of a pause, as a device sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Request,
+    Wait,
+    Resume,
+}
+
+/// The steps of the devices that share the log, in order, each with the
+/// index of its device.
+type StepLog = Arc<Mutex<Vec<(usize, Step)>>>;
+
+/// A device that logs the steps of a pause, and fails in one of them.
+#[derive(Debug)]
+struct TestDev {
+    index: usize,
+    fail: Option<Step>,
+    log: StepLog,
+}
+
+impl TestDev {
+    fn step(&self, step: Step) -> device::Result<()> {
+        self.log.lock().push((self.index, step));
+        if self.fail == Some(step) {
+            return device::error::NotPausable.fail();
+        }
+        Ok(())
+    }
+}
+
+impl Pause for TestDev {
+    fn request_pause(&self) -> device::Result<()> {
+        self.step(Step::Request)
+    }
+
+    fn wait_pause(&self, _deadline: Instant) -> device::Result<()> {
+        self.step(Step::Wait)
+    }
+
+    fn resume(&self) -> device::Result<()> {
+        self.step(Step::Resume)
+    }
+}
+
+/// Devices with their names, like the devices of a board.
+type Devices = Vec<(String, Arc<dyn Pause>)>;
+
+/// Creates a device for each item of `fails`, which fails in that step.
+fn test_devices(fails: &[Option<Step>]) -> (Devices, StepLog) {
+    let log = StepLog::default();
+    let devices = fails.iter().enumerate().map(|(index, fail)| {
+        let dev = TestDev {
+            index,
+            fail: *fail,
+            log: log.clone(),
+        };
+        (format!("dev-{index}"), Arc::new(dev) as Arc<dyn Pause>)
+    });
+    (devices.collect(), log)
+}
+
+#[test]
+fn test_pause_devices() {
+    let (devices, log) = test_devices(&[None, None]);
+    assert_matches!(vm::pause_devices(&devices), Ok(()));
+    assert_eq!(
+        *log.lock(),
+        [
+            (0, Step::Request),
+            (0, Step::Wait),
+            (1, Step::Request),
+            (1, Step::Wait),
+        ]
+    );
+}
+
+#[test]
+fn test_pause_devices_request_failure() {
+    let (devices, log) = test_devices(&[None, Some(Step::Request), None]);
+    assert_matches!(
+        vm::pause_devices(&devices),
+        Err(Error::PauseDevice { name, .. }) if name == "dev-1"
+    );
+    // The device that paused resumes, and the last device is left alone.
+    assert_eq!(
+        *log.lock(),
+        [
+            (0, Step::Request),
+            (0, Step::Wait),
+            (1, Step::Request),
+            (0, Step::Resume),
+        ]
+    );
+}
+
+#[test]
+fn test_pause_devices_wait_failure() {
+    let (devices, log) = test_devices(&[None, Some(Step::Wait), None]);
+    assert_matches!(
+        vm::pause_devices(&devices),
+        Err(Error::PauseDevice { name, .. }) if name == "dev-1"
+    );
+    // A device that was asked to stop resumes, even if it has not stopped.
+    assert_eq!(
+        *log.lock(),
+        [
+            (0, Step::Request),
+            (0, Step::Wait),
+            (1, Step::Request),
+            (1, Step::Wait),
+            (1, Step::Resume),
+            (0, Step::Resume),
+        ]
+    );
 }

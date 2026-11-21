@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
 use assert_matches::assert_matches;
 use jiff::Timestamp;
 
@@ -86,6 +88,8 @@ fn test_cmos_upgrade_in_progress() {
 fn test_cmos_pause_resume() {
     let now = Timestamp::from_nanosecond(1_762_559_098_010_000_000).unwrap();
     let cmos = Cmos::new(TestClock { now });
-    assert_matches!(cmos.pause(), Ok(()));
+    assert_matches!(cmos.request_pause(), Ok(()));
+    // The device has nothing to stop, so there is nothing to wait for.
+    assert_matches!(cmos.wait_pause(Instant::now()), Ok(()));
     assert_matches!(cmos.resume(), Ok(()));
 }

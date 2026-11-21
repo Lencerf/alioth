@@ -271,7 +271,7 @@ where
     C: Console,
     for<'a> &'a C: Read + Write,
 {
-    fn pause(&self) -> Result<()> {
+    fn request_pause(&self) -> Result<()> {
         self.thread.pause();
         Ok(())
     }

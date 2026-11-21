@@ -18,7 +18,7 @@ use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alioth_macros::Layout;
 use parking_lot::{Mutex, RwLock};
@@ -40,9 +40,7 @@ use crate::pci::config::{
 use crate::pci::{self, Pci, PciBar};
 use crate::sync::notifier::Notifier;
 use crate::utils::{get_atomic_high32, get_atomic_low32, set_atomic_high32, set_atomic_low32};
-use crate::virtio::dev::{
-    PAUSE_TIMEOUT, RESET_TIMEOUT, Register, StartParam, VirtioDevice, WakeEvent, WorkerCtl,
-};
+use crate::virtio::dev::{RESET_TIMEOUT, Register, StartParam, VirtioDevice, WakeEvent, WorkerCtl};
 use crate::virtio::queue::{QUEUE_SIZE_MAX, QueueReg};
 use crate::virtio::{DevStatus, DeviceId, IrqSender, Result, VirtioFeature, error};
 use crate::{consts, impl_mmio_for_zerocopy, mem};
@@ -202,6 +200,9 @@ where
     /// Writes to the common configuration hold the lock, so that they never
     /// interleave with a reset.
     reset_seq: Mutex<Option<u64>>,
+    /// Sequence number of the pause that the worker was asked for, from
+    /// the request until the device resumes.
+    pause_seq: Mutex<Option<u64>>,
 }
 
 impl<M> VirtioPciRegisterMmio<M>
@@ -278,15 +279,26 @@ where
         Ok(())
     }
 
-    /// Pauses the device and waits for the worker to stop.
-    fn pause_sync(&self, timeout: Duration) -> Result<()> {
+    /// Asks the worker to pause the device.
+    fn request_pause(&self) {
+        // The worker gets the pause after what the driver has requested
+        // so far.
+        let _reset_seq = self.reset_seq.lock();
+        *self.pause_seq.lock() = Some(self.ctl.request_pause());
+    }
+
+    /// Waits until `deadline` for the worker to pause the device, as
+    /// [`request_pause`](Self::request_pause) asked it to.
+    ///
+    /// After an error, the worker may still get to the pause, until the
+    /// device resumes.
+    fn wait_pause(&self, deadline: Instant) -> Result<()> {
         let mut reset_seq = self.reset_seq.lock();
-        let seq = self.ctl.request_pause();
-        if let Err(e) = self.ctl.wait_pause(seq, timeout) {
-            // The worker may still get to the pause later.
-            self.ctl.wake(WakeEvent::Resume { notifiers: None });
-            return Err(e);
-        }
+        let Some(seq) = *self.pause_seq.lock() else {
+            return Ok(());
+        };
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        self.ctl.wait_pause(seq, timeout)?;
         // The worker has handled what the driver requested before the
         // pause. Bring the registers up to date, since nothing changes
         // them while the device is paused.
@@ -294,6 +306,14 @@ where
             self.set_needs_reset();
         }
         Ok(())
+    }
+
+    /// Lets the device run again: a paused worker goes on, and a worker
+    /// that has not got to the pause yet skips it.
+    fn resume(&self) {
+        *self.pause_seq.lock() = None;
+        // A worker that has exited has nothing to resume.
+        self.ctl.wake(WakeEvent::Resume { notifiers: None });
     }
 
     fn notify_queue(&self, offset: usize, size: u8, val: u64) {
@@ -1045,6 +1065,7 @@ where
             },
             ctl: dev.ctl.clone(),
             reset_seq: Mutex::new(None),
+            pause_seq: Mutex::new(None),
             queues: dev.queue_regs.clone(),
             irq_sender: Arc::new(PciIrqSender {
                 msix_vector,
@@ -1100,15 +1121,18 @@ impl<M> Pause for VirtioPciDevice<M>
 where
     M: MsiSender,
 {
-    fn pause(&self) -> device::Result<()> {
-        let ret = self.registers.pause_sync(PAUSE_TIMEOUT);
+    fn request_pause(&self) -> device::Result<()> {
+        self.registers.request_pause();
+        Ok(())
+    }
+
+    fn wait_pause(&self, deadline: Instant) -> device::Result<()> {
+        let ret = self.registers.wait_pause(deadline);
         ret.box_trace(device::error::Pause)
     }
 
     fn resume(&self) -> device::Result<()> {
-        // A worker that has exited has nothing to resume.
-        let ctl = &self.registers.ctl;
-        ctl.wake(WakeEvent::Resume { notifiers: None });
+        self.registers.resume();
         Ok(())
     }
 }

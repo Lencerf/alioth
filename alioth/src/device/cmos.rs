@@ -143,7 +143,7 @@ impl<C: Clock> Mmio for Cmos<C> {
 }
 
 impl<C: Clock> Pause for Cmos<C> {
-    fn pause(&self) -> Result<()> {
+    fn request_pause(&self) -> Result<()> {
         Ok(())
     }
 

@@ -49,7 +49,7 @@ impl HostBridge {
 }
 
 impl Pause for HostBridge {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         Ok(())
     }
 

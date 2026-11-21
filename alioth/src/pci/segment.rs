@@ -28,7 +28,7 @@ use crate::{align_up, mem};
 struct EmptyDevice;
 
 impl Pause for EmptyDevice {
-    fn pause(&self) -> device::Result<()> {
+    fn request_pause(&self) -> device::Result<()> {
         Ok(())
     }
 
