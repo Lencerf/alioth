@@ -690,21 +690,26 @@ enum Step {
     Resume,
 }
 
-/// The steps of the devices that share the log, in order, each with the
-/// index of its device.
-type StepLog = Arc<Mutex<Vec<(usize, Step)>>>;
+/// What the devices that share a log saw of a pause.
+#[derive(Debug, Default)]
+struct PauseLog {
+    /// The steps in order, each with the index of its device.
+    steps: Vec<(usize, Step)>,
+    /// The deadlines of the waits, in order.
+    deadlines: Vec<Instant>,
+}
 
 /// A device that logs the steps of a pause, and fails in one of them.
 #[derive(Debug)]
 struct TestDev {
     index: usize,
     fail: Option<Step>,
-    log: StepLog,
+    log: Arc<Mutex<PauseLog>>,
 }
 
 impl TestDev {
     fn step(&self, step: Step) -> device::Result<()> {
-        self.log.lock().push((self.index, step));
+        self.log.lock().steps.push((self.index, step));
         if self.fail == Some(step) {
             return device::error::NotPausable.fail();
         }
@@ -717,7 +722,8 @@ impl Pause for TestDev {
         self.step(Step::Request)
     }
 
-    fn wait_pause(&self, _deadline: Instant) -> device::Result<()> {
+    fn wait_pause(&self, deadline: Instant) -> device::Result<()> {
+        self.log.lock().deadlines.push(deadline);
         self.step(Step::Wait)
     }
 
@@ -730,8 +736,8 @@ impl Pause for TestDev {
 type Devices = Vec<(String, Arc<dyn Pause>)>;
 
 /// Creates a device for each item of `fails`, which fails in that step.
-fn test_devices(fails: &[Option<Step>]) -> (Devices, StepLog) {
-    let log = StepLog::default();
+fn test_devices(fails: &[Option<Step>]) -> (Devices, Arc<Mutex<PauseLog>>) {
+    let log = Arc::<Mutex<PauseLog>>::default();
     let devices = fails.iter().enumerate().map(|(index, fail)| {
         let dev = TestDev {
             index,
@@ -746,16 +752,24 @@ fn test_devices(fails: &[Option<Step>]) -> (Devices, StepLog) {
 #[test]
 fn test_pause_devices() {
     let (devices, log) = test_devices(&[None, None]);
+    let start = Instant::now();
     assert_matches!(vm::pause_devices(&devices), Ok(()));
+    let log = log.lock();
+    // Every device is asked to stop before the first wait.
     assert_eq!(
-        *log.lock(),
+        log.steps,
         [
             (0, Step::Request),
-            (0, Step::Wait),
             (1, Step::Request),
+            (0, Step::Wait),
             (1, Step::Wait),
         ]
     );
+    // The devices stop at the same time, so they share one deadline.
+    let deadline = log.deadlines[0];
+    assert_eq!(log.deadlines, [deadline; 2]);
+    assert!(deadline >= start + vm::DEVICE_PAUSE_TIMEOUT);
+    assert!(deadline <= Instant::now() + vm::DEVICE_PAUSE_TIMEOUT);
 }
 
 #[test]
@@ -765,15 +779,11 @@ fn test_pause_devices_request_failure() {
         vm::pause_devices(&devices),
         Err(Error::PauseDevice { name, .. }) if name == "dev-1"
     );
-    // The device that paused resumes, and the last device is left alone.
+    // The device that was asked to stop resumes, and the last device is
+    // left alone.
     assert_eq!(
-        *log.lock(),
-        [
-            (0, Step::Request),
-            (0, Step::Wait),
-            (1, Step::Request),
-            (0, Step::Resume),
-        ]
+        log.lock().steps,
+        [(0, Step::Request), (1, Step::Request), (0, Step::Resume)]
     );
 }
 
@@ -784,14 +794,17 @@ fn test_pause_devices_wait_failure() {
         vm::pause_devices(&devices),
         Err(Error::PauseDevice { name, .. }) if name == "dev-1"
     );
-    // A device that was asked to stop resumes, even if it has not stopped.
+    // Every device was asked to stop, so every device resumes, also the
+    // ones that have not stopped.
     assert_eq!(
-        *log.lock(),
+        log.lock().steps,
         [
             (0, Step::Request),
-            (0, Step::Wait),
             (1, Step::Request),
+            (2, Step::Request),
+            (0, Step::Wait),
             (1, Step::Wait),
+            (2, Step::Resume),
             (1, Step::Resume),
             (0, Step::Resume),
         ]

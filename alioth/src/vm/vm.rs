@@ -81,7 +81,7 @@ use crate::vm::config::{BlkSpec, FsSpec, NetSpec, VmSpec, VsockSpec};
 
 pub mod config;
 
-/// How long a pause waits for a device to stop.
+/// How long a pause waits for the devices to stop.
 const DEVICE_PAUSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[trace_error]
@@ -815,18 +815,21 @@ where
     }
 }
 
-/// Pauses `devices`, one after the other. If a device fails, the devices
-/// that were asked to stop resume.
+/// Pauses `devices`. It asks every device to stop before it waits for any
+/// of them, so that they stop at the same time. If a device fails, the
+/// devices that were asked to stop resume.
 fn pause_devices(devices: &[(String, Arc<dyn Pause>)]) -> Result<()> {
     for (index, (name, dev)) in devices.iter().enumerate() {
         if let Err(e) = dev.request_pause() {
             resume_devices(&devices[..index]);
             return Err(e).context(error::PauseDevice { name });
         }
-        let deadline = Instant::now() + DEVICE_PAUSE_TIMEOUT;
+    }
+    let deadline = Instant::now() + DEVICE_PAUSE_TIMEOUT;
+    for (name, dev) in devices {
         if let Err(e) = dev.wait_pause(deadline) {
-            // The device may still stop later, unless it resumes.
-            resume_devices(&devices[..=index]);
+            // The devices may still stop later, unless they resume.
+            resume_devices(devices);
             return Err(e).context(error::PauseDevice { name });
         }
     }
