@@ -64,10 +64,13 @@ pub(crate) fn fixture_spec(firmware: &Path) -> VmSpec {
     VmSpec {
         board: BoardSpec {
             cpu: CpuSpec {
-                count: 2,
+                // More than two vCPUs, so that several of them wait for
+                // the others at a barrier. With two vCPUs, the tests pass
+                // even if a barrier lets a vCPU go on too early.
+                count: 4,
                 topology: CpuTopology {
                     smt: false,
-                    cores: 2,
+                    cores: 4,
                     sockets: 1,
                     thread_contiguous: false,
                 },
