@@ -1028,3 +1028,27 @@ fn vsock_tx_slow_host_backpressure_test() {
 
     t.shutdown();
 }
+
+#[test]
+fn vsock_conn_request_no_rx_desc_test() {
+    let ram_bus = Arc::new(fixture_ram_bus());
+    let ram = ram_bus.load();
+    let mut t = VsockTest::new(&ram_bus, &ram);
+
+    // Connect from host before the guest has posted any RX descriptors.
+    // The device must drop this connection cleanly instead of killing the
+    // worker thread.
+    let mut early = t.connect();
+    early.set_nonblocking(false).unwrap();
+    early.set_read_timeout(Some(TIMEOUT)).unwrap();
+    writeln!(early, "CONNECT 1024").unwrap();
+    let mut buf = [0u8; 16];
+    assert_eq!(early.read(&mut buf).unwrap(), 0);
+
+    // Once the guest posts an RX descriptor, subsequent CONNECT attempts
+    // succeed normally.
+    let (_stream, host_port) = t.request_conn(1024);
+    assert!(host_port >= 1024);
+
+    t.shutdown();
+}

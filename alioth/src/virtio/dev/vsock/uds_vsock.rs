@@ -194,6 +194,13 @@ impl UdsVsock {
             }
             return self.drop_socket(pending.reader.get_ref(), registry);
         }
+        if !rx_q.desc_avail() {
+            log::warn!(
+                "{}: queue RX has no available buffers, dropping host connection request",
+                self.name
+            );
+            return self.drop_socket(pending.reader.get_ref(), registry);
+        }
         let writer = pending.reader.get_ref().try_clone()?;
         let buf_size = get_buf_size(&writer)?;
         let port_str = pending.msg.trim_start_matches("CONNECT ").trim_end();
